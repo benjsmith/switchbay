@@ -1,0 +1,38 @@
+# ── python ──
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+dist/
+build/
+
+# ── node / frontend ──
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/.playwright/
+frontend/.vite/
+*.tsbuildinfo
+
+# ── editor / os ──
+.DS_Store
+.idea/
+.vscode/
+
+# ── workspace runtime (when this repo is opened as its own workspace) ──
+.workbench/
+
+# ── agent-skill installs (npx skills add) — must be user-global, never repo-local ──
+.agents/
+.claude/
+skills-lock.json
+
+# ── private project docs — kept local, never published (start fresh here) ──
+charter.md
+work-plan.md
+log.md
+
+# ── regenerable / local-only ──
+docs/*.pdf

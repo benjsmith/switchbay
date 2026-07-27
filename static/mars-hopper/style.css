@@ -1,0 +1,222 @@
+:root {
+  --bg: #1a0a08;
+  --panel: #2a1210;
+  --mars: #c44b2a;
+  --mars-light: #e87a4a;
+  --steel: #c8d0d8;
+  --accent: #5eb8ff;
+  --gold: #f0c040;
+  --danger: #ff4d4d;
+  --text: #f5e6d3;
+  --muted: #a08070;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  height: 100%;
+  background: radial-gradient(ellipse at 50% 20%, #3a1810 0%, var(--bg) 55%, #0a0404 100%);
+  color: var(--text);
+  /* No CDN font — works offline + inside Switch Bay's sandboxed iframe. */
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.04em;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: none;
+}
+
+#wrap {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px;
+}
+
+header {
+  text-align: center;
+}
+
+header h1 {
+  font-size: clamp(14px, 3.5vw, 20px);
+  letter-spacing: 2px;
+  color: var(--gold);
+  text-shadow: 0 0 12px rgba(240, 192, 64, 0.45), 2px 2px 0 #5a2008;
+}
+
+.tagline {
+  margin-top: 8px;
+  font-size: 8px;
+  color: var(--muted);
+  letter-spacing: 1px;
+}
+
+#hud {
+  display: flex;
+  gap: 18px;
+  width: min(480px, 100%);
+  justify-content: space-between;
+}
+
+.stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 72px;
+}
+
+.stat .label {
+  font-size: 8px;
+  color: var(--muted);
+}
+
+.stat span:last-child {
+  font-size: 12px;
+  color: var(--accent);
+}
+
+#game {
+  width: min(480px, 100vw - 24px);
+  height: auto;
+  aspect-ratio: 480 / 640;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: #2a100c;
+  border: 4px solid #5a3020;
+  box-shadow:
+    0 0 0 2px #1a0804,
+    0 12px 40px rgba(0, 0, 0, 0.55),
+    inset 0 0 40px rgba(0, 0, 0, 0.25);
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+#overlay {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: rgba(10, 4, 4, 0.35);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+  z-index: 10;
+  padding: 16px 16px 28px;
+}
+
+/* Title: let chopsticks catch animation show through */
+#overlay.title-mode {
+  background: linear-gradient(
+    180deg,
+    rgba(10, 4, 4, 0.15) 0%,
+    rgba(10, 4, 4, 0.2) 45%,
+    rgba(10, 4, 4, 0.72) 70%,
+    rgba(10, 4, 4, 0.88) 100%
+  );
+  align-items: flex-end;
+}
+
+/* Death / relaunch: full dim */
+#overlay.visible:not(.title-mode) {
+  background: rgba(10, 4, 4, 0.78);
+  align-items: center;
+  padding: 16px;
+}
+
+#overlay.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.panel {
+  width: min(360px, 100%);
+  background: linear-gradient(180deg, #3a1a14 0%, var(--panel) 100%);
+  border: 3px solid var(--gold);
+  box-shadow: 0 0 0 2px #1a0804, 0 16px 48px rgba(0, 0, 0, 0.6);
+  padding: 22px 18px;
+  text-align: center;
+}
+
+#overlay.title-mode .panel {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px #1a0804,
+    0 0 24px rgba(94, 184, 255, 0.25),
+    0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.panel h2 {
+  font-size: 12px;
+  color: var(--gold);
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+
+.panel p {
+  font-size: 8px;
+  line-height: 1.8;
+  color: var(--text);
+  margin-bottom: 14px;
+}
+
+.controls {
+  list-style: none;
+  text-align: left;
+  font-size: 7px;
+  line-height: 2;
+  color: var(--muted);
+  margin-bottom: 18px;
+}
+
+.controls kbd {
+  display: inline-block;
+  background: #1a0a08;
+  border: 1px solid #6a4030;
+  color: var(--accent);
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: 7px;
+  border-radius: 2px;
+}
+
+#start-btn {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 12px 22px;
+  background: linear-gradient(180deg, #5eb8ff 0%, #2a7ab8 100%);
+  color: #0a1520;
+  border: 3px solid #a0e0ff;
+  cursor: pointer;
+  letter-spacing: 1px;
+  box-shadow: 0 4px 0 #1a4060, 0 0 20px rgba(94, 184, 255, 0.35);
+  transition: transform 0.08s ease, box-shadow 0.08s ease;
+}
+
+#start-btn:hover {
+  transform: translateY(-1px);
+}
+
+#start-btn:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 #1a4060;
+}
+
+footer {
+  font-size: 7px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+
+@media (max-height: 720px) {
+  header h1 { font-size: 14px; }
+  .tagline { display: none; }
+  footer { display: none; }
+}

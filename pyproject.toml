@@ -1,0 +1,72 @@
+[project]
+name = "switchbay"
+version = "0.9.0"
+description = "Local single-user workbench over knowledge bases — a driven second brain."
+requires-python = ">=3.11"
+authors = [{ name = "Benjamin Smith" }]
+# Functional Source License 1.1 (ALv2 future license) — source-available:
+# free for internal, hobby, non-commercial, and professional-services use;
+# a Competing Use (reselling / offering it as a substitute product or service)
+# needs a separate license. Each release converts to Apache-2.0 after 2 years.
+# Full text in ./LICENSE.
+license = { file = "LICENSE" }
+urls = { Homepage = "https://github.com/benjsmith/switchbay" }
+dependencies = [
+    "aiohttp>=3.9",
+    "keyring>=24",
+    "sqlite-vec>=0.1.9",
+    "pillow>=10",
+    "python-pptx>=1.0.2",
+]
+# NOTE: `sentence-transformers` (which pulls PyTorch + the ~450 MB ML
+# stack) is NOT a base dependency — it lives in the `semantic`
+# dependency-group below. Tier-3 semantic recall is fail-soft: without
+# it, `recall_rail` degrades to FTS-only (see conversations.py
+# `_get_embedder` → ImportError → None). Opt in with
+# `make sync-semantic` / `uv sync --group semantic`.
+
+# Treat this project as a "virtual" project: uv only manages dependencies in
+# the venv, it does NOT build or install the switchbay package itself.
+# We invoke our code via `PYTHONPATH=src uv run --no-sync python -m switchbay`
+# instead of a console script. Why: on macOS, files inside `.venv/` get the
+# `UF_HIDDEN` flag re-applied asynchronously by LaunchServices/Spotlight.
+# Python ≥3.13's site.py skips hidden .pth files, breaking editable installs
+# in a way that's racy and impossible to fix from inside the project.
+# `python -m switchbay` with PYTHONPATH=src bypasses the editable .pth
+# entirely.
+[tool.uv]
+package = false
+
+# Test tooling lives in a dev group so a normal `make sync` / service install
+# stays lean; `make test` syncs it. `pythonpath = ["src"]` mirrors the
+# PYTHONPATH=src invocation convention so imports resolve without an install.
+[dependency-groups]
+dev = [
+    "pytest>=8.3,<9",
+    "pytest-asyncio>=0.24,<0.26",
+]
+# Opt-in local semantic embeddings (Tier-3 recall). Recall fail-softs to
+# FTS-only without any of these; the base install ships none.
+#   · `semantic`       — RECOMMENDED light path: fastembed (ONNX, no
+#     torch), ~150 MB. Default model BAAI/bge-small-en-v1.5 (384-dim,
+#     beats MiniLM on retrieval). `make sync-semantic`.
+#   · `semantic-torch` — the heavyweight PyTorch path (~450 MB) via
+#     sentence-transformers; byte-exact interop with a curiosity-engine
+#     vault index. Only if you need that. `make sync-semantic-torch`.
+# The embedder auto-selects fastembed when present, else
+# sentence-transformers, else FTS-only (see conversations.py).
+semantic = [
+    "fastembed>=0.8.0",
+]
+semantic-torch = [
+    "sentence-transformers>=5.4.1",
+]
+
+# Only the hermetic unit suite runs by default / in CI. tests/integration
+# holds the live-daemon round-trip script (needs a running daemon + a real
+# workspace) — run it deliberately, not in CI.
+[tool.pytest.ini_options]
+pythonpath = ["src", "."]
+asyncio_mode = "auto"
+testpaths = ["tests/unit"]
+addopts = "-q"

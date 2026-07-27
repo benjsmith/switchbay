@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: Python unit tests + import smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python
+        run: uv python install 3.13
+      - name: Sync (dev group)
+        run: uv sync --group dev
+      - name: Unit tests
+        run: uv run --no-sync pytest
+      - name: Import smoke (daemon must import cleanly)
+        run: PYTHONPATH=src uv run --no-sync python -c "import switchbay.daemon"
+
+  frontend:
+    name: Frontend typecheck + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install
+        run: pnpm --dir frontend install --frozen-lockfile
+      - name: Typecheck + build
+        run: pnpm --dir frontend run build

@@ -1,0 +1,41 @@
+name: DCO
+
+# Verify every commit in a pull request carries a Developer Certificate of
+# Origin sign-off (`Signed-off-by: Name <email>`). Self-contained — uses only
+# the first-party actions/checkout, no third-party action in the supply chain.
+
+on:
+  pull_request:
+
+jobs:
+  dco:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check Signed-off-by on every commit
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          fail=0
+          for c in $(git rev-list "$BASE".."$HEAD"); do
+            if git log -1 --format='%an' "$c" | grep -qiE '\[bot\]$'; then
+              continue   # skip bot commits (e.g. dependabot)
+            fi
+            if ! git log -1 --format='%B' "$c" | grep -qiE '^Signed-off-by: .+ <.+@.+>'; then
+              subject=$(git log -1 --format='%s' "$c")
+              echo "::error::Commit ${c:0:12} (\"$subject\") is missing a DCO Signed-off-by line."
+              fail=1
+            fi
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo ""
+            echo "Add sign-offs, then push again:"
+            echo "  git rebase --signoff origin/${{ github.event.pull_request.base.ref }}"
+            echo "  git push --force-with-lease"
+            exit 1
+          fi
+          echo "All commits signed off. ✓"

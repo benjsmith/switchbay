@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Switch Bay — not running</title>
+  <!--
+    Offline fallback served by sw.js when no daemon answers on this port
+    (e.g. RunAtLoad disabled + a cold PWA open). Fully self-contained:
+    the app bundle isn't reachable when the daemon is down, so all CSS/JS
+    is inline. It reads the repo path the app cached in localStorage from
+    /api/health and shows the exact `make -C "<repo>" restart` command,
+    then polls for a live daemon and returns to the app automatically.
+  -->
+  <style>
+    :root {
+      --bg: #0f1115; --card: #14181f; --line: #232830;
+      --text: #e6e8eb; --muted: #9aa0a8; --faint: #5a6068; --accent: #4f8cc9;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #f8f9fb; --card: #ffffff; --line: #dfe2e7;
+        --text: #1a1d22; --muted: #5a6068; --faint: #98a0a8; --accent: #1d6996;
+      }
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; }
+    body {
+      background: var(--bg); color: var(--text);
+      font-family: system-ui, -apple-system, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      padding: 24px;
+    }
+    .card {
+      max-width: 460px; width: 100%;
+      background: var(--card); border: 1px solid var(--line);
+      border-radius: 12px; padding: 32px 28px; text-align: center;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+    }
+    .mark { font-size: 34px; line-height: 1; margin-bottom: 12px; color: var(--muted); }
+    h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+    p { font-size: 13px; line-height: 1.55; color: var(--muted); margin: 0 0 12px; }
+    ol { text-align: left; font-size: 13px; line-height: 1.6; color: var(--muted); margin: 0 0 16px; padding-left: 20px; }
+    .cmd-row {
+      display: flex; gap: 8px; align-items: stretch;
+      margin: 0 0 16px; text-align: left;
+    }
+    .cmd {
+      flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 12.5px; padding: 10px 12px; border-radius: 8px;
+      border: 1px solid var(--line); background: rgba(127,127,127,0.10);
+      color: var(--text); user-select: all; overflow-x: auto; white-space: nowrap;
+    }
+    button {
+      font: inherit; font-size: 12px; font-weight: 500; cursor: pointer;
+      border-radius: 8px; border: 1px solid var(--line);
+      background: transparent; color: var(--text); padding: 6px 14px; white-space: nowrap;
+    }
+    button:hover { border-color: var(--faint); }
+    .copy { border-color: var(--accent); color: var(--accent); }
+    .copy:hover { background: var(--accent); color: #fff; }
+    .hint { font-size: 11px; color: var(--faint); margin: 12px 0 0; }
+    .status { font-size: 11px; color: var(--faint); margin: 4px 0 0; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="mark" aria-hidden="true">⏻</div>
+    <h1>Switch Bay isn’t running</h1>
+    <p>
+      The background daemon that powers this app isn’t running right now.
+      Nothing you saved is lost — your workspace is just files on disk.
+    </p>
+    <ol>
+      <li>Open <strong>Terminal</strong>.</li>
+      <li>Paste the command below and press <strong>Enter</strong>.</li>
+    </ol>
+    <div class="cmd-row">
+      <code class="cmd" id="cmd">make restart</code>
+      <button type="button" class="copy" id="copy">Copy</button>
+    </div>
+    <button type="button" id="retry">Reconnect now</button>
+    <p class="hint">
+      This window returns to the app on its own once the daemon is back.
+    </p>
+    <p class="status" id="status">Waiting for a daemon on this port…</p>
+  </div>
+
+  <script>
+    (function () {
+      // The app cached the absolute repo path from /api/health. If it's
+      // there, build the exact command; otherwise a bare `make restart`
+      // (run from the Switch Bay project folder) is the honest fallback.
+      var repo = "";
+      try { repo = localStorage.getItem("sy:repo-root") || ""; } catch (e) {}
+      var cmd = repo ? 'make -C "' + repo + '" restart' : "make restart";
+      var cmdEl = document.getElementById("cmd");
+      cmdEl.textContent = cmd;
+
+      var copyBtn = document.getElementById("copy");
+      copyBtn.addEventListener("click", function () {
+        var done = function () {
+          copyBtn.textContent = "Copied";
+          setTimeout(function () { copyBtn.textContent = "Copy"; }, 1500);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(cmd).then(done, function () {
+            selectCmd(); done();
+          });
+        } else {
+          selectCmd(); try { document.execCommand("copy"); } catch (e) {} done();
+        }
+      });
+      function selectCmd() {
+        var r = document.createRange();
+        r.selectNodeContents(cmdEl);
+        var s = window.getSelection();
+        s.removeAllRanges(); s.addRange(r);
+      }
+
+      // Poll for a live daemon; return to the app the moment one answers.
+      var statusEl = document.getElementById("status");
+      var checking = false;
+      function check(manual) {
+        if (checking) return;
+        checking = true;
+        if (manual) statusEl.textContent = "Checking…";
+        fetch("/api/health", { cache: "no-store" })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .then(function (h) {
+            if (h && h.ok) { location.href = "/"; return; }
+            throw new Error("not ok");
+          })
+          .catch(function () {
+            checking = false;
+            if (manual) statusEl.textContent = "Still stopped — run the command above.";
+          });
+      }
+      document.getElementById("retry").addEventListener("click", function () { check(true); });
+      setInterval(function () { check(false); }, 2000);
+    })();
+  </script>
+</body>
+</html>

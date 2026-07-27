@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Stop Safari/macOS Live Text from auto-detecting "phone numbers",
+         dates, addresses, etc. inside filenames and overlaying clickable
+         widgets on them. -->
+    <meta name="format-detection" content="telephone=no, date=no, address=no, email=no" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- PWA: installable as a standalone app with a dock icon. The
+         always-on daemon serves this at / so install works from
+         http://127.0.0.1:8765 (localhost is a secure context). -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#0f1115" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Switch Bay" />
+    <title>Switch Bay</title>
+  </head>
+  <body class="bg-neutral-950 text-neutral-100">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

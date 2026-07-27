@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "comment": "Curated list of known switchbay packs. The daemon serves this via /api/packs/registry; the Settings UI shows it under Extension packs \u2192 Browse available. Each entry: name, description, source (git URL or `bundled:<dirname>` for packs shipped in switchbay itself), version, requires_extra (Python deps that need pip install on activate, surfaces a confirm dialog). Authors: open a PR against this file to add a pack \u2014 anyone can also run their own registry by overriding the daemon's CSWY_PACK_REGISTRY env var.",
+  "packs": [
+    {
+      "name": "owid",
+      "title": "Our World in Data",
+      "description": "Browse OWID charts, import a chart's data into the workspace as a CSV, and get a starter Vega-Lite plot \u2014 refine it in the Plot tab or query it in the Table tab. No API key or install.",
+      "source": "bundled:owid",
+      "version": "0.1.0",
+      "requires_extra": [],
+      "homepage": "https://ourworldindata.org"
+    }
+  ]
+}

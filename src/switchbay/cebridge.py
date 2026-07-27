@@ -1,0 +1,564 @@
+"""Bridge to the curiosity-engine skill (read-only dependency).
+
+Spawns `bash <ce_root>/scripts/viewer.sh build` with cwd=workspace, which
+invokes wiki_render.py and produces a bundle at
+`~/.cache/curiosity-engine/wiki-view/<basename(workspace)>/`. We only
+care about `data.json` from that bundle — the static assets are forked
+into `frontend/src/widgets/graph/`.
+
+If the workspace lacks a `wiki/` subdir, viewer.sh exits non-zero and we
+return None so the graph tab can show an empty state.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import os
+import re
+from pathlib import Path
+from typing import Any
+
+log = logging.getLogger("switchbay.cebridge")
+
+# Legacy standalone CE checkout (pre-skill-bundling). Kept as a last
+# resort; curiosity-engine now ships as a bundled global skill. Home-
+# relative so it doesn't embed a developer username in a shipped build.
+DEFAULT_CE_ROOT = Path.home() / "Documents" / "bin" / "curiosity-engine"
+
+
+def _ce_root_candidates() -> list[Path]:
+    """Where CE's scripts/ (setup.sh, viewer.sh, …) might live, in
+    priority order. CE is installed as a global skill via `npx skills
+    add -g` (~/.agents/skills, symlinked into ~/.claude/skills), so that
+    is the primary location now; $SWITCHBAY_CE_ROOT overrides; the old
+    standalone checkout is the final fallback."""
+    home = Path.home()
+    out: list[Path] = []
+    env = os.environ.get("SWITCHBAY_CE_ROOT")
+    if env:
+        out.append(Path(env).expanduser())
+    out.append(home / ".claude" / "skills" / "curiosity-engine")
+    out.append(home / ".agents" / "skills" / "curiosity-engine")
+    out.append(DEFAULT_CE_ROOT)
+    return out
+
+
+def ce_root() -> Path:
+    """Resolve CE's root by finding the candidate that actually has
+    `scripts/` (so setup.sh / viewer.sh resolve). Falls back to the
+    first candidate for a clear not-found error if none exist."""
+    cands = _ce_root_candidates()
+    for c in cands:
+        if (c / "scripts").is_dir():
+            return c
+    return cands[0]
+
+
+def output_dir(workspace: Path) -> Path:
+    """Where viewer.sh writes the bundle for this workspace."""
+    cache = Path.home() / ".cache" / "curiosity-engine" / "wiki-view"
+    return cache / workspace.name
+
+
+def has_wiki(workspace: Path) -> bool:
+    return (workspace / "wiki").is_dir()
+
+
+async def setup(workspace: Path) -> tuple[bool, str]:
+    """Run CE's `scripts/setup.sh` against the workspace. Idempotent —
+    re-running on an already-initialised workspace just refreshes the
+    template skeleton.
+
+    Returns (ok, captured_output). Same env-scrubbing rule as `build()`.
+    """
+    if not workspace.is_dir():
+        return False, f"workspace path is not a directory: {workspace}"
+    script = ce_root() / "scripts" / "setup.sh"
+    if not script.is_file():
+        return False, f"CE setup.sh not found at {script}"
+
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
+    }
+    proc = await asyncio.create_subprocess_exec(
+        "bash",
+        str(script),
+        cwd=str(workspace),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await proc.communicate()
+    text = out.decode(errors="replace")
+    if proc.returncode != 0:
+        return False, text[-2000:]
+    return True, text[-2000:]
+
+
+def read_cached(workspace: Path) -> dict[str, Any] | None:
+    """Return the on-disk data.json from a previous viewer.sh build,
+    if one exists. Cheap (single file read + json parse) — usable on
+    the hot path so a workspace switch shows the graph instantly,
+    even if it's a few minutes stale. Pair with `build()` running in
+    the background to refresh.
+
+    Returns None when no cached build is on disk yet OR the file
+    parses badly OR the workspace has no wiki/."""
+    if not has_wiki(workspace):
+        return None
+    data_path = output_dir(workspace) / "data.json"
+    if not data_path.is_file():
+        return None
+    try:
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    _backfill_unclassified_types(data)
+    # Filesystem-truth pass — CE's wiki_render occasionally ships
+    # node entries typed `unclassified` even when the page's
+    # frontmatter declares a real type. The sidebar reads node.type
+    # for grouping, so without this fix tables / sources / etc. end
+    # up under UNCLASSIFIED despite the .md declaring type:table.
+    resync_types_from_disk(workspace, data)
+    # Sketch decks (`kind: deck`, title `[deck] …`) live under
+    # wiki/analyses/ but CE's graph intentionally omits them from
+    # `nodes` (curator exclusion). Inject them so the BROWSER
+    # ANALYSES group lists them alongside real analyses.
+    inject_deck_nodes(workspace, data)
+    _override_palette(data)
+    return data
+
+
+def has_workspace_venv(workspace: Path) -> bool:
+    """True when the workspace has a CE `.venv` with a Python binary.
+
+    Edges come from a kuzu query run *inside* this venv by
+    `viewer.sh` / `wiki_render.py`. Without it, builds emit
+    nodes-only (0 edges). Used as a self-heal guard after migrate
+    (which deliberately skips `.venv`) and for any env-less wiki.
+    """
+    ws = Path(workspace)
+    # Common layouts: plain `.venv/bin/python` (Unix) and
+    # `.venv/Scripts/python.exe` (Windows). Presence of either is enough
+    # to attempt the build; if kuzu is still missing, viewer.sh fails
+    # soft and we still get nodes.
+    return (
+        (ws / ".venv" / "bin" / "python").is_file()
+        or (ws / ".venv" / "bin" / "python3").is_file()
+        or (ws / ".venv" / "Scripts" / "python.exe").is_file()
+    )
+
+
+async def ensure_venv(workspace: Path) -> tuple[bool, str]:
+    """Create the workspace CE env via `setup.sh` if missing.
+
+    Idempotent when the venv already exists (returns ok immediately).
+    Returns (ok, message). Fail-soft — callers decide whether to
+    continue a nodes-only build or abort.
+    """
+    if has_workspace_venv(workspace):
+        return True, "venv already present"
+    log.info("workspace %s has no .venv — running CE setup.sh", workspace)
+    return await setup(workspace)
+
+
+async def build(
+    workspace: Path, *, ensure_env: bool = True,
+) -> dict[str, Any] | None:
+    """Run viewer.sh build and return parsed data.json. None if no wiki/.
+
+    When ``ensure_env`` is True (default), a missing workspace `.venv`
+    triggers `setup.sh` once before the build so kuzu is available and
+    edges are emitted. Migrate excludes `.venv` by design; this is the
+    self-heal path for that (and any other env-less wiki).
+    """
+    if not has_wiki(workspace):
+        return None
+    script = ce_root() / "scripts" / "viewer.sh"
+    if not script.is_file():
+        log.warning("viewer.sh not found at %s", script)
+        return None
+
+    if ensure_env and not has_workspace_venv(workspace):
+        ok, msg = await ensure_venv(workspace)
+        if not ok:
+            log.warning(
+                "setup.sh failed for %s (building nodes-only): %s",
+                workspace, msg[-500:],
+            )
+            # Fall through: build still produces a usable nodes-only
+            # view rather than 404. Callers that need edges should
+            # check edge count / re-run after fixing the env.
+
+    # Scrub uv/venv env vars so `uv run` inside viewer.sh resolves to the
+    # *workspace's* project (which has kuzu installed), not switchbay's
+    # venv. Without this, wiki_render.py logs
+    #   "graph query failed (No module named 'kuzu'); rendering nodes-only view"
+    # and the resulting data.json has 0 edges.
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
+    }
+
+    proc = await asyncio.create_subprocess_exec(
+        "bash",
+        str(script),
+        "build",
+        cwd=str(workspace),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    stdout, stderr = await proc.communicate()
+    if proc.returncode != 0:
+        log.warning(
+            "viewer.sh build exited %s\nstdout=%s\nstderr=%s",
+            proc.returncode,
+            stdout.decode(errors="replace"),
+            stderr.decode(errors="replace"),
+        )
+        return None
+
+    data_path = output_dir(workspace) / "data.json"
+    if not data_path.is_file():
+        log.warning("viewer.sh build succeeded but no data.json at %s", data_path)
+        return None
+    try:
+        data = json.loads(data_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        log.warning("could not parse %s: %s", data_path, e)
+        return None
+    _backfill_unclassified_types(data)
+    # Filesystem-truth pass — CE's wiki_render occasionally ships
+    # node entries typed `unclassified` even when the page's
+    # frontmatter declares a real type. The sidebar reads node.type
+    # for grouping, so without this fix tables / sources / etc. end
+    # up under UNCLASSIFIED despite the .md declaring type:table.
+    resync_types_from_disk(workspace, data)
+    inject_deck_nodes(workspace, data)
+    _override_palette(data)
+    return data
+
+
+# Switch Bay's per-category palette. Diverges from CE upstream in
+# three places to give better visual separation between categories
+# the user found too similar:
+#
+#   - analysis: deeper amethyst (was CE's mauve, too close to the
+#     rose-pink figure colour)
+#   - project:  Tableau brown ("container/folder" feel; was CE's
+#     deep indigo, too close to source steel-blue)
+#   - todo:     olive drab ("actionable" green-yellow; was CE's
+#     terracotta, too close to entity bright-orange)
+#
+# Singular and plural forms because frontmatter uses singular while
+# subdir / data.json keys can be either. CSS variables in
+# `widgets/graph/ce-graph.css` mirror these values.
+_PALETTE_OVERRIDE: dict[str, str] = {
+    # Mirrors CE's wiki_render.PALETTE so the data.json palette
+    # the d3 graph reads matches the --type-* CSS tokens the
+    # sidebar dots / label-picker use. CE is the upstream source
+    # of truth (2026-05-13 alignment). If CE ever updates its
+    # PALETTE this needs the same change.
+    "project":         "#4d1ae8",  # vivid violet
+    "projects":        "#4d1ae8",
+    "analysis":        "#1d6996",  # blue
+    "analyses":        "#1d6996",
+    "concept":         "#38a6a5",  # teal
+    "concepts":        "#38a6a5",
+    "entity":          "#0f8554",  # green
+    "entities":        "#0f8554",
+    "evidence":        "#73af48",  # lime
+    "fact":            "#edad08",  # yellow-orange
+    "facts":           "#edad08",
+    "figure":          "#e17c05",  # orange
+    "figures":         "#e17c05",
+    "table":           "#cc503e",  # red
+    "tables":          "#cc503e",
+    "source":          "#94346e",  # magenta
+    "sources":         "#94346e",
+    "note":            "#6f4070",  # purple
+    "notes":           "#6f4070",
+    "todo":            "#9656a2",  # lighter purple
+    "todo-list":       "#9656a2",
+    "unclassified":    "#ffffff",  # white + black stroke via graph.js
+}
+
+
+def _override_palette(data: dict) -> None:
+    palette = data.get("palette") if isinstance(data, dict) else None
+    if not isinstance(palette, dict):
+        return
+    for k, v in _PALETTE_OVERRIDE.items():
+        palette[k] = v
+
+
+# Title prefix → CE page-type mapping. Mirrors CE's user-visible
+# convention (`[tab]`, `[ana]`, etc.) so a page that has the marker
+# in its title but no explicit `type:` in frontmatter still ends up
+# in the right bucket. Render-time only — never rewrites disk.
+_PREFIX_TO_TYPE: dict[str, str] = {
+    "tab": "table",
+    "ana": "analysis",
+    "con": "concept",
+    "ent": "entity",
+    "evi": "evidence",
+    "fac": "fact",
+    "fig": "figure",
+    "src": "source",
+    "note": "note",
+    "todo": "todo",
+    "proj": "project",
+    # Decks scaffolded by switchbay's → Slides path. CE doesn't
+    # ship a `deck` type; render them as `analysis` so the existing
+    # palette / sidebar bucket picks them up. The `[deck]` title
+    # prefix + `kind: deck` frontmatter keep them distinct from
+    # plain analyses for the curator + UI.
+    "deck": "analysis",
+}
+
+
+def _backfill_unclassified_types(data: dict) -> None:
+    """Promote `unclassified` pages into a real type when their
+    title starts with the CE bracket prefix convention. Closes
+    issue 6 — older table extractions ship with
+    `type: unclassified` even though their `[tab]` title says
+    otherwise; we infer at render time so the sidebar / graph /
+    label-types panel see them correctly."""
+    pages = data.get("pages") if isinstance(data, dict) else None
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    if not isinstance(pages, dict):
+        return
+    promoted = 0
+    promoted_ids: dict[str, str] = {}
+    for pid, page in pages.items():
+        if not isinstance(page, dict):
+            continue
+        if str(page.get("type") or "").lower() != "unclassified":
+            continue
+        title = str(page.get("title") or "")
+        m = re.match(r"^\s*\[([a-z]+)\]", title, flags=re.IGNORECASE)
+        if not m:
+            continue
+        inferred = _PREFIX_TO_TYPE.get(m.group(1).lower())
+        if not inferred:
+            continue
+        page["type"] = inferred
+        promoted_ids[pid] = inferred
+        promoted += 1
+    # Apply the same promotion to the nodes list — the wiki sidebar
+    # reads node.type, not page.type, so without this the page
+    # would show as the right type in the modal but still group
+    # under UNCLASSIFIED in the sidebar.
+    if promoted_ids and isinstance(nodes, list):
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            new_type = promoted_ids.get(str(n.get("id") or ""))
+            if new_type:
+                n["type"] = new_type
+    if promoted:
+        log.info("backfilled %d page types from title prefix (pages + nodes)", promoted)
+
+
+# Match a one-line `type: foo` frontmatter declaration. Tolerant of
+# quoting + trailing whitespace. We don't pull a YAML dep for this —
+# CE's writer emits the simple form and that's what we need to read.
+_FM_TYPE_RE = re.compile(r"^\s*type\s*:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$")
+
+
+def resync_types_from_disk(workspace: Path, data: dict) -> int:
+    """Walk wiki/*.md, read each file's `type:` frontmatter line
+    directly, and override `data['pages'][id].type` AND
+    `data['nodes'][id].type` to match. Filesystem is the source of
+    truth — CE's wiki_render sometimes ships node entries typed
+    `unclassified` even when the page's frontmatter clearly
+    declares a type. This forces both data structures into sync
+    with what's actually on disk.
+
+    Returns the number of nodes whose type changed."""
+    wiki = workspace / "wiki"
+    if not wiki.is_dir():
+        return 0
+    pages = data.get("pages") if isinstance(data, dict) else None
+    nodes = data.get("nodes") if isinstance(data, dict) else None
+    if not isinstance(pages, dict) or not isinstance(nodes, list):
+        return 0
+    # Map page-id → declared frontmatter type. Page ids in CE-shaped
+    # data.json are the wiki-relative path minus the .md extension,
+    # so `wiki/tables/foo.md` → `tables/foo`. We mirror that here.
+    declared: dict[str, str] = {}
+    for md in wiki.rglob("*.md"):
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        if end == -1:
+            continue
+        block = text[3:end]
+        type_line = None
+        for line in block.splitlines():
+            m = _FM_TYPE_RE.match(line)
+            if m:
+                type_line = m.group(1).lower()
+                break
+        if not type_line:
+            continue
+        try:
+            rel = md.resolve().relative_to(wiki.resolve())
+        except ValueError:
+            continue
+        pid = rel.with_suffix("").as_posix()
+        # Canonicalise plurals + CE subtypes → the singular form
+        # the sidebar's TYPE_CANONICAL expects. `extracted-table`
+        # is the CE subtype for tables lifted out of source PDFs;
+        # CE itself canonicalises it to `table` on the page side
+        # but not on the node side, which is the desync the user
+        # hit: page modal shows `type: table`, sidebar still groups
+        # under UNCLASSIFIED.
+        canon = {
+            "projects": "project", "analyses": "analysis",
+            "concepts": "concept", "entities": "entity",
+            "facts": "fact", "figures": "figure",
+            "tables": "table", "sources": "source",
+            "notes": "note", "todo": "todo-list",
+            "todos": "todo-list",
+            "extracted-table": "table",
+            "extracted_table": "table",
+        }.get(type_line, type_line)
+        declared[pid] = canon
+    if not declared:
+        return 0
+    changed = 0
+    for pid, want in declared.items():
+        page = pages.get(pid)
+        if isinstance(page, dict) and str(page.get("type") or "").lower() != want:
+            page["type"] = want
+            changed += 1
+    for n in nodes:
+        if not isinstance(n, dict):
+            continue
+        want = declared.get(str(n.get("id") or ""))
+        if want and str(n.get("type") or "").lower() != want:
+            n["type"] = want
+            changed += 1
+    if changed:
+        log.info("resync_types_from_disk: %d type fields aligned with frontmatter", changed)
+    return changed
+
+
+# Frontmatter keys we care about for deck discovery. Hand-rolled so we
+# don't pull a YAML dep (same dialect as analyses.parse_frontmatter).
+_FM_KIND_RE = re.compile(r"^\s*kind\s*:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$")
+_FM_TITLE_RE = re.compile(r"^\s*title\s*:\s*(.+?)\s*$")
+
+
+def inject_deck_nodes(workspace: Path, data: dict[str, Any]) -> int:
+    """Ensure every on-disk `kind: deck` page appears in both
+    `data['pages']` and `data['nodes']` as `type: analysis`.
+
+    CE's viewer build includes deck markdown in `pages` (sometimes)
+    but leaves them out of `nodes` — the BROWSER sidebar groups by
+    `nodes`, so decks were invisible under ANALYSES even though they
+    live at `wiki/analyses/<slug>.md` with a `[deck]` title. Render-
+    time only; never rewrites disk. Returns the number of nodes added
+    or updated."""
+    wiki = workspace / "wiki"
+    if not wiki.is_dir() or not isinstance(data, dict):
+        return 0
+    pages = data.get("pages")
+    nodes = data.get("nodes")
+    if not isinstance(pages, dict):
+        pages = {}
+        data["pages"] = pages
+    if not isinstance(nodes, list):
+        nodes = []
+        data["nodes"] = nodes
+
+    by_id = {
+        str(n.get("id") or ""): n
+        for n in nodes
+        if isinstance(n, dict) and n.get("id")
+    }
+    added = 0
+    for md in wiki.rglob("*.md"):
+        try:
+            text = md.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if not text.startswith("---"):
+            continue
+        end = text.find("\n---", 3)
+        if end == -1:
+            continue
+        block = text[3:end]
+        kind = None
+        title = None
+        for line in block.splitlines():
+            if kind is None:
+                m = _FM_KIND_RE.match(line)
+                if m:
+                    kind = m.group(1).lower()
+            if title is None:
+                m = _FM_TITLE_RE.match(line)
+                if m:
+                    raw = m.group(1).strip()
+                    if (raw.startswith('"') and raw.endswith('"')) or (
+                        raw.startswith("'") and raw.endswith("'")
+                    ):
+                        raw = raw[1:-1]
+                    title = raw
+            if kind is not None and title is not None:
+                break
+        if kind != "deck":
+            continue
+        try:
+            rel = md.resolve().relative_to(wiki.resolve())
+        except ValueError:
+            continue
+        pid = rel.with_suffix("").as_posix()
+        path = rel.as_posix()
+        display = title or f"[deck] {md.stem}"
+        if not display.lower().startswith("[deck"):
+            display = f"[deck] {display}"
+
+        # pages entry — source of truth for the modal / editor path
+        page = pages.get(pid)
+        if not isinstance(page, dict):
+            page = {"id": pid, "path": path, "title": display, "type": "analysis"}
+            pages[pid] = page
+            added += 1
+        else:
+            page["type"] = "analysis"
+            page["title"] = display
+            page.setdefault("path", path)
+
+        # nodes entry — what the sidebar actually lists
+        node = by_id.get(pid)
+        if node is None:
+            node = {
+                "id": pid,
+                "path": path,
+                "type": "analysis",
+                "title": display,
+                "degree": 0,
+            }
+            nodes.append(node)
+            by_id[pid] = node
+            added += 1
+        else:
+            node["type"] = "analysis"
+            node["title"] = display
+            node.setdefault("path", path)
+
+    if added:
+        log.info("inject_deck_nodes: ensured %d deck page/node entries", added)
+    return added

@@ -1,0 +1,15 @@
+{
+  "name": "owid",
+  "version": "0.1.0",
+  "description": "Our World in Data — browse OWID charts, import a chart's data into the workspace (saved as a CSV under data/owid/), and get a starter Vega-Lite plot you can refine in the Plot tab or query in the Table tab. No API key and no install: pure HTTP against OWID's public grapher endpoints. The OWID tab accepts any chart slug or grapher URL, so the bundled starter catalogue isn't a ceiling.",
+  "requires_extra": [],
+
+  "tabs": [
+    {
+      "id": "pack:owid:browse",
+      "kind": "owid",
+      "title": "OWID",
+      "payload": {}
+    }
+  ]
+}

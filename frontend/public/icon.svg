@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- App icon: the five slanted switches on a grey→black ombre tile,
+       ported from the native-mac icon design (darkened top so the mark
+       doesn't wash out; bars grown to fill more of the tile, kept inside the
+       maskable ~80% safe zone). Bars use the brightened graph-node palette
+       (project/analysis/entity/figure/source); favicon matches. -->
+  <defs>
+    <linearGradient id="ombre" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#2b2e34"/>
+      <stop offset="0.5" stop-color="#17191d"/>
+      <stop offset="1"   stop-color="#070809"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"    stop-color="#ffffff" stop-opacity="0.05"/>
+      <stop offset="0.35" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#ombre)"/>
+  <rect width="512" height="512" rx="112" fill="url(#gloss)"/>
+  <g transform="translate(64 64) scale(12)">
+    <g stroke-linecap="round" stroke-width="3.2" fill="none">
+      <line x1="5"  y1="27" x2="11" y2="7" stroke="#5a2bf0"/>
+      <line x1="9"  y1="27" x2="15" y2="7" stroke="#2079ab"/>
+      <line x1="13" y1="27" x2="19" y2="7" stroke="#12996a"/>
+      <line x1="17" y1="27" x2="23" y2="7" stroke="#f08a12"/>
+      <line x1="21" y1="27" x2="27" y2="7" stroke="#a83e7e"/>
+    </g>
+    <circle cx="4"  cy="28" r="2.2" fill="#d7dbe2"/>
+    <circle cx="28" cy="4"  r="2.2" fill="#d7dbe2"/>
+  </g>
+</svg>

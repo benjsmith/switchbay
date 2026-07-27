@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!--
+    Switch Bay — five parallel slanted "switches" between two terminals, on a
+    grey→black ombre tile (matches the app icon, ported from the native-mac
+    design). Colours are the brightened graph node palette in scheme order
+    (project violet, analysis blue, entity green, figure orange, source pink)
+    so the favicon and the workbench share a visual vocabulary.
+  -->
+  <defs>
+    <linearGradient id="fombre" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0"   stop-color="#2b2e34"/>
+      <stop offset="0.5" stop-color="#17191d"/>
+      <stop offset="1"   stop-color="#070809"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="7" fill="url(#fombre)"/>
+  <g stroke-linecap="round" stroke-width="3.2" fill="none">
+    <line x1="5"  y1="27" x2="11" y2="7" stroke="#5a2bf0"/>
+    <line x1="9"  y1="27" x2="15" y2="7" stroke="#2079ab"/>
+    <line x1="13" y1="27" x2="19" y2="7" stroke="#12996a"/>
+    <line x1="17" y1="27" x2="23" y2="7" stroke="#f08a12"/>
+    <line x1="21" y1="27" x2="27" y2="7" stroke="#a83e7e"/>
+  </g>
+  <!-- Terminals: light filled dots at lower-left and upper-right corners. -->
+  <circle cx="4"  cy="28" r="2.2" fill="#d7dbe2"/>
+  <circle cx="28" cy="4"  r="2.2" fill="#d7dbe2"/>
+</svg>

@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!--
+    Switch Bay — five parallel slanted "switches" between two terminals.
+    Like a circuit-diagram switch symbol multiplied by five, faintly
+    reminiscent of slanted railway tracks. Colours are pulled from the
+    graph's type palette (analysis purple, concept green, entity orange,
+    figure pink, source blue) so the favicon and the workbench share a
+    visual vocabulary.
+  -->
+  <g stroke-linecap="round" stroke-width="3.2" fill="none">
+    <line x1="5"  y1="27" x2="11" y2="7" stroke="#a76aaa"/>
+    <line x1="9"  y1="27" x2="15" y2="7" stroke="#59a14f"/>
+    <line x1="13" y1="27" x2="19" y2="7" stroke="#f28e2b"/>
+    <line x1="17" y1="27" x2="23" y2="7" stroke="#e377c2"/>
+    <line x1="21" y1="27" x2="27" y2="7" stroke="#4a7ab8"/>
+  </g>
+  <!-- Terminals: dark filled dots at lower-left and upper-right corners. -->
+  <circle cx="4"  cy="28" r="2.2" fill="#0f1115"/>
+  <circle cx="28" cy="4"  r="2.2" fill="#0f1115"/>
+</svg>

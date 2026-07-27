@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
+  <title>MARS HOPPER — Starship Edition</title>
+  <meta http-equiv="Cache-Control" content="no-cache" />
+  <!-- First-party bundle for Switch Bay (no external font CDN — offline + sandbox). -->
+  <!-- Absolute paths so the page works whether the URL has a trailing slash. -->
+  <link rel="stylesheet" href="/api/easter/mars-hopper/style.css" />
+</head>
+<body>
+  <div id="wrap">
+    <header>
+      <h1>MARS HOPPER</h1>
+      <p class="tagline">STARSHIP · LAUNCHPADS · NO LILYPADS</p>
+    </header>
+
+    <div id="hud">
+      <div class="stat"><span class="label">SCORE</span><span id="score">0</span></div>
+      <div class="stat"><span class="label">BEST</span><span id="best">0</span></div>
+      <div class="stat"><span class="label">PADS</span><span id="pads">0</span></div>
+    </div>
+
+    <canvas id="game" width="480" height="640" aria-label="Mars Hopper game canvas"></canvas>
+
+    <div id="overlay" class="visible title-mode">
+      <div class="panel">
+        <h2 id="overlay-title">STARSHIP READY</h2>
+        <p id="overlay-msg">Hop launchpads across Mars base. BOOST: hold hop to fly (slow fuel drip). CHOPSTICKS: rare dead-center catch for fast refuel. Release hop to land.</p>
+        <ul class="controls">
+          <li><kbd>↑</kbd> <kbd>W</kbd> <kbd>SPACE</kbd> hop · hold on BOOST/CHOP to fly</li>
+          <li><kbd>←</kbd> <kbd>→</kbd> / <kbd>A</kbd> <kbd>D</kbd> strafe (works mid-boost)</li>
+          <li>Chopsticks need precise center alignment</li>
+          <li>Touch: bottom third = hold hop · upper = strafe</li>
+        </ul>
+        <button id="start-btn" type="button">IGNITE</button>
+      </div>
+    </div>
+
+    <footer>
+      <span>Mars base · pixel hop · thrusters armed</span>
+    </footer>
+  </div>
+  <script src="/api/easter/mars-hopper/game.js"></script>
+</body>
+</html>
