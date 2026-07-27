@@ -1,5 +1,7 @@
 # Switch Bay
 
+<img width="3437" height="1398" alt="image" src="https://github.com/user-attachments/assets/d1abbde7-650a-4b02-b318-426024709220" />
+
 > **An agentic second brain you grow.** Feed it your notes, docs, and
 > sources; capable agents curate them into expert knowledge graphs that
 > compound — richer every session, owned and guided by you.
