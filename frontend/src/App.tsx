@@ -21,6 +21,7 @@ import Rail, { type RailEntry } from "./rail/Rail";
 import ZenShell from "./zen/ZenShell";
 import { readUiMode, type UiMode } from "./layout/ModeToggle";
 import type { ZenArtifact } from "./zen/ZenSurfaceHost";
+import { ZEN_SYNTHETIC, isZenSynthetic } from "./zen/surfaces";
 import type { TerminalWsApi } from "./rail/PtyThreadSurface";
 import type { ActiveRun } from "./center/DashboardPanel";
 import { installKeyRegistry, registerChord, registerCombo } from "./keys";
@@ -116,6 +117,10 @@ export default function App() {
   const [helpOpen, setHelpOpen] = useState(false);
   const [walkthroughOpen, setWalkthroughOpen] = useState(false);
   const walkthroughAutoTriedRef = useRef(false);
+  // False until we know the first-install tour is neither pending nor
+  // running. Other first-run surfaces (the FirstRunWizard modal) wait
+  // on this so they don't land on top of the tour's coach-marks.
+  const [walkthroughSettled, setWalkthroughSettled] = useState(false);
   // ── UI mode: Power (3-column) ↔ Zen (graph + surface + floating
   // chat). Sibling shells in the same tree — all state here survives
   // the toggle. ModeToggle announces flips via `sy:ui-mode`.
@@ -312,8 +317,9 @@ export default function App() {
     [visibleTabs],
   );
   // Drop a stale surface id (workspace switch replaced the tab set).
+  // Synthetic surfaces (Agents, Browser) aren't tabs and always survive.
   useEffect(() => {
-    if (zenSurface && zenSurface !== "agents"
+    if (zenSurface && !isZenSynthetic(zenSurface)
         && !zenTabs.some((t) => t.id === zenSurface)) {
       setZenSurface(null);
     }
@@ -324,7 +330,7 @@ export default function App() {
   const setZenSurfaceChecked = useCallback((s: string) => {
     setZenSurface(s);
     setZenArtifact((cur) => {
-      if (!cur || s === "agents") return cur;
+      if (!cur || isZenSynthetic(s)) return cur;
       const t = mode.tabs.find((x) => x.id === s);
       return t && t.kind === cur.kind ? null : cur;
     });
@@ -354,10 +360,13 @@ export default function App() {
         description: "Next tab",
         handler: () => {
           if (uiModeRef.current === "zen") {
-            const order = [...zenTabs.map((t) => t.id), "agents"];
+            const order = [
+              ...zenTabs.map((t) => t.id),
+              ...ZEN_SYNTHETIC.map((s) => s.id),
+            ];
             if (order.length === 0) return;
             setZenSurface((cur) => {
-              const i = order.indexOf(cur ?? zenTabs[0]?.id ?? "agents");
+              const i = order.indexOf(cur ?? zenTabs[0]?.id ?? order[0]!);
               return order[(i + 1) % order.length]!;
             });
             return;
@@ -556,9 +565,12 @@ export default function App() {
           return [...prev, { id: ++idRef.current, source: "system", text }];
         });
         // First-install product tour (once per machine; /walkthrough re-runs).
+        // If nothing will auto-start, release the first-run gate now;
+        // otherwise the tour's own onClose releases it.
         if (!walkthroughAutoTriedRef.current) {
           walkthroughAutoTriedRef.current = true;
-          void maybeAutoStartWalkthrough(() => setWalkthroughOpen(true));
+          void maybeAutoStartWalkthrough(() => setWalkthroughOpen(true))
+            .then((scheduled) => { if (!scheduled) setWalkthroughSettled(true); });
         }
       } else if (msg.type === "notice") {
         setEntries((e) => [
@@ -2246,6 +2258,7 @@ export default function App() {
             workspaces={workspacesState}
             graphData={graphData}
             graphError={graphError}
+            filesVersion={filesVersion}
             tabs={zenTabs}
             surface={zenSurface}
             setSurface={setZenSurfaceChecked}
@@ -2340,7 +2353,7 @@ export default function App() {
         <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
         <Walkthrough
           open={walkthroughOpen}
-          onClose={() => setWalkthroughOpen(false)}
+          onClose={() => { setWalkthroughOpen(false); setWalkthroughSettled(true); }}
           ctx={{
             graphData,
             switchToKind: (kind) => switchToKindRef.current?.(kind) ?? false,
@@ -2357,6 +2370,7 @@ export default function App() {
         <FirstRunWizard
           workspace={workspace}
           graphError={graphError}
+          ready={walkthroughSettled && !walkthroughOpen}
           onOpenSettings={() => setSettingsOpen(true)}
           onOpenHelp={() => setHelpOpen(true)}
         />

@@ -26,6 +26,9 @@ you send it.
   wiki edits; a stronger reviewer (and you) keep them honest.
 - **Two cockpits** — **Power** mode (3-column: browser · tabs · rail) and
   **Zen** mode (think *at* the graph). Same data, your choice.
+- **Custom tabs** — describe the view you want and an agent builds it
+  just-in-time over your own data. Pin the keepers (globally or per
+  workspace); throw the rest away.
 
 New here? Read **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)**
 — how Switch Bay is put together in one read: the core vocabulary

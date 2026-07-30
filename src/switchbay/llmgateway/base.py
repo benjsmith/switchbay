@@ -49,6 +49,54 @@ class ProviderError(Exception):
             self.__cause__ = cause
 
 
+REASONING_NOTES = """Reasoning effort (`provider.reasoning_options(model)`).
+
+A provider that can vary how hard a model thinks exposes a module-level
+
+    def reasoning_options(model: str | None = None) -> list[dict]
+
+returning `[{"id", "label", "hint"}, …]` — ordered cheapest/fastest
+first — or `[]` when THIS model takes no effort setting. Callers ask per
+model because the answer is per model: sending `reasoning_effort` to a
+non-reasoning model is a 400 from most APIs, so "the provider supports
+it" is not a safe proxy for "this model accepts it".
+
+`id` is whatever the wire format wants (`"low"`, `"high"`, …), except
+where a provider has to synthesise ids because its wire format is a
+number rather than an enum — Anthropic and Gemini take a thinking-token
+BUDGET, so their ids are symbolic and the provider maps id → budget.
+
+Absent function → no options → the UI hides the control for that model.
+Never guess an id on a provider's behalf; an unknown id is dropped
+rather than sent.
+"""
+
+REASONING_OFF = "off"
+"""Reserved id meaning "don't think at all". Providers that can disable
+reasoning entirely should use this id so the UI can style it as a
+distinct state rather than just the cheapest rung."""
+
+
+def reasoning_option(id: str, label: str, hint: str = "") -> dict:
+    """Build one option row. Keeps the shape consistent across
+    providers so the UI can render any of them the same way."""
+    return {"id": id, "label": label, "hint": hint}
+
+
+def coerce_effort(effort: str | None, options: list[dict]) -> str | None:
+    """Return `effort` if the options advertise it, else None.
+
+    The guard against a stale setting outliving the model it was chosen
+    for: efforts are stored per provider/model, but a user can edit
+    config by hand, and model ids get renamed upstream. Dropping an
+    unrecognised value degrades to the provider default instead of
+    failing the request.
+    """
+    if not effort:
+        return None
+    return effort if any(o.get("id") == effort for o in options) else None
+
+
 CAPABILITY_NOTES = """Execution surface (`PROVIDER["capabilities"]`).
 
 `shell` / `file_write` say whether a provider can EXECUTE work — run
@@ -154,3 +202,17 @@ class ChatRequest:
     leaving an EMPTY body (quality-trial finding). The agentic /curate
     loop leaves this None so it keeps reasoning ON. Non-local providers
     ignore it."""
+    reasoning_effort: str | None = None
+    """How hard the model should think, as one of the ids the PROVIDER
+    advertised via `reasoning_options(model)`. None = the provider's own
+    default (we send nothing).
+
+    This is a THIRD picker dimension alongside provider and model: the
+    same model is a different cost/latency tool at different efforts
+    (grok-4.5 at low effort is fast and far cheaper than a frontier
+    model, and the same weights at high effort are not). Options are
+    per-MODEL, not per-provider — a provider's reasoning models and its
+    plain ones don't take the same values, and sending an effort to a
+    model that doesn't accept one is an API error. So providers must
+    answer "what can THIS model do?" rather than declaring one static
+    list, and callers must not invent ids."""

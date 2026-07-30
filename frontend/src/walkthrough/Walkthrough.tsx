@@ -247,8 +247,10 @@ function buildSteps(): Step[] {
       id: "done",
       title: "Happy Exploring!",
       body:
-        "You're set. Re-run this tour anytime with /walkthrough. "
-        + "Open /intro for the full product deck and benchmark story.",
+        "You're set. We'll leave you on the Intro deck — the full "
+        + "product story and benchmarks, yours to read at your own pace. "
+        + "Re-run this tour anytime with /walkthrough, or reopen the deck "
+        + "with /intro.",
       requireMode: "power",
       enter: async () => {
         setMode("power");
@@ -292,11 +294,18 @@ export default function Walkthrough({ open, onClose, ctx }: Props) {
     void fetch("/api/walkthrough/done", { method: "POST" }).catch(() => { /* */ });
   }, []);
 
+  // Land the user ON the Intro deck rather than wherever the tour's
+  // last step happened to navigate. The deck is seeded pinned-first on
+  // first install, but every graph/table step steers away from it — so
+  // without this it reads as "the intro closed itself" and is never
+  // read. Falls through silently if the tab was closed (`/intro`
+  // re-adds it).
   const finish = useCallback(() => {
     markDone();
     setMode("power");
     onClose();
-  }, [markDone, onClose]);
+    window.setTimeout(() => { ctx.switchToKind("intro"); }, 60);
+  }, [markDone, onClose, ctx]);
 
   // Reset index when reopening
   useEffect(() => {
@@ -478,18 +487,28 @@ export default function Walkthrough({ open, onClose, ctx }: Props) {
   );
 }
 
-/** Call once after the shell is ready — starts the tour if never done. */
+/**
+ * Call once after the shell is ready — starts the tour if never done.
+ *
+ * Resolves `true` when a tour has been scheduled, so the caller can
+ * hold back anything else that wants the screen (the FirstRunWizard
+ * modal would otherwise land on top of the first coach-mark). `false`
+ * means nothing will auto-start and other first-run surfaces are free
+ * to show immediately.
+ */
 export async function maybeAutoStartWalkthrough(
   start: () => void,
-): Promise<void> {
+): Promise<boolean> {
   try {
     const r = await fetch("/api/walkthrough/status");
-    if (!r.ok) return;
+    if (!r.ok) return false;
     const body = (await r.json()) as { done?: boolean };
-    if (body.done) return;
-    // Let FirstRunWizard / layout settle.
+    if (body.done) return false;
+    // Let the layout settle before the first spotlight measures.
     window.setTimeout(start, 1400);
+    return true;
   } catch {
     /* older daemon */
+    return false;
   }
 }

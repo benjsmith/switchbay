@@ -12,11 +12,18 @@ import { useEffect, useState } from "react";
  * (localStorage); the rail's pinned "set up wiki" action and the
  * Settings panels remain the standing paths to everything offered
  * here.
+ *
+ * `ready` sequences this behind the first-install walkthrough — both
+ * want the whole screen on a fresh machine, and this modal used to
+ * open straight over the tour's first coach-mark. App holds it false
+ * until the tour is neither pending nor running.
  */
 
 type Props = {
   workspace: string;
   graphError: string | null;
+  /** False while the first-install walkthrough is pending or running. */
+  ready: boolean;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
 };
@@ -24,7 +31,7 @@ type Props = {
 const doneKey = (ws: string) => `sy:wizard-done:${ws}`;
 
 export default function FirstRunWizard({
-  workspace, graphError, onOpenSettings, onOpenHelp,
+  workspace, graphError, ready, onOpenSettings, onOpenHelp,
 }: Props) {
   const [dismissed, setDismissed] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -37,10 +44,11 @@ export default function FirstRunWizard({
   } | null>(null);
   const [localState, setLocalState] = useState<"idle" | "starting" | "started">("idle");
 
-  // Re-evaluate on workspace switch. Only a genuinely wiki-less
-  // workspace (CE viewer reports "no wiki") triggers the wizard.
+  // Re-evaluate on workspace switch, and again when the walkthrough
+  // releases the gate. Only a genuinely wiki-less workspace (CE viewer
+  // reports "no wiki") triggers the wizard.
   useEffect(() => {
-    if (!workspace || !graphError || !/no wiki/i.test(graphError)) {
+    if (!ready || !workspace || !graphError || !/no wiki/i.test(graphError)) {
       setDismissed(true);
       return;
     }
@@ -69,7 +77,7 @@ export default function FirstRunWizard({
         }
       })
       .catch(() => { /* older daemon */ });
-  }, [workspace, graphError]);
+  }, [ready, workspace, graphError]);
 
   const installLocal = async () => {
     if (localState !== "idle") return;

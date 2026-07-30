@@ -503,6 +503,23 @@ register(Verb(
 
 
 register(Verb(
+    name="effort",
+    aliases=["reasoning", "think"],
+    description=(
+        "Reasoning effort for the current model — `/effort` shows the "
+        "options this model accepts, `/effort high` sets one, "
+        "`/effort auto` clears it back to the provider default. "
+        "Switch Bay owns this command: a coding CLI's own /effort typed "
+        "here never reaches the CLI (the rail's slash router consumes "
+        "it first) and could not be read back into the picker anyway, "
+        "so setting it here is what actually changes what gets sent — "
+        "and it keeps the rail's corner control in sync."
+    ),
+    handler=_action_stub,
+))
+
+
+register(Verb(
     name="intro",
     aliases=[],
     description=(

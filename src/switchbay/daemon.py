@@ -35,6 +35,7 @@ import uuid
 from . import (
     a2a, action_buttons, agent_rules, analyses, app_settings, atomicio, capture, cebridge,
     commands, conversations, curation_history, dbintrospect, deck_export,
+    demo_workspace,
     duckdb_starters, file_state, fileops, llm_config, llmgateway,
     localllm,
     mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
@@ -2815,6 +2816,8 @@ async def handle_llm_slug(request: web.Request) -> web.Response:
         )}],
         model=_effective_model(pid) or provider.PROVIDER.get("default_model"),
         max_tokens=32,
+        reasoning_effort=_effort_for(
+            pid, _effective_model(pid), "background"),
         workspace=str(workspace),
     )
     accumulated = ""
@@ -5257,6 +5260,7 @@ async def _oneshot_json(
     req = llmgateway.ChatRequest(
         messages=[{"role": "user", "content": prompt}],
         model=model, max_tokens=max_tokens, workspace=str(workspace),
+        reasoning_effort=_effort_for(pid, model, "background"),
     )
     text = ""
     async for ev in provider.chat_stream(req):
@@ -5961,6 +5965,7 @@ async def handle_purge_preview(request: web.Request) -> web.Response:
             )}],
             model=model or provider.PROVIDER.get("default_model"),
             max_tokens=200,
+            reasoning_effort=_effort_for(pid, model, "background"),
             temperature=0.0,
             workspace=str(workspace),
         )
@@ -6439,6 +6444,7 @@ async def _triage_events(
                        "content": streams.triage_prompt(events, descriptors)}],
             model=model or provider.PROVIDER.get("default_model"),
             max_tokens=1500,
+            reasoning_effort=_effort_for(pid, model, "background"),
             temperature=0.0,
             workspace=choice_paths[0],
         )
@@ -6506,6 +6512,8 @@ async def _curate_into(
                            profile=profile or None)}],
             model=_effective_model(pid),
             workspace=str(ws),
+            reasoning_effort=_effort_for(
+                pid, _effective_model(pid), "ladder"),
         )
         async for ev in provider.chat_stream(req):
             runs[run_id]["last_chunk_at"] = time.time()
@@ -6661,6 +6669,7 @@ async def _draft_decision_proposal(
         messages=[{"role": "user", "content": prompt}],
         model=model or provider.PROVIDER.get("default_model"),
         max_tokens=2500,
+        reasoning_effort=_effort_for(pid, model, "background"),
         temperature=0.0,
         workspace=str(ws),
         # One-shot content draft: force reasoning OFF on local models so
@@ -8696,6 +8705,7 @@ async def _auto_title_thread(
             messages=[{"role": "user", "content": _title_prompt(first[:1000])}],
             model=model or provider.PROVIDER.get("default_model"),
             max_tokens=32,
+            reasoning_effort=_effort_for(pid, model, "ladder"),
             temperature=0.0,
             workspace=str(workspace),
         )
@@ -8997,6 +9007,11 @@ async def _dispatch_chat(
                 session_id=session_id,
                 workspace=str(workspace),
                 origin_thread=thread_id,
+                # Same loop serves interactive rail chat and micro-edits
+                # (the latter arrives with provider/model overridden), so
+                # the lane follows which one this turn actually is.
+                reasoning_effort=_effort_for(
+                    pid, model, "micro" if micro_meta else "rail"),
             )
             assistant_blocks: list[dict] = []
             current_text = ""
@@ -9494,6 +9509,8 @@ async def _review_page(app: web.Application, workspace: Path,
                    f"{entry.get('body') or ''}"}],
         model=_effective_model(pid) or None,
         system=_PROPOSAL_REVIEW_SYS, max_tokens=700, workspace=str(workspace),
+        reasoning_effort=_effort_for(
+            pid, _effective_model(pid), "ladder"),
     )
     text = ""
     try:
@@ -10345,6 +10362,8 @@ async def _autotune_local_harness(
             messages=[{"role": "user", "content": prompt}],
             model=_effective_model(strong),
             max_tokens=80,
+            reasoning_effort=_effort_for(
+                strong, _effective_model(strong), "ladder"),
         )
         rule = ""
         async for ev in provider.chat_stream(req):
@@ -10386,6 +10405,8 @@ async def _refine_harness(app: web.Application, strong_pid: str) -> None:
             messages=[{"role": "user", "content": prompt}],
             model=_effective_model(strong_pid),
             max_tokens=1200,
+            reasoning_effort=_effort_for(
+                strong_pid, _effective_model(strong_pid), "ladder"),
         )
         out = ""
         async for ev in provider.chat_stream(req):
@@ -10854,27 +10875,243 @@ async def handle_digest(request: web.Request) -> web.Response:
     })
 
 
+def _effort_for(
+    provider_id: str, model: str | None, lane: str = "background",
+) -> str | None:
+    """Reasoning effort for a dispatch — see `routing_status.effort_for`.
+
+    Thin wrapper that supplies the daemon's notion of the current picker
+    provider (which falls back to a configured default when the user has
+    never chosen one).
+    """
+    return routing_status.effort_for(
+        provider_id, model, lane, picker_provider=_resolve_default_provider())
+
+
+async def _handle_effort_slash(
+    app: web.Application, ws: web.WebSocketResponse, args: str,
+) -> None:
+    """`/effort [level|auto]` — read or set the current model's effort.
+
+    Same store the rail's corner control reads, so the two never
+    disagree. Bare `/effort` lists what THIS model accepts, because the
+    options are per model and guessing is what we're trying to avoid.
+    """
+    pid = _resolve_default_provider()
+    model = llm_config.get_model(pid)
+    if model is None:
+        try:
+            model = str(
+                llmgateway.get(pid).PROVIDER.get("default_model") or "") or None
+        except llmgateway.ProviderError:
+            model = None
+
+    opts = await asyncio.to_thread(llmgateway.reasoning_options, pid, model)
+    label = f"{pid} · {model}" if model else pid
+    if not opts:
+        await ws.send_json(protocol.notice(
+            f"{label} has no reasoning-effort setting — nothing to change. "
+            "Models that do: Anthropic, Gemini, OpenAI o-series/gpt-5, "
+            "xAI reasoning models, and the local backends.",
+            kind="slash",
+        ))
+        return
+
+    ids = [str(o["id"]) for o in opts]
+    arg = (args or "").strip().lower()
+    current = routing_status.effort_for(pid, model, "rail", picker_provider=pid)
+
+    if not arg or arg in ("status", "show", "?"):
+        lines = ", ".join(
+            f"**{i}**" if i == current else i for i in ids)
+        await ws.send_json(protocol.notice(
+            f"reasoning effort · {label} — currently "
+            f"{current or 'provider default'}. Options: {lines}, auto. "
+            f"Set with `/effort <level>`.",
+            kind="slash",
+        ))
+        return
+
+    if arg in ("auto", "default", "clear", "off-setting", "unset"):
+        await asyncio.to_thread(llm_config.set_reasoning_effort, pid, model, None)
+        await _broadcast(app, protocol.custom({
+            "type": "reasoning_effort",
+            "provider": pid, "model": model, "effort": None,
+        }))
+        await ws.send_json(protocol.notice(
+            f"reasoning effort cleared for {label} — using the provider default.",
+            kind="slash",
+        ))
+        return
+
+    if arg not in ids:
+        await ws.send_json(protocol.notice(
+            f"{label} doesn't offer effort {arg!r}. Options: "
+            f"{', '.join(ids)}, auto.",
+            kind="slash",
+        ))
+        return
+
+    await asyncio.to_thread(llm_config.set_reasoning_effort, pid, model, arg)
+    await _broadcast(app, protocol.custom({
+        "type": "reasoning_effort",
+        "provider": pid, "model": model, "effort": arg,
+    }))
+    hint = next((str(o.get("hint") or "") for o in opts if o["id"] == arg), "")
+    await ws.send_json(protocol.notice(
+        f"reasoning effort → **{arg}** for {label}"
+        + (f" ({hint})" if hint else "") + ".",
+        kind="slash",
+    ))
+
+
+async def handle_reasoning_options(request: web.Request) -> web.Response:
+    """What reasoning efforts THIS provider+model accepts, plus the
+    user's current pick.
+
+    Query: ?provider=<id>&model=<id>. Both default to the rail picker's
+    current selection so the rail control can call it bare.
+    """
+    q = request.rel_url.query
+    pid = (q.get("provider") or "").strip() or _resolve_default_provider()
+    model = (q.get("model") or "").strip() or None
+    if model is None:
+        try:
+            model = llm_config.get_model(pid) or str(
+                llmgateway.get(pid).PROVIDER.get("default_model") or "") or None
+        except llmgateway.ProviderError:
+            model = None
+    options = await asyncio.to_thread(llmgateway.reasoning_options, pid, model)
+    return web.json_response({
+        "provider": pid,
+        "model": model,
+        "options": options,
+        "selected": _effort_for(pid, model),
+    })
+
+
+async def handle_reasoning_effort_set(request: web.Request) -> web.Response:
+    """Persist a reasoning effort. Body: {provider?, model?, effort}.
+
+    `effort: null` clears it (back to the provider's own default). An id
+    the provider doesn't advertise for that model is refused rather than
+    stored — the UI renders from the same list, so a rejection here means
+    a stale client.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    pid = str((body or {}).get("provider") or "").strip() or _resolve_default_provider()
+    model = str((body or {}).get("model") or "").strip() or None
+    raw = (body or {}).get("effort")
+    effort = str(raw).strip() if isinstance(raw, str) and raw.strip() else None
+
+    if model is None:
+        try:
+            model = llm_config.get_model(pid) or str(
+                llmgateway.get(pid).PROVIDER.get("default_model") or "") or None
+        except llmgateway.ProviderError:
+            model = None
+
+    if effort is not None:
+        opts = await asyncio.to_thread(llmgateway.reasoning_options, pid, model)
+        if not llmgateway.base.coerce_effort(effort, opts):
+            return web.json_response({
+                "error": (
+                    f"{pid}/{model} doesn't offer reasoning effort "
+                    f"{effort!r}"
+                ),
+                "options": opts,
+            }, status=400)
+
+    await asyncio.to_thread(
+        llm_config.set_reasoning_effort, pid, model, effort)
+    await _broadcast(request.app, protocol.custom({
+        "type": "reasoning_effort",
+        "provider": pid, "model": model, "effort": effort,
+    }))
+    return web.json_response({
+        "ok": True, "provider": pid, "model": model, "effort": effort,
+    })
+
+
+async def handle_reasoning_policy(request: web.Request) -> web.Response:
+    """Per-lane fallback policy — what a lane does when the model it
+    resolved to carries no effort of its own.
+
+    GET  → {lanes: {lane: policy}}
+    POST → {lane, policy}  ("inherit" | "default" | an effort id)
+
+    Lanes: `rail` (the corner picker), `micro` (micro-edits), `ladder`
+    (CE / routed work — inherits its rung's model, so setting the rung's
+    effort is usually what you want), `background` (titles, triage).
+    """
+    if request.method == "GET":
+        lanes = {
+            lane: await asyncio.to_thread(llm_config.get_reasoning_policy, lane)
+            for lane in llm_config.LANES
+        }
+        return web.json_response({
+            "lanes": lanes,
+            "inherit": llm_config.POLICY_INHERIT,
+            "default": llm_config.POLICY_DEFAULT,
+        })
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    lane = str((body or {}).get("lane") or "").strip()
+    raw = (body or {}).get("policy")
+    policy = str(raw).strip() if isinstance(raw, str) and raw.strip() else None
+    if lane not in llm_config.LANES:
+        return web.json_response(
+            {"error": f"unknown lane {lane!r}", "lanes": list(llm_config.LANES)},
+            status=400)
+    try:
+        await asyncio.to_thread(llm_config.set_reasoning_policy, lane, policy)
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    return web.json_response({
+        "ok": True, "lane": lane,
+        "policy": await asyncio.to_thread(llm_config.get_reasoning_policy, lane),
+    })
+
+
 async def handle_copilot_login(request: web.Request) -> web.Response:
-    """Start the GitHub device-flow sign-in (Copilot provider). Returns
-    {user_code, verification_uri}; a background task polls GitHub until
-    the user authorizes in their browser (enterprise SSO happens on
-    GitHub's pages). Status via GET /api/copilot/login/status."""
+    """Start the GitHub device-flow sign-in (Copilot provider).
+
+    Body (optional): {host} — a GitHub Enterprise Server or ghe.com
+    hostname. Omitted means github.com. Returns {user_code,
+    verification_uri, host, sso_hint}; a background task polls until the
+    user authorizes in their browser. Status via
+    GET /api/copilot/login/status.
+    """
     from .llmgateway import github_copilot
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    host = str((body or {}).get("host") or "").strip() or None
     cur = request.app.get("copilot_login")
     if isinstance(cur, dict) and cur.get("state") == "pending":
         return web.json_response({
             "ok": True,
             "user_code": cur.get("user_code"),
             "verification_uri": cur.get("verification_uri"),
+            "host": cur.get("host"),
+            "sso_hint": cur.get("sso_hint"),
         })
     try:
-        device = await github_copilot.device_code()
+        device = await github_copilot.device_code(host)
     except llmgateway.ProviderError as e:
         return web.json_response({"error": str(e)}, status=502)
     rec = {
         "state": "pending",
         "user_code": device.get("user_code"),
         "verification_uri": device.get("verification_uri"),
+        "host": device.get("host"),
+        "sso_hint": device.get("sso_hint"),
         "error": None,
     }
     request.app["copilot_login"] = rec
@@ -10898,6 +11135,8 @@ async def handle_copilot_login(request: web.Request) -> web.Response:
         "ok": True,
         "user_code": rec["user_code"],
         "verification_uri": rec["verification_uri"],
+        "host": rec["host"],
+        "sso_hint": rec["sso_hint"],
     })
 
 
@@ -10906,6 +11145,8 @@ async def handle_copilot_login_status(request: web.Request) -> web.Response:
     rec = request.app.get("copilot_login")
     return web.json_response({
         "authed": github_copilot.has_key(),
+        "host": github_copilot.get_host(),
+        "default_host": github_copilot.DEFAULT_HOST,
         "login": rec if isinstance(rec, dict) else None,
     })
 
@@ -10944,11 +11185,16 @@ async def handle_localllm_status(request: web.Request) -> web.Response:
 
 
 async def handle_localllm_install(request: web.Request) -> web.Response:
-    """Install a local model. Body: {candidate_id?, ctx?}.
+    """Install a local model.
 
-    Without candidate_id, keeps legacy behaviour (RAM-planned Ornith).
-    With candidate_id from plan_top3 / discovery, installs that GGUF
-    (llama.cpp) or pulls the Ollama tag.
+    Body: {candidate_id?, repo?, ollama_tag?, backend?, quant?, ctx?}.
+
+    Three paths:
+      * `repo` / `ollama_tag` — free-text install of ANY llama.cpp-
+        compatible GGUF repo, MLX repo, or Ollama tag. Sizes come from
+        the repo's real file list, so no catalog entry is needed.
+      * `candidate_id` from plan_top3 / discovery — catalog install.
+      * neither — legacy RAM-planned Ornith.
     """
     body: dict[str, Any] = {}
     try:
@@ -10956,13 +11202,63 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         pass
     cand_id = str(body.get("candidate_id") or body.get("id") or "").strip()
+    repo = str(body.get("repo") or "").strip()
+    otag = str(body.get("ollama_tag") or "").strip()
+    backend = str(body.get("backend") or "").strip()
+    quant = str(body.get("quant") or "").strip() or None
     cur = request.app.get("localllm_install")
     if isinstance(cur, dict) and cur.get("state") == "running":
         return web.json_response({"error": "install already running"}, status=409)
 
-    # Resolve candidate
-    entry = local_models.catalog_by_id(cand_id) if cand_id else None
     ram = localllm.ram_gb()
+
+    # ── Free-text path ─────────────────────────────────────────────
+    # A candidate the user pasted rather than picked. Resolved against
+    # the live registry (HF tree / ollama) so an id that never appears
+    # in our catalog still installs.
+    if repo or otag:
+        if not backend:
+            backend = "ollama" if otag else "llamacpp"
+        if backend == "ollama":
+            cand = await asyncio.to_thread(
+                local_models.resolve_ollama_candidate, otag or repo)
+            if not cand.get("ok"):
+                return web.json_response({"error": cand.get("error")}, status=400)
+            return await _install_ollama_model(request.app, {
+                "id": cand["id"], "label": cand["label"],
+                "ollama_tag": cand["ollama_tag"],
+            })
+        if backend == "mlx":
+            cand = await asyncio.to_thread(
+                local_models.resolve_mlx_candidate, repo)
+            if not cand.get("ok"):
+                return web.json_response({"error": cand.get("error")}, status=400)
+            return await _install_mlx_model(
+                request.app, cand, ctx=int(body.get("ctx") or cand["ctx"]))
+        cand = await asyncio.to_thread(
+            local_models.resolve_repo_candidate, repo, ram=ram, quant=quant)
+        if not cand.get("ok"):
+            return web.json_response({"error": cand.get("error")}, status=400)
+        plan = {
+            "ok": True,
+            "model": cand["id"],
+            "model_label": cand["label"],
+            "repo": cand["repo"],
+            "quant": cand["quant"],
+            "file": cand["file"],
+            "parts": cand.get("parts") or [cand["file"]],
+            "weights_gb": cand["weights_gb"],
+            "ctx": int(body.get("ctx") or cand["ctx"]),
+            "kv_quant": "q8_0",
+            "alias": re.sub(r"[^a-zA-Z0-9_]+", "_", cand["label"])[:24] or "local",
+            "candidate_id": cand["id"],
+            "port": await asyncio.to_thread(local_models.allocate_port),
+            "gguf_note": None,
+        }
+        return await _start_gguf_install(request.app, plan)
+
+    # ── Catalog / legacy paths ─────────────────────────────────────
+    entry = local_models.catalog_by_id(cand_id) if cand_id else None
     if entry and entry.get("backend") == "ollama":
         return await _install_ollama_model(request.app, entry)
 
@@ -11012,11 +11308,22 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
             return web.json_response({"error": f"ctx {ctx} not offered"}, status=400)
         plan["ctx"] = ctx
 
+    return await _start_gguf_install(request.app, plan)
+
+
+async def _start_gguf_install(
+    app: web.Application, plan: dict[str, Any],
+) -> web.Response:
+    """Kick off a GGUF download → llama-server → ladder install.
+
+    Shared by the catalog path, the legacy Ornith path and the
+    paste-any-repo path — they differ only in how `plan` is built.
+    """
     rec: dict[str, Any] = {
         "state": "running", "step": "starting", "percent": 0, "error": None,
         "candidate_id": plan.get("candidate_id"),
     }
-    request.app["localllm_install"] = rec
+    app["localllm_install"] = rec
     ctx = int(plan["ctx"])
 
     async def _worker() -> None:
@@ -11024,6 +11331,7 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
             await localllm.ensure_llama_cpp(rec)
             dest = await localllm.download_gguf(
                 plan["repo"], plan["file"], plan["weights_gb"], rec,
+                parts=plan.get("parts"),
             )
             alias = str(plan.get("alias") or "local")
             port = int(plan.get("port") or localllm.PORT)
@@ -11056,7 +11364,7 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
                 activate=True,
             )
             rec["step"] = "starting llama-server"
-            await localllm.spawn_server(request.app, cfg)
+            await localllm.spawn_server(app, cfg)
             rec["step"] = "loading model (first load takes a minute)"
             healthy = await localllm.wait_healthy(port=port)
             ladder = await asyncio.to_thread(modestore.global_ladder)
@@ -11065,7 +11373,7 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
             await asyncio.to_thread(modestore.set_global_ladder, ladder)
             rec.update(state="done", step="done")
             _log_event(
-                request.app, "exec",
+                app, "exec",
                 f"local model installed: {plan['model_label']} "
                 f"{plan['quant']} ctx={ctx} → ladder lower rungs",
                 source="localllm", actor="user",
@@ -11073,7 +11381,7 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
                          "healthy": healthy,
                          "candidate_id": plan.get("candidate_id")},
             )
-            await _broadcast(request.app, protocol.notice(
+            await _broadcast(app, protocol.notice(
                 f"{plan['model_label']} installed ({plan['quant']}, "
                 f"{ctx // 1024}k context)"
                 + ("" if healthy else " — still loading")
@@ -11084,7 +11392,7 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
         except Exception as e:  # noqa: BLE001
             log.exception("local model install failed")
             rec.update(state="error", error=str(e))
-            await _broadcast(request.app, protocol.notice(
+            await _broadcast(app, protocol.notice(
                 f"local model install failed: {e}", kind="chat",
             ))
 
@@ -11092,6 +11400,100 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
     return web.json_response({
         "ok": True, "started": True, "ctx": ctx,
         "candidate_id": plan.get("candidate_id"),
+    })
+
+
+async def _install_mlx_model(
+    app: web.Application, cand: dict[str, Any], *, ctx: int,
+) -> web.Response:
+    """Install an MLX model: ensure mlx-lm, then start its server.
+
+    Unlike GGUF there is no file to fetch ourselves — `mlx_lm.server`
+    resolves the HF repo and manages its own weight cache, so the
+    "download" is the server's first load. We register it, point the
+    ladder's lower rungs at it, and wait for the port to answer.
+    """
+    if not local_models.mlx_supported():
+        return web.json_response(
+            {"error": local_models.mlx_status().get("reason")}, status=400)
+    if not local_models.mlx_binary():
+        return web.json_response({"error": (
+            "mlx-lm isn't installed. Install it with "
+            "`uv tool install mlx-lm` (or `pip install mlx-lm`) and retry."
+        )}, status=400)
+
+    cid = str(cand["id"])
+    repo = str(cand["repo"])
+    alias = re.sub(r"[^a-zA-Z0-9_]+", "_", str(cand["label"]))[:24] or "mlx"
+    rec: dict[str, Any] = {
+        "state": "running", "step": f"starting mlx_lm.server ({repo})",
+        "percent": 0, "error": None, "candidate_id": cid,
+    }
+    app["localllm_install"] = rec
+
+    async def _worker() -> None:
+        try:
+            port = await asyncio.to_thread(local_models.allocate_mlx_port)
+            cfg = {
+                "model": repo,
+                "model_label": cand["label"],
+                "quant": cand.get("quant"),
+                "repo": repo,
+                "backend": "mlx",
+                "ctx": ctx,
+                "port": port,
+                "alias": alias,
+                "installed_at": time.time(),
+                "candidate_id": cid,
+            }
+            await asyncio.to_thread(localllm.save_config, cfg)
+            await asyncio.to_thread(
+                local_models.register_installed,
+                cid,
+                {
+                    "label": cand["label"],
+                    "backend": "mlx",
+                    "repo": repo,
+                    "quant": cand.get("quant"),
+                    "ctx": ctx,
+                    "alias": alias,
+                    "port": port,
+                },
+                activate=True,
+            )
+            await localllm.spawn_server(app, cfg)
+            rec["step"] = "downloading weights + loading (first run is slow)"
+            # First load pulls the repo from HF, so allow far longer than
+            # the GGUF path (where the download already happened).
+            healthy = await localllm.wait_healthy(timeout_s=1800, port=port)
+            ladder = await asyncio.to_thread(modestore.global_ladder)
+            ladder["trivial"] = {"provider": "mlx", "model": alias}
+            ladder["normal"] = {"provider": "mlx", "model": alias}
+            await asyncio.to_thread(modestore.set_global_ladder, ladder)
+            rec.update(state="done", step="done")
+            _log_event(
+                app, "exec",
+                f"MLX model installed: {cand['label']} ctx={ctx} → ladder lower rungs",
+                source="localllm", actor="user",
+                payload={"repo": repo, "ctx": ctx, "healthy": healthy,
+                         "candidate_id": cid},
+            )
+            await _broadcast(app, protocol.notice(
+                f"{cand['label']} ready on MLX ({ctx // 1024}k context)"
+                + ("" if healthy else " — still loading")
+                + ". GLOBAL ladder trivial + normal → mlx.",
+                kind="chat",
+            ))
+        except Exception as e:  # noqa: BLE001
+            log.exception("mlx install failed")
+            rec.update(state="error", error=str(e))
+            await _broadcast(app, protocol.notice(
+                f"MLX install failed: {e}", kind="chat"))
+
+    asyncio.create_task(_worker())
+    return web.json_response({
+        "ok": True, "started": True, "ctx": ctx, "candidate_id": cid,
+        "backend": "mlx",
     })
 
 
@@ -11150,6 +11552,80 @@ async def _install_ollama_model(
 
     asyncio.create_task(_worker())
     return web.json_response({"ok": True, "started": True, "ollama_tag": tag})
+
+
+async def handle_local_models_search(request: web.Request) -> web.Response:
+    """Live model search across the local backends.
+
+    Query: ?q=<text>&backend=llamacpp|mlx|ollama&sort=downloads|trendingScore
+    &curated=0|1
+
+    Ungated by default: the catalog is a starting point, not a fence, so
+    a user searching for a model released last week finds it. `curated=1`
+    applies the recommendation gate (trusted GGUF publishers, no
+    roleplay finetunes) for the "best fits" surface.
+    """
+    q = request.rel_url.query
+    query = (q.get("q") or "").strip()
+    backend = (q.get("backend") or "llamacpp").strip()
+    sort = (q.get("sort") or "downloads").strip()
+    curated = q.get("curated") in ("1", "true", "yes")
+    try:
+        limit = max(1, min(int(q.get("limit") or 20), 50))
+    except ValueError:
+        limit = 20
+
+    if backend == "mlx":
+        if not local_models.mlx_supported():
+            return web.json_response({
+                "backend": "mlx", "results": [],
+                "error": local_models.mlx_status().get("reason"),
+            })
+        results = await asyncio.to_thread(
+            local_models.mlx_search, query, limit=limit, curated=curated)
+    elif backend == "ollama":
+        # Ollama has no public search API; the tag is resolved directly.
+        results = []
+    else:
+        backend = "llamacpp"
+        results = await asyncio.to_thread(
+            local_models.hf_search_gguf, query,
+            sort=sort, limit=limit, curated=curated)
+    return web.json_response({
+        "backend": backend, "query": query, "sort": sort,
+        "curated": curated, "results": results,
+    })
+
+
+async def handle_local_models_resolve(request: web.Request) -> web.Response:
+    """Resolve a pasted model id into an installable candidate.
+
+    Body: {repo | ollama_tag, backend?, quant?}
+
+    This is the free-text path — it reads the repo's real file list to
+    size the download, so no catalog entry is needed. Returns the
+    candidate for confirmation; POST /api/localllm/install performs it.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    backend = str((body or {}).get("backend") or "").strip()
+    repo = str((body or {}).get("repo") or (body or {}).get("id") or "").strip()
+    tag = str((body or {}).get("ollama_tag") or "").strip()
+    quant = str((body or {}).get("quant") or "").strip() or None
+
+    if not backend:
+        backend = "ollama" if tag else "llamacpp"
+    if backend == "ollama":
+        out = await asyncio.to_thread(
+            local_models.resolve_ollama_candidate, tag or repo)
+    elif backend == "mlx":
+        out = await asyncio.to_thread(local_models.resolve_mlx_candidate, repo)
+    else:
+        out = await asyncio.to_thread(
+            local_models.resolve_repo_candidate, repo, quant=quant)
+    return web.json_response(out, status=200 if out.get("ok") else 400)
 
 
 async def handle_local_models_discover(request: web.Request) -> web.Response:
@@ -12227,6 +12703,19 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                 _handle_project_slash(request.app, ws, sargs),
                             )
                             continue
+                        if sname.lower() in ("effort", "reasoning", "think"):
+                            # Reasoning effort for the current model.
+                            # Handled here rather than forwarded: a
+                            # coding CLI's own /effort would be consumed
+                            # by this router anyway, and there is no
+                            # read-back channel from a one-shot CLI
+                            # invocation to keep our picker honest. So
+                            # WE own the setting, and the corner control
+                            # + this command are the same store.
+                            asyncio.create_task(
+                                _handle_effort_slash(request.app, ws, sargs),
+                            )
+                            continue
                         if sname.lower() == "intro":
                             # Reopen (or focus) the Intro deck tab. Added
                             # here so it wins over any user template; the
@@ -12915,6 +13404,10 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/workspaces/home", handle_workspaces_home_set)
     app.router.add_post("/api/workspaces/migrate", handle_workspaces_migrate)
     app.router.add_post("/api/workspaces/migrate/cleanup", handle_workspaces_migrate_cleanup)
+    app.router.add_get("/api/llm/reasoning-options", handle_reasoning_options)
+    app.router.add_post("/api/llm/reasoning-effort", handle_reasoning_effort_set)
+    app.router.add_get("/api/llm/reasoning-policy", handle_reasoning_policy)
+    app.router.add_post("/api/llm/reasoning-policy", handle_reasoning_policy)
     app.router.add_post("/api/copilot/login", handle_copilot_login)
     app.router.add_get("/api/copilot/login/status", handle_copilot_login_status)
     app.router.add_post("/api/copilot/logout", handle_copilot_logout)
@@ -12924,6 +13417,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/localllm/reasoning", handle_localllm_reasoning)
     app.router.add_get("/api/localllm/harness", handle_localllm_harness)
     app.router.add_post("/api/localllm/harness", handle_localllm_harness)
+    app.router.add_get("/api/local-models/search", handle_local_models_search)
+    app.router.add_post("/api/local-models/resolve", handle_local_models_resolve)
     app.router.add_post("/api/local-models/discover", handle_local_models_discover)
     app.router.add_post("/api/local-models/remove", handle_local_models_remove)
     app.router.add_post("/api/local-models/activate", handle_local_models_activate)
@@ -13159,6 +13654,30 @@ def build_app(workspace: Path) -> web.Application:
         except Exception:  # noqa: BLE001
             log.exception("intro seed failed")
     app.on_startup.append(_seed_intro_tab)
+
+    # A never-curated wiki (the freshly-seeded demo, or a hand-authored
+    # one) has no `.curator/graph.kuzu`, and viewer.sh only READS that —
+    # so the Graph tab would render nodes with zero edges. Build it once,
+    # in the background: `uv run` inside the workspace can take minutes
+    # on first call, and on_startup hooks run BEFORE the socket binds.
+    async def _seed_graph(_app: web.Application) -> None:
+        async def _run() -> None:
+            ws: Path = _app["workspace"]
+            try:
+                if not cebridge.has_wiki(ws):
+                    return
+                if await asyncio.to_thread(cebridge.graph_db_path(ws).exists):
+                    return
+                ok, out = await cebridge.graph_rebuild(ws)
+                log.info("first-run graph rebuild for %s: ok=%s %s",
+                         ws, ok, out.strip()[-200:])
+                if ok:
+                    await _broadcast(_app, protocol.files_changed())
+            except Exception:  # noqa: BLE001
+                log.exception("first-run graph rebuild failed")
+
+        _app["_seed_graph_task"] = asyncio.create_task(_run())
+    app.on_startup.append(_seed_graph)
 
     # Start the rail-log write-serializer (drains app["conv_writes"]).
     async def _start_conv_writer(_app: web.Application) -> None:
@@ -13455,6 +13974,17 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     # serves what the user last picked. Mismatch between trigger
     # label and served data.json was the symptom — registry said
     # "curiosity-test" but daemon was still serving "switchbay".
+    # First run: the service installs `serve --workspace <repo-checkout>`,
+    # which has no wiki/ — so a fresh install would open on an empty
+    # workspace. Seed the bundled demo corpus into ~/Workspaces and serve
+    # that instead. Once-only (marker in the config dir) and fail-soft;
+    # a user pointing the daemon at a real workspace is left alone.
+    if demo_workspace.should_prefer(workspace):
+        demo = demo_workspace.maybe_seed()
+        if demo is not None:
+            log.info("boot: serving bundled demo workspace %s", demo)
+            workspace = demo
+
     registry = workspaces.load()
     persisted_active = registry.get("active")
     if (

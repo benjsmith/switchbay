@@ -103,6 +103,26 @@ def _http_error(status: int, text: str) -> base.ProviderError:
     )
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# xAI takes an OpenAI-shaped `reasoning_effort` enum. Non-reasoning
+# models reject it outright, so the option list is gated on the model
+# id rather than advertised provider-wide (see base.REASONING_NOTES).
+
+_NON_REASONING_HINTS = ("non-reasoning", "grok-build")
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    m = (model or DEFAULT_MODEL or "").lower()
+    if any(h in m for h in _NON_REASONING_HINTS):
+        return []
+    return [
+        base.reasoning_option(
+            "low", "Low", "fast and much cheaper — good for edits and chores"),
+        base.reasoning_option(
+            "high", "High", "slower, for planning and hard problems"),
+    ]
+
+
 def _to_openai_messages(messages: list[dict], system: str | None) -> list[dict]:
     out: list[dict] = []
     if system:
@@ -133,6 +153,10 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         body["temperature"] = req.temperature
     if req.max_tokens:
         body["max_tokens"] = req.max_tokens
+    effort = base.coerce_effort(
+        req.reasoning_effort, reasoning_options(req.model or DEFAULT_MODEL))
+    if effort:
+        body["reasoning_effort"] = effort
 
     timeout = aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT_S)
     try:

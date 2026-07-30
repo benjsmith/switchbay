@@ -166,6 +166,49 @@ async def ensure_venv(workspace: Path) -> tuple[bool, str]:
     return await setup(workspace)
 
 
+def graph_db_path(workspace: Path) -> Path:
+    """CE's kuzu graph for this workspace."""
+    return workspace / ".curator" / "graph.kuzu"
+
+
+async def graph_rebuild(workspace: Path) -> tuple[bool, str]:
+    """Run CE's `graph.py rebuild wiki` against the workspace.
+
+    `viewer.sh build` READS the kuzu graph but never rebuilds it — with
+    no `.curator/graph.kuzu` on disk, `wiki_render.py` falls back to a
+    nodes-only view and the Graph tab renders pages with no edges. CE's
+    curator normally does the rebuild as part of a curate wave, so a
+    workspace that has never been curated (a freshly-seeded demo, or a
+    wiki authored by hand) has no edges until this runs once.
+
+    Idempotent — CE skips when the graph is newer than every page.
+    Fail-soft: returns (ok, output) and never raises.
+    """
+    if not has_wiki(workspace):
+        return False, "no wiki/ in workspace"
+    script = ce_root() / "scripts" / "graph.py"
+    if not script.is_file():
+        return False, f"CE graph.py not found at {script}"
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
+    }
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "uv", "run", "python3", str(script), "rebuild", "wiki",
+            cwd=str(workspace),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), 900)
+    except (OSError, asyncio.TimeoutError) as e:
+        return False, f"graph rebuild failed: {e}"
+    text = out.decode(errors="replace")
+    return proc.returncode == 0, text[-2000:]
+
+
 async def build(
     workspace: Path, *, ensure_env: bool = True,
 ) -> dict[str, Any] | None:

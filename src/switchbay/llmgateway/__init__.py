@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from . import (
     anthropic, claude_code, gemini, github_copilot, grok_build, llamacpp,
-    ollama, openai, openai_codex, xai,
+    mlx, ollama, openai, openai_codex, xai,
 )
 from .base import (
     ChatRequest, ChunkEvent, DoneChunk, ProviderError, ReasoningChunk,
@@ -38,8 +38,10 @@ PROVIDERS = {
     xai.ID: xai,
     openai.ID: openai,
     gemini.ID: gemini,
-    # … then local.
+    # … then local. MLX leads on Apple silicon (native unified-memory
+    # path); it self-hides via has_key()/supported() elsewhere.
     llamacpp.ID: llamacpp,
+    mlx.ID: mlx,
     ollama.ID: ollama,
 }
 
@@ -66,6 +68,30 @@ def get(provider_id: str):
 def default_provider_id() -> str:
     """Provider used when the user hasn't picked one explicitly."""
     return anthropic.ID
+
+
+def reasoning_options(provider_id: str, model: str | None = None) -> list[dict]:
+    """Reasoning-effort options for `model` on `provider_id`.
+
+    Empty when the provider has no reasoning control, or when THIS model
+    doesn't take one — the answer is per model, not per provider (see
+    `base.REASONING_NOTES`). Callers render whatever comes back and hide
+    the control on an empty list; nobody outside a provider module may
+    invent an effort id.
+    """
+    p = PROVIDERS.get(provider_id)
+    fn = getattr(p, "reasoning_options", None) if p is not None else None
+    if fn is None:
+        return []
+    try:
+        opts = fn(model)
+    except Exception:  # noqa: BLE001
+        return []
+    return [o for o in (opts or []) if isinstance(o, dict) and o.get("id")]
+
+
+def supports_reasoning_effort(provider_id: str, model: str | None = None) -> bool:
+    return bool(reasoning_options(provider_id, model))
 
 
 def capabilities(provider_id: str) -> dict:

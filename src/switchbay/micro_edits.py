@@ -42,62 +42,14 @@ _EXCLUDE_RE = re.compile(
     r")\b",
     re.I,
 )
-
-# Per-provider trivial/normal/hard model ids. ``None`` for trivial means
-# "same as default_model". Fallbacks keep routing working when a
-# suggested fast model isn't on the account.
-_PROVIDER_LADDER: dict[str, dict[str, str | None]] = {
-    "grok-build": {
-        "trivial": "grok-composer-2.5-fast",
-        "normal": "grok-4.5",
-        "hard": "grok-4.5",
-    },
-    "claude-code": {
-        "trivial": "haiku",
-        "normal": "sonnet",
-        "hard": "opus",
-    },
-    "anthropic": {
-        "trivial": "claude-haiku-4-5-20251001",
-        "normal": "claude-sonnet-4-6",
-        "hard": "claude-opus-4-7",
-    },
-    "openai-codex": {
-        "trivial": "gpt-5.4-mini",
-        "normal": None,
-        "hard": None,
-    },
-    "openai": {
-        "trivial": "gpt-4o-mini",
-        "normal": None,
-        "hard": None,
-    },
-    "gemini": {
-        "trivial": "gemini-2.5-flash",
-        "normal": "gemini-2.5-pro",
-        "hard": "gemini-2.5-pro",
-    },
-    "xai": {
-        "trivial": "grok-4.3",
-        "normal": None,
-        "hard": None,
-    },
-    "llamacpp": {
-        "trivial": "ornith",
-        "normal": "ornith",
-        "hard": "ornith",
-    },
-    "ollama": {
-        "trivial": None,
-        "normal": None,
-        "hard": None,
-    },
-    "github_copilot": {
-        "trivial": "gpt-4o-mini",
-        "normal": None,
-        "hard": None,
-    },
-}
+# NOTE (2026-07-29): a per-provider trivial/normal/hard model table
+# used to live here. It was orphaned by the 2026-07-24 ladder
+# decoupling — defined but referenced from nowhere — so a blank model
+# silently fell through to the provider's `default_model` instead.
+# Reviving it would have contradicted the rule the rest of this module
+# follows: an UNSET setting follows the RAIL PICKER. Guessing a "fast"
+# model on the user's behalf is the opposite of following the picker,
+# and it routed to a different model than the picker displayed.
 
 
 def _thread_prefs_path(workspace: Path) -> Path:
@@ -309,16 +261,30 @@ def micro_model_for_rung(
     Reads the micro-edit's OWN model map (`micro_edits.models.<rung>`),
     NOT the CE model ladder — micro-edits were decoupled from the ladder
     on 2026-07-24 (the ladder is now a CE-curation-only construct). ws
-    overrides global. Returns `(None, None)` when the rung has no model
-    configured, which the caller reads as "follow the picker" (no
-    downgrade). `model` may be None → the provider's default model."""
+    overrides global.
+
+    Returns `(None, None)` when the rung names no COMPLETE route, which
+    the caller reads as "follow the rail picker" (no downgrade). A route
+    is complete only when it names both a provider and a model:
+
+      * no entry for the rung            → picker
+      * provider set, model blank        → picker
+      * provider + model both set        → that route
+
+    The blank-model case used to fall through to the provider's
+    `default_model` instead. That was a silent upgrade — on grok-build it
+    resolved to `grok-4.5`, the provider's flagship, for a lane whose
+    entire purpose is to be cheap — and it routed somewhere other than
+    what the picker displayed. Unset means unset at every level here
+    (rung, provider, model), and unset always means the picker.
+    """
     for src in (_ws_micro(workspace), _global_micro()):
         row = _micro_models(src).get(rung)
         if isinstance(row, dict):
             pid = str(row.get("provider") or "").strip()
-            if pid:
-                model = str(row.get("model") or "").strip()
-                return pid, (model or None)
+            model = str(row.get("model") or "").strip()
+            if pid and model:
+                return pid, model
     return None, None
 
 
@@ -373,22 +339,21 @@ def resolve_micro_dispatch(
     Reads the micro-edit's own model map (decoupled from the CE ladder,
     2026-07-24). Unset → None → the caller leaves provider_override
     unset and the micro-edit runs on the picker, same as ordinary rail
-    chat."""
+    chat. `micro_model_for_rung` already collapses an incomplete route
+    (no provider, or no model) to (None, None), so there is no
+    default_model fallback here — a half-configured lane follows the
+    picker rather than guessing."""
     from . import llmgateway
 
     rung = effective_rung(workspace, thread_id)
     pid, model = micro_model_for_rung(workspace, rung)
-    if not pid:
+    if not pid or not model:
         return None
     try:
         prov = llmgateway.get(pid)
     except Exception:  # noqa: BLE001
         return None
     if not prov.has_key():
-        return None
-    if not model:
-        model = str(prov.PROVIDER.get("default_model") or "") or None
-    if not model:
         return None
     return pid, model, rung
 

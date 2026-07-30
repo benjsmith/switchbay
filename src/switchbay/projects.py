@@ -268,7 +268,7 @@ def _humanize_curator_line(line: str) -> str:
 
 
 def _curator_log_tail(workspace: Path, project: str, limit: int = 30) -> list[str]:
-    """Best-effort scan of `.curator/log.md` for recent classifier
+    r"""Best-effort scan of `.curator/log.md` for recent classifier
     lines that mention this project. CE's curator writes entries
     like `- \`entities/foo.md\` + {bar} (was [], now ['bar'])
     [semantic, sim=0.5763]`; we humanize each line into a single

@@ -7,14 +7,18 @@ import AgentDashboardTab from "../widgets/agents/AgentDashboardTab";
 import PlaceholderTab from "../center/PlaceholderTab";
 import { lookupTabKind, onRegistryChange } from "../center/tabRegistry";
 import TabErrorBoundary from "../center/TabErrorBoundary";
+import ZenBrowserTab from "./ZenBrowserTab";
+import { ZEN_SYNTHETIC, isZenSynthetic } from "./surfaces";
 
 /**
  * Zen right pane: every non-graph tab kind, one at a time — no tab
  * strip. A dropdown switcher at the top (provider-picker style)
- * chooses the surface; "Agents" is a first-class entry rendering the
- * full dashboard as a surface. Artifacts NEVER auto-switch the pane —
- * the dropdown carries a pulse badge that JUMPS straight to the
- * latest artifact surface on click (charter Zen rulings, 2026-07-05).
+ * chooses the surface; "Agents" and "Browser" are first-class entries
+ * rendering surfaces that aren't workspace tabs at all (the dashboard,
+ * and the files/wiki/sources browsers Power keeps in its sidebar).
+ * Artifacts NEVER auto-switch the pane — the dropdown carries a pulse
+ * badge that JUMPS straight to the latest artifact surface on click
+ * (charter Zen rulings, 2026-07-05).
  */
 
 export type ZenArtifact = {
@@ -29,13 +33,16 @@ export type ZenArtifact = {
 type Props = {
   /** Visible tabs minus graph/terminal kinds (Zen owns those surfaces). */
   tabs: TabSpec[];
-  /** Active surface: a tab id, or "agents". null = first tab. */
+  /** Active surface: a tab id, or a ZEN_SYNTHETIC id. null = first tab. */
   surface: string | null;
   setSurface: (s: string) => void;
   artifact: ZenArtifact | null;
   onJumpArtifact: () => void;
   graphData: GraphData | null;
   graphError: string | null;
+  /** Counter bumped on `files_changed` — drives the Browser surface's
+   *  file tree refresh, same as the Power sidebar's. */
+  filesVersion: number;
   termWs: TerminalWsApi | null;
   /** Non-pty runs currently executing (faint count dot, top-right). */
   runningCount: number;
@@ -47,7 +54,8 @@ type Props = {
 
 export default function ZenSurfaceHost({
   tabs, surface, setSurface, artifact, onJumpArtifact,
-  graphData, graphError, termWs, runningCount, promotedPty, onReturnPty,
+  graphData, graphError, filesVersion, termWs, runningCount,
+  promotedPty, onReturnPty,
 }: Props) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -71,12 +79,17 @@ export default function ZenSurfaceHost({
   }, [open]);
 
   const active = useMemo(() => {
-    if (surface === "agents") return "agents" as const;
+    if (isZenSynthetic(surface)) return surface;
     const t = tabs.find((x) => x.id === surface);
     return t ?? tabs[0] ?? null;
   }, [surface, tabs]);
 
-  const activeTitle = active === "agents" ? "Agents" : active?.title ?? "—";
+  /** Narrowing helper: `active` is either a synthetic id or a TabSpec. */
+  const activeSynthetic = typeof active === "string" ? active : null;
+  const activeTab = typeof active === "string" ? null : active;
+  const activeTitle = activeSynthetic
+    ? ZEN_SYNTHETIC.find((s) => s.id === activeSynthetic)?.title ?? activeSynthetic
+    : activeTab?.title ?? "—";
 
   const renderSurface = () => {
     if (promotedPty) {
@@ -94,13 +107,22 @@ export default function ZenSurfaceHost({
         />
       );
     }
-    if (active === "agents") return <AgentDashboardTab />;
-    if (!active) return <PlaceholderTab tab={null} comingInStep={undefined} />;
-    const entry = lookupTabKind(active.kind);
-    if (!entry) return <PlaceholderTab tab={active} comingInStep={undefined} />;
+    if (activeSynthetic === "agents") return <AgentDashboardTab />;
+    if (activeSynthetic === "browser") {
+      return (
+        <ZenBrowserTab
+          data={graphData}
+          error={graphError}
+          filesVersion={filesVersion}
+        />
+      );
+    }
+    if (!activeTab) return <PlaceholderTab tab={null} comingInStep={undefined} />;
+    const entry = lookupTabKind(activeTab.kind);
+    if (!entry) return <PlaceholderTab tab={activeTab} comingInStep={undefined} />;
     const Comp = entry.component;
     return (
-      <Comp tab={active} graphData={graphData} graphError={graphError} termWs={termWs} />
+      <Comp tab={activeTab} graphData={graphData} graphError={graphError} termWs={termWs} />
     );
   };
 
@@ -143,32 +165,38 @@ export default function ZenSurfaceHost({
                   role="menuitem"
                   className={
                     "sy-zen-surf-item"
-                    + (active !== "agents" && active?.id === t.id ? " sy-zen-surf-item--sel" : "")
+                    + (activeTab?.id === t.id ? " sy-zen-surf-item--sel" : "")
                   }
                   onClick={() => { setSurface(t.id); setOpen(false); }}
                 >
                   <span className="sy-zen-surf-item-dot">
-                    {active !== "agents" && active?.id === t.id ? "●" : "○"}
+                    {activeTab?.id === t.id ? "●" : "○"}
                   </span>
                   {t.title}
                   <span className="sy-zen-surf-item-kind">{t.kind}</span>
                 </button>
               ))}
-              <button
-                type="button"
-                role="menuitem"
-                className={
-                  "sy-zen-surf-item sy-zen-surf-item--agents"
-                  + (active === "agents" ? " sy-zen-surf-item--sel" : "")
-                }
-                onClick={() => { setSurface("agents"); setOpen(false); }}
-              >
-                <span className="sy-zen-surf-item-dot">
-                  {active === "agents" ? "●" : "○"}
-                </span>
-                Agents
-                <span className="sy-zen-surf-item-kind">dashboard</span>
-              </button>
+              {ZEN_SYNTHETIC.map((s, i) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="menuitem"
+                  className={
+                    `sy-zen-surf-item sy-zen-surf-item--syn sy-zen-surf-item--${s.id}`
+                    // The rule divides tabs from non-tab surfaces, so it
+                    // rides the first synthetic whatever the order is.
+                    + (i === 0 ? " sy-zen-surf-item--syn-first" : "")
+                    + (activeSynthetic === s.id ? " sy-zen-surf-item--sel" : "")
+                  }
+                  onClick={() => { setSurface(s.id); setOpen(false); }}
+                >
+                  <span className="sy-zen-surf-item-dot">
+                    {activeSynthetic === s.id ? "●" : "○"}
+                  </span>
+                  {s.title}
+                  <span className="sy-zen-surf-item-kind">{s.kind}</span>
+                </button>
+              ))}
             </div>
           )}
         </div>
@@ -190,8 +218,8 @@ export default function ZenSurfaceHost({
       </div>
       <div className="sy-zen-surf-body">
         <TabErrorBoundary
-          key={active === "agents" ? "agents" : active?.id ?? "none"}
-          label={active === "agents" ? "agents" : active?.kind}
+          key={activeSynthetic ?? activeTab?.id ?? "none"}
+          label={activeSynthetic ?? activeTab?.kind}
         >
           <Suspense fallback={<div className="sy-placeholder"><p>Loading…</p></div>}>
             {renderSurface()}

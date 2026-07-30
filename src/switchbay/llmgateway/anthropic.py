@@ -97,6 +97,44 @@ def _http_error(status: int, text: str) -> base.ProviderError:
     )
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# Extended thinking is a token BUDGET, not an enum, so the ids here are
+# symbolic and this module owns the id → budget mapping (see
+# base.REASONING_NOTES). `off` omits the block entirely, which is the
+# API default.
+
+_THINKING_BUDGETS = {"low": 2048, "medium": 8192, "high": 24576}
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    return [
+        base.reasoning_option(
+            base.REASONING_OFF, "Off", "no extended thinking (default)"),
+        base.reasoning_option("low", "Low", "~2k thinking tokens"),
+        base.reasoning_option("medium", "Medium", "~8k thinking tokens"),
+        base.reasoning_option("high", "High", "~24k thinking tokens"),
+    ]
+
+
+def _thinking_block(effort: str | None, max_tokens: int) -> dict | None:
+    """Extended-thinking block for `effort`, or None to omit it.
+
+    The budget must leave room for a reply: Anthropic requires
+    `budget_tokens < max_tokens`, and a budget that eats the whole
+    allowance yields thinking with an empty body — the same failure the
+    local-model `reasoning` flag exists to avoid. Cap at half.
+    """
+    if not effort or effort == base.REASONING_OFF:
+        return None
+    budget = _THINKING_BUDGETS.get(effort)
+    if not budget:
+        return None
+    budget = min(budget, max(1024, int(max_tokens * 0.5)))
+    if budget >= max_tokens:
+        return None
+    return {"type": "enabled", "budget_tokens": budget}
+
+
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     """Stream a chat completion. Yields TextChunks then a final DoneChunk."""
     headers = {
@@ -116,6 +154,14 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         body["temperature"] = req.temperature
     if req.tools:
         body["tools"] = req.tools
+    thinking = _thinking_block(
+        base.coerce_effort(req.reasoning_effort, reasoning_options(req.model)),
+        req.max_tokens,
+    )
+    if thinking:
+        body["thinking"] = thinking
+        # Extended thinking requires the default temperature.
+        body.pop("temperature", None)
 
     timeout = aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT_S)
     try:

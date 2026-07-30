@@ -370,40 +370,84 @@ async def ensure_llama_cpp(rec: dict[str, Any]) -> str:
     return binp
 
 
-async def download_gguf(
-    repo: str, fname: str, expect_gb: float, rec: dict[str, Any],
+async def _download_one(
+    repo: str, rel: str, rec: dict[str, Any],
+    *, expect_bytes: float, base_done: float, grand_total: float,
 ) -> Path:
-    """Resumable download via curl (-C -). Progress = on-disk size vs
-    the known total, polled into rec['percent'] by the caller loop."""
-    dest = models_dir() / fname
-    if dest.is_file() and dest.stat().st_size > expect_gb * 0.97e9:
+    """Fetch one repo file to models_dir(), resumable via curl -C -.
+
+    Progress is reported against the whole install (`base_done` bytes
+    already fetched out of `grand_total`), so a split GGUF shows one
+    monotonic bar rather than restarting per shard.
+    """
+    dest = models_dir() / rel.rsplit("/", 1)[-1]
+    if dest.is_file() and dest.stat().st_size > expect_bytes * 0.97:
         return dest  # already downloaded
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(dest.suffix + ".part")
-    url = f"{_HF_BASE}/{repo}/resolve/main/{fname}"
-    rec["step"] = f"downloading {fname} ({expect_gb:.1f} GB)"
+    url = f"{_HF_BASE}/{repo}/resolve/main/{rel}"
     proc = await asyncio.create_subprocess_exec(
         "curl", "-L", "--fail", "-C", "-", "-o", str(part), url,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,
     )
-    total = expect_gb * 1e9
     while True:
         try:
             await asyncio.wait_for(proc.wait(), timeout=2.0)
             break
         except asyncio.TimeoutError:
             try:
-                rec["percent"] = min(99, int(part.stat().st_size / total * 100))
+                got = base_done + part.stat().st_size
+                rec["percent"] = min(99, int(got / max(grand_total, 1.0) * 100))
             except OSError:
                 pass
     if proc.returncode != 0:
         raise RuntimeError(
-            f"download failed (curl rc={proc.returncode}); it resumes "
-            "from where it stopped — click Install again"
+            f"download failed for {rel} (curl rc={proc.returncode}); it "
+            "resumes from where it stopped — click Install again"
         )
     part.rename(dest)
-    rec["percent"] = 100
     return dest
+
+
+async def download_gguf(
+    repo: str, fname: str, expect_gb: float, rec: dict[str, Any],
+    *, parts: list[str] | None = None,
+) -> Path:
+    """Fetch a model's GGUF weights; return the path llama-server loads.
+
+    `parts` carries the repo-relative paths to fetch. Large models are
+    published as split GGUFs (`…-00001-of-00003.gguf`) — every shard has
+    to land in the same directory, and llama-server is then pointed at
+    the FIRST one, which reads its siblings. A single-file model is just
+    the one-element case.
+    """
+    rel_paths = list(parts or [fname])
+    total = expect_gb * 1e9
+    if len(rel_paths) > 1:
+        rec["step"] = (
+            f"downloading {fname} ({expect_gb:.1f} GB, "
+            f"{len(rel_paths)} parts)"
+        )
+    else:
+        rec["step"] = f"downloading {fname} ({expect_gb:.1f} GB)"
+
+    first: Path | None = None
+    done_bytes = 0.0
+    for rel in rel_paths:
+        share = total / len(rel_paths)
+        p = await _download_one(
+            repo, rel, rec,
+            expect_bytes=share, base_done=done_bytes, grand_total=total,
+        )
+        if first is None or rel.rsplit("/", 1)[-1] == fname:
+            first = p
+        try:
+            done_bytes += p.stat().st_size
+        except OSError:
+            done_bytes += share
+    rec["percent"] = 100
+    assert first is not None
+    return first
 
 
 # ── Managed llama-server ───────────────────────────────────────────
@@ -421,6 +465,20 @@ def server_url_for(cfg: dict[str, Any] | None = None) -> str:
 
 
 def server_args(binp: str, cfg: dict[str, Any]) -> list[str]:
+    """Argv for the managed local server backing ``cfg``.
+
+    Two shapes, both ending up on an OpenAI-compatible port so the
+    gateway's streaming path is identical: `llama-server` for GGUF, and
+    `mlx_lm.server` for MLX weights on Apple silicon (which loads from a
+    HF repo id and manages its own weight cache — no `-m <file>`).
+    """
+    if cfg.get("backend") == "mlx":
+        return [
+            binp,
+            "--host", "127.0.0.1",
+            "--port", str(cfg.get("port") or PORT),
+            "--model", str(cfg.get("repo") or cfg.get("model")),
+        ]
     return [
         binp,
         "-m", str(cfg["file"]),
@@ -433,6 +491,14 @@ def server_args(binp: str, cfg: dict[str, Any]) -> list[str]:
         "--jinja",
         "--alias", str(cfg.get("alias") or "ornith"),
     ]
+
+
+def binary_for(cfg: dict[str, Any]) -> str | None:
+    """The server binary this config needs, or None if not installed."""
+    if cfg.get("backend") == "mlx":
+        from . import local_models
+        return local_models.mlx_binary()
+    return server_binary()
 
 
 def _servers(app: dict) -> dict[str, dict[str, Any]]:
@@ -490,9 +556,12 @@ async def spawn_server(app: dict, cfg: dict[str, Any]) -> None:
         if int((slot.get("cfg") or {}).get("port") or 0) == port:
             await _stop_slot(app, other_key)
 
-    binp = server_binary()
+    binp = binary_for(cfg)
     if not binp:
-        log.warning("localllm configured but llama-server not found")
+        log.warning(
+            "localllm configured (%s) but its server binary was not found",
+            cfg.get("backend") or "llamacpp",
+        )
         return
     logp = server_log_path_for(key)
     logp.parent.mkdir(parents=True, exist_ok=True)

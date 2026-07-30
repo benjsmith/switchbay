@@ -97,6 +97,31 @@ def _http_error(status: int, text: str) -> base.ProviderError:
     )
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# `reasoning_effort` is accepted by the reasoning families (o-series,
+# gpt-5) and rejected by the plain chat models, so the option list is
+# gated on the model id (see base.REASONING_NOTES).
+
+_REASONING_PREFIXES = ("o1", "o3", "o4", "gpt-5")
+
+
+def _is_reasoning_model(model: str) -> bool:
+    m = (model or "").lower().lstrip()
+    return any(m.startswith(p) for p in _REASONING_PREFIXES)
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    if not _is_reasoning_model(model or DEFAULT_MODEL or ""):
+        return []
+    return [
+        base.reasoning_option(
+            "minimal", "Minimal", "barely thinks — cheapest and fastest"),
+        base.reasoning_option("low", "Low", "light reasoning for small edits"),
+        base.reasoning_option("medium", "Medium", "the API default"),
+        base.reasoning_option("high", "High", "slowest, for hard problems"),
+    ]
+
+
 def _to_openai_messages(
     messages: list[dict], system: str | None,
 ) -> list[dict]:
@@ -141,6 +166,10 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         # accept `max_tokens`. OpenAI silently ignores either when the
         # other is set, so passing the new one is safe across the board.
         body["max_completion_tokens"] = req.max_tokens
+    effort = base.coerce_effort(
+        req.reasoning_effort, reasoning_options(req.model or DEFAULT_MODEL))
+    if effort:
+        body["reasoning_effort"] = effort
 
     timeout = aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT_S)
     try:

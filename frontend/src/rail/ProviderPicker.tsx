@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { LLM_CHANGED_EVENT } from "./ReasoningPicker";
 
 type ProviderInfo = {
   id: string;
@@ -150,7 +151,12 @@ export default function ProviderPicker() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ provider, model }),
     });
-    if (r.ok) await refresh();
+    if (r.ok) {
+      await refresh();
+      // Which reasoning efforts exist depends on the MODEL, so the
+      // effort control has to re-ask after every model change.
+      window.dispatchEvent(new CustomEvent(LLM_CHANGED_EVENT));
+    }
     setOpen(false);
   };
 

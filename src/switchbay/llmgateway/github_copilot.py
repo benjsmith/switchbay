@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import AsyncIterator
 
@@ -46,6 +47,96 @@ _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
 _COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
 _API_BASE = "https://api.githubcopilot.com"
 
+# ── Enterprise hosts ────────────────────────────────────────────────
+# The device flow above is hardcoded to github.com, which is wrong for
+# two populations:
+#
+#  * **GitHub Enterprise Cloud with data residency** (`<slug>.ghe.com`)
+#    and **GitHub Enterprise Server** — these are separate deployments
+#    with their own OAuth endpoints. Sending a github.com device code
+#    there can't work.
+#  * **Enterprise Managed Users (EMU)** on github.com — the account is
+#    provisioned by the customer's IdP, so the generic github.com
+#    sign-in page (password / Google) is not their login path. They have
+#    to authenticate through their enterprise's SSO URL first; the
+#    device flow then binds to the already-authenticated session. This
+#    is the case that looks like "the login screen has no SSO option" —
+#    the flow is fine, but it points at the wrong front door.
+#
+# The host is stored next to the token because the Copilot bearer
+# exchange and the API base have to keep agreeing with whatever host
+# minted the OAuth token.
+
+DEFAULT_HOST = "github.com"
+_HOST_KEY = f"{ID}_host"
+
+
+def _normalize_host(host: str | None) -> str:
+    """Accept 'acme.ghe.com', 'https://acme.ghe.com/', 'github.com'."""
+    h = (host or "").strip()
+    if not h:
+        return DEFAULT_HOST
+    h = re.sub(r"^https?://", "", h).strip("/")
+    return h.split("/", 1)[0].lower() or DEFAULT_HOST
+
+
+def _is_dotcom(host: str) -> bool:
+    return _normalize_host(host) == DEFAULT_HOST
+
+
+def get_host() -> str:
+    """The GitHub host this install signs in against."""
+    return _normalize_host(secrets.get(_HOST_KEY) or DEFAULT_HOST)
+
+
+def set_host(host: str | None) -> str:
+    h = _normalize_host(host)
+    if h == DEFAULT_HOST:
+        secrets.delete_key(_HOST_KEY)
+    else:
+        secrets.set_key(_HOST_KEY, h)
+    _bearer_cache.clear()
+    return h
+
+
+def _endpoints(host: str | None = None) -> dict[str, str]:
+    """OAuth + API endpoints for a GitHub host.
+
+    github.com keeps its well-known hostnames. GHE.com and GHES put the
+    REST API under `api.<host>` and `<host>/api/v3` respectively, and
+    serve Copilot from `api.<host>`-style subdomains.
+    """
+    h = _normalize_host(host or get_host())
+    if _is_dotcom(h):
+        return {
+            "host": h,
+            "device_code": _DEVICE_CODE_URL,
+            "access_token": _ACCESS_TOKEN_URL,
+            "copilot_token": _COPILOT_TOKEN_URL,
+            "api_base": _API_BASE,
+            "sso_hint": "https://github.com/enterprises/<your-enterprise>/sso",
+        }
+    if h.endswith(".ghe.com"):
+        # Enterprise Cloud with data residency.
+        return {
+            "host": h,
+            "device_code": f"https://{h}/login/device/code",
+            "access_token": f"https://{h}/login/oauth/access_token",
+            "copilot_token": f"https://api.{h}/copilot_internal/v2/token",
+            "api_base": f"https://api.copilot.{h}",
+            "sso_hint": f"https://{h}/login",
+        }
+    # GitHub Enterprise Server.
+    return {
+        "host": h,
+        "device_code": f"https://{h}/login/device/code",
+        "access_token": f"https://{h}/login/oauth/access_token",
+        "copilot_token": f"https://{h}/api/v3/copilot_internal/v2/token",
+        "api_base": f"https://{h}/api/v3/copilot",
+        "sso_hint": f"https://{h}/login",
+    }
+
+
 _EDITOR_HEADERS = {
     "Editor-Version": "vscode/1.99.0",
     "Editor-Plugin-Version": "copilot-chat/0.26.0",
@@ -59,8 +150,11 @@ PROVIDER = {
     "category": "subscription",
     "default_model": DEFAULT_MODEL,
     "auth_help": (
-        "Sign in with GitHub (browser login — enterprise SSO works "
-        "there). Needs an active Copilot subscription on the account."
+        "Sign in with GitHub (browser login). Needs an active Copilot "
+        "subscription. Enterprise-managed (EMU) accounts must sign in to "
+        "their enterprise SSO first — the generic GitHub login page "
+        "won't list your provider. GitHub Enterprise Server / ghe.com: "
+        "set the host in the sign-in panel."
     ),
     "auth_flow": "github_device",  # Settings renders the sign-in button
     "model_suggestions": [
@@ -89,28 +183,38 @@ def has_key() -> bool:
 # ── Device-flow login (driven by the daemon's /api/copilot/login) ──
 
 
-async def device_code() -> dict:
+async def device_code(host: str | None = None) -> dict:
     """Step 1: get {device_code, user_code, verification_uri,
-    interval, expires_in}."""
+    interval, expires_in}.
+
+    `host` targets an enterprise deployment; omitted means github.com.
+    The resolved host rides back in the result so the poller and the
+    bearer exchange stay on the same deployment.
+    """
+    eps = _endpoints(host)
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.post(
-            _DEVICE_CODE_URL,
+            eps["device_code"],
             headers={"Accept": "application/json"},
             data={"client_id": CLIENT_ID, "scope": "read:user"},
         ) as resp:
             body = await resp.json(content_type=None)
     if resp.status != 200 or "device_code" not in body:
         raise base.ProviderError(
-            f"GitHub device-code request failed: {body}",
+            f"{eps['host']} device-code request failed: {body}",
             code="http", status=resp.status,
         )
+    body = dict(body)
+    body["host"] = eps["host"]
+    body["sso_hint"] = eps["sso_hint"]
     return body
 
 
 async def poll_for_token(device: dict) -> None:
     """Step 2: poll until the user authorizes in the browser, then
     persist the OAuth token. Raises ProviderError on denial/expiry."""
+    eps = _endpoints(device.get("host"))
     interval = max(int(device.get("interval") or 5), 5)
     deadline = time.time() + min(int(device.get("expires_in") or 900), 900)
     timeout = aiohttp.ClientTimeout(total=20)
@@ -118,7 +222,7 @@ async def poll_for_token(device: dict) -> None:
         while time.time() < deadline:
             await asyncio.sleep(interval)
             async with s.post(
-                _ACCESS_TOKEN_URL,
+                eps["access_token"],
                 headers={"Accept": "application/json"},
                 data={
                     "client_id": CLIENT_ID,
@@ -135,22 +239,46 @@ async def poll_for_token(device: dict) -> None:
                 continue
             if err:
                 raise base.ProviderError(
-                    f"GitHub sign-in failed: {err}", code="auth",
+                    _auth_error_help(err, eps), code="auth",
                 )
             token = body.get("access_token")
             if token:
                 secrets.set_key(ID, token)
+                set_host(eps["host"])
                 _bearer_cache.clear()
                 return
     raise base.ProviderError(
-        "GitHub sign-in timed out — the code expired before it was "
-        "entered. Start the sign-in again.",
+        f"{eps['host']} sign-in timed out — the code expired before it "
+        "was entered. Start the sign-in again.",
         code="auth",
     )
 
 
+def _auth_error_help(err: str, eps: dict[str, str]) -> str:
+    """Turn GitHub's terse device-flow errors into something actionable.
+
+    `access_denied` on an enterprise-managed account usually means the
+    user authorized as the wrong identity — the generic sign-in page
+    doesn't offer their IdP, so they land as a personal account with no
+    Copilot seat. Say so, rather than "sign-in failed".
+    """
+    if err in ("access_denied", "unauthorized_client", "incorrect_client_credentials"):
+        return (
+            f"{eps['host']} sign-in was denied ({err}). If your account is "
+            "managed by an organisation (Enterprise Managed User), sign in "
+            f"to your enterprise first at {eps['sso_hint']} — the generic "
+            "GitHub login page won't offer your SSO provider — then start "
+            "the sign-in again. Otherwise check the account has an active "
+            "Copilot subscription."
+        )
+    if err == "expired_token":
+        return f"{eps['host']} sign-in expired before the code was entered — try again."
+    return f"{eps['host']} sign-in failed: {err}"
+
+
 def sign_out() -> None:
     secrets.delete_key(ID)
+    secrets.delete_key(_HOST_KEY)
     _bearer_cache.clear()
 
 
@@ -173,7 +301,7 @@ async def _bearer() -> str:
     timeout = aiohttp.ClientTimeout(total=20)
     async with aiohttp.ClientSession(timeout=timeout) as s:
         async with s.get(
-            _COPILOT_TOKEN_URL,
+            _endpoints()["copilot_token"],
             headers={
                 "Authorization": f"token {oauth}",
                 "Accept": "application/json",
@@ -256,7 +384,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(
-                f"{_API_BASE}/chat/completions", headers=headers, json=body,
+                f"{_endpoints()['api_base']}/chat/completions", headers=headers, json=body,
             ) as resp:
                 if resp.status != 200:
                     raise _http_error(resp.status, await resp.text())
@@ -323,7 +451,7 @@ async def list_models() -> list[str]:
     try:
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.get(
-                f"{_API_BASE}/models",
+                f"{_endpoints()['api_base']}/models",
                 headers={"Authorization": f"Bearer {bearer}", **_EDITOR_HEADERS},
             ) as resp:
                 if resp.status != 200:

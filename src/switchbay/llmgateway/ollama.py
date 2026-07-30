@@ -112,6 +112,20 @@ def _to_ollama_messages(
     return out
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# Ollama's control is the boolean `think` field, honoured by thinking
+# models and ignored by the rest — so, like llamacpp, this provider
+# offers two honest options rather than a ladder (base.REASONING_NOTES).
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    return [
+        base.reasoning_option(base.REASONING_OFF, "Off", "no thinking"),
+        base.reasoning_option(
+            "on", "On", "thinking enabled, on models that support it"),
+    ]
+
+
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     url = f"{_host()}/api/chat"
     headers = {"Content-Type": "application/json"}
@@ -127,6 +141,9 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         body["options"]["num_predict"] = req.max_tokens
     if not body["options"]:
         del body["options"]
+    effort = base.coerce_effort(req.reasoning_effort, reasoning_options(req.model))
+    if effort:
+        body["think"] = effort != base.REASONING_OFF
 
     timeout = aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT_S)
     try:

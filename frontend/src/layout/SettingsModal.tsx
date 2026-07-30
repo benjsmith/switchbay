@@ -675,8 +675,184 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
           </span>
         )}
       </div>
+      {picker && (
+        <div className="sy-settings-ladder-row">
+          <span className="sy-settings-ladder-label">
+            <strong>Rail effort</strong>
+          </span>
+          <EffortSelect
+            provider={picker.provider}
+            model={picker.model}
+            label={`${picker.provider_label} · ${picker.model}`}
+          />
+        </div>
+      )}
       <MicroEditModelPanel open={props.open} providers={props.providers} picker={picker} />
+      <ReasoningPolicyPanel open={props.open} />
     </section>
+  );
+}
+
+
+// ── Reasoning effort ────────────────────────────────────────────────
+// The third picker dimension. Options are fetched PER provider+model
+// from the daemon — a provider's reasoning models and its plain ones
+// take different values, and several take none — so this renders
+// nothing rather than a dead control when the pair has no dial.
+// Mirrors the rail's corner control; same endpoints, same storage.
+
+type EffortOption = { id: string; label: string; hint?: string };
+
+function EffortSelect({
+  provider, model, label = "Reasoning",
+}: {
+  provider: string; model: string; label?: string;
+}) {
+  const [options, setOptions] = useState<EffortOption[]>([]);
+  const [selected, setSelected] = useState<string>("");
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!provider) { setOptions([]); return; }
+    void (async () => {
+      try {
+        const qs = new URLSearchParams({ provider, model: model || "" });
+        const r = await fetch(`/api/llm/reasoning-options?${qs}`);
+        if (!r.ok) { if (!cancelled) setOptions([]); return; }
+        const b = (await r.json()) as { options?: EffortOption[]; selected?: string | null };
+        if (cancelled) return;
+        setOptions(b.options ?? []);
+        setSelected(b.selected ?? "");
+      } catch {
+        if (!cancelled) setOptions([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [provider, model]);
+
+  const choose = async (effort: string) => {
+    setBusy(true);
+    try {
+      await fetch("/api/llm/reasoning-effort", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, model, effort: effort || null }),
+      });
+      setSelected(effort);
+      window.dispatchEvent(new CustomEvent("sy:llm-changed"));
+    } catch { /* transient */ } finally { setBusy(false); }
+  };
+
+  if (options.length === 0) return null;
+  return (
+    <label
+      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}
+      title="How hard this model thinks. Higher costs more and is slower."
+    >
+      {label}
+      <select
+        className="sy-settings-input"
+        value={selected}
+        disabled={busy}
+        onChange={(e) => void choose(e.target.value)}
+      >
+        <option value="">(provider default)</option>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.label}{o.hint ? ` — ${o.hint}` : ""}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+
+// ── Per-lane reasoning policy ───────────────────────────────────────
+// Effort follows whichever provider+model a lane resolved to, so the
+// ladder rung's setting and the micro-edit setting are already honoured
+// without a parallel config tree. This is the FALLBACK: what a lane
+// does when the model it landed on carries no effort of its own.
+
+const LANE_LABELS: Record<string, { label: string; blurb: string }> = {
+  micro: {
+    label: "Micro-edits",
+    blurb: "short edit-shaped messages with a tab focused",
+  },
+  ladder: {
+    label: "Curation / routed",
+    blurb: "CE curate, fan-out workers, proposal review — follows the ladder rung",
+  },
+  background: {
+    label: "Background",
+    blurb: "thread titles, slugs, triage — never user-facing prose",
+  },
+};
+
+function ReasoningPolicyPanel({ open }: { open: boolean }) {
+  const [lanes, setLanes] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState("");
+
+  const load = () => {
+    void (async () => {
+      try {
+        const r = await fetch("/api/llm/reasoning-policy");
+        if (!r.ok) return;
+        const b = (await r.json()) as { lanes?: Record<string, string> };
+        setLanes(b.lanes ?? {});
+      } catch { /* older daemon — panel stays empty */ }
+    })();
+  };
+  useEffect(() => { if (open) load(); }, [open]);
+
+  const set = async (lane: string, policy: string) => {
+    setBusy(lane);
+    try {
+      const r = await fetch("/api/llm/reasoning-policy", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lane, policy }),
+      });
+      if (r.ok) load();
+    } catch { /* transient */ } finally { setBusy(""); }
+  };
+
+  const rows = Object.keys(LANE_LABELS).filter((l) => l in lanes);
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="sy-settings-microedit">
+      <h4 className="sy-settings-h4">Reasoning effort — fallbacks</h4>
+      <p className="sy-settings-blurb">
+        Effort follows whichever model each lane routes to, so setting a
+        model's effort covers every lane that uses it. These decide what
+        happens when that model has no effort of its own:{" "}
+        <strong>inherit</strong> borrows the rail picker's setting (so
+        background work tracks how hard you've asked for things to be
+        thought about), <strong>provider default</strong> sends nothing.
+      </p>
+      {rows.map((lane) => (
+        <div key={lane} className="sy-settings-ladder-row">
+          <span className="sy-settings-ladder-label">
+            <strong>{LANE_LABELS[lane]!.label}</strong>
+            <span style={{ display: "block", fontSize: 10.5, opacity: 0.75 }}>
+              {LANE_LABELS[lane]!.blurb}
+            </span>
+          </span>
+          <select
+            className="sy-settings-input"
+            value={lanes[lane] ?? "inherit"}
+            disabled={busy === lane}
+            onChange={(e) => void set(lane, e.target.value)}
+            aria-label={`${LANE_LABELS[lane]!.label} reasoning fallback`}
+          >
+            <option value="inherit">Inherit from picker</option>
+            <option value="default">Provider default</option>
+          </select>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -758,6 +934,12 @@ function MicroEditModelPanel(props: {
           {pid && modelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
       </div>
+      {pid && model && (
+        <div className="sy-settings-ladder-row">
+          <span className="sy-settings-ladder-label" />
+          <EffortSelect provider={pid} model={model} label="Effort" />
+        </div>
+      )}
       <div className="sy-settings-ladder-actions">
         <button type="button" className="sy-confirm-btn" disabled={busy || !pid}
           onClick={() => void save(false)}>
@@ -1674,9 +1856,19 @@ type SettingsBody = {
 // ── GitHub Copilot sign-in (device flow — browser login / SSO) ─────
 
 function CopilotAuth({ authed, onChanged }: { authed: boolean; onChanged: () => void }) {
-  const [pending, setPending] = useState<{ code: string; uri: string } | null>(null);
+  const [pending, setPending] = useState<
+    { code: string; uri: string; host?: string; ssoHint?: string } | null
+  >(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Enterprise deployments (GHES, <slug>.ghe.com) have their own OAuth
+  // endpoints, and enterprise-managed accounts on github.com have to
+  // reach their IdP before the device code will bind to the right
+  // identity. Both are invisible on the default path, so the panel
+  // offers a host field + the SSO pointer rather than leaving people
+  // staring at a login page that only offers password/Google.
+  const [showEnterprise, setShowEnterprise] = useState(false);
+  const [host, setHost] = useState("");
 
   // Poll while a sign-in is out; GitHub grants land daemon-side.
   useEffect(() => {
@@ -1705,15 +1897,23 @@ function CopilotAuth({ authed, onChanged }: { authed: boolean; onChanged: () => 
     setBusy(true);
     setErr(null);
     try {
-      const r = await fetch("/api/copilot/login", { method: "POST" });
+      const r = await fetch("/api/copilot/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(host.trim() ? { host: host.trim() } : {}),
+      });
       const b = await r.json().catch(() => ({} as Record<string, unknown>));
       if (!r.ok) {
         setErr(String((b as { error?: string }).error ?? r.status));
         return;
       }
-      const code = String((b as { user_code?: string }).user_code ?? "");
-      const uri = String((b as { verification_uri?: string }).verification_uri ?? "");
-      setPending({ code, uri });
+      const body = b as {
+        user_code?: string; verification_uri?: string;
+        host?: string; sso_hint?: string;
+      };
+      const code = String(body.user_code ?? "");
+      const uri = String(body.verification_uri ?? "");
+      setPending({ code, uri, host: body.host, ssoHint: body.sso_hint });
       window.open(uri, "_blank", "noopener");
     } catch (e) {
       setErr((e as Error).message);
@@ -1735,22 +1935,64 @@ function CopilotAuth({ authed, onChanged }: { authed: boolean; onChanged: () => 
     );
   }
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-      {pending ? (
-        <span className="sy-settings-help" style={{ margin: 0 }}>
-          Enter code <code style={{ fontWeight: 700, fontSize: 13 }}>{pending.code}</code>{" "}
-          at <a href={pending.uri} target="_blank" rel="noreferrer">{pending.uri}</a> — waiting…
+    <span style={{
+      display: "inline-flex", alignItems: "flex-end", gap: 8,
+      flexShrink: 0, flexDirection: "column",
+    }}>
+      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+        {pending ? (
+          <span className="sy-settings-help" style={{ margin: 0 }}>
+            Enter code <code style={{ fontWeight: 700, fontSize: 13 }}>{pending.code}</code>{" "}
+            at <a href={pending.uri} target="_blank" rel="noreferrer">{pending.uri}</a> — waiting…
+          </span>
+        ) : (
+          <>
+            <button
+              type="button"
+              className="sy-confirm-btn sy-confirm-btn--primary"
+              onClick={() => void start()}
+              disabled={busy}
+              title={host.trim()
+                ? `Opens ${host.trim()} in your browser`
+                : "Opens github.com in your browser"}
+            >
+              {busy ? "Starting…" : "Sign in with GitHub"}
+            </button>
+            <button
+              type="button"
+              className="sy-confirm-btn"
+              onClick={() => setShowEnterprise((v) => !v)}
+              title="GitHub Enterprise Server / ghe.com, or SSO-managed accounts"
+            >
+              Enterprise…
+            </button>
+          </>
+        )}
+      </span>
+      {showEnterprise && !pending && (
+        <span className="sy-settings-help" style={{ margin: 0, textAlign: "right", maxWidth: 420 }}>
+          <input
+            type="text"
+            value={host}
+            placeholder="acme.ghe.com or github.example.com"
+            onChange={(e) => setHost(e.target.value)}
+            style={{ width: "100%", marginBottom: 4 }}
+            aria-label="GitHub Enterprise host"
+          />
+          Leave blank for github.com. If your account is{" "}
+          <strong>managed by your organisation</strong> (Enterprise Managed
+          User), the generic GitHub login page won't offer your SSO provider
+          — sign in at{" "}
+          <code>github.com/enterprises/&lt;your-enterprise&gt;/sso</code>{" "}
+          first, then start the sign-in here.
         </span>
-      ) : (
-        <button
-          type="button"
-          className="sy-confirm-btn sy-confirm-btn--primary"
-          onClick={() => void start()}
-          disabled={busy}
-          title="Opens github.com in your browser — enterprise SSO happens there"
-        >
-          {busy ? "Starting…" : "Sign in with GitHub"}
-        </button>
+      )}
+      {pending?.ssoHint && (
+        <span className="sy-settings-help" style={{ margin: 0, textAlign: "right", maxWidth: 420 }}>
+          Signing in to <strong>{pending.host}</strong>. Wrong account, or no
+          SSO option on that page? Authenticate at{" "}
+          <code>{pending.ssoHint}</code> first, then retry.
+        </span>
       )}
       {err && <span className="sy-settings-status sy-settings-status--err" style={{ margin: 0 }}>{err}</span>}
     </span>
@@ -1799,6 +2041,44 @@ type LocalServer = {
   model_label?: string;
 };
 
+type LocalBackends = {
+  llamacpp?: { available?: boolean; label?: string };
+  ollama?: { available?: boolean; label?: string; hint?: string };
+  mlx?: {
+    supported?: boolean; installed?: boolean; label?: string;
+    reason?: string; install_hint?: string; version?: string | null;
+  };
+};
+
+type SearchHit = {
+  repo: string;
+  author?: string;
+  downloads?: number | null;
+  likes?: number | null;
+  trending?: number | null;
+  last_modified?: string | null;
+  trusted?: boolean;
+  off_task?: boolean;
+};
+
+type ResolvedCand = {
+  ok?: boolean;
+  error?: string;
+  id?: string;
+  label?: string;
+  backend?: string;
+  repo?: string;
+  ollama_tag?: string;
+  quant?: string;
+  weights_gb?: number;
+  est_gb?: number;
+  fits?: boolean;
+  installed?: boolean;
+  off_task?: boolean;
+  trusted?: boolean;
+  quants_available?: string[];
+};
+
 type LocalLlmBody = {
   plan: {
     ok: boolean;
@@ -1816,6 +2096,7 @@ type LocalLlmBody = {
   active?: string | null;
   servers?: LocalServer[];
   server_url?: string | null;
+  backends?: LocalBackends;
   config: {
     model_label?: string;
     quant?: string;
@@ -1828,6 +2109,282 @@ type LocalLlmBody = {
   server_healthy: boolean;
   install: { state: string; step?: string; percent?: number; error?: string | null } | null;
 };
+
+/**
+ * Install any local model, not just the curated three.
+ *
+ * The catalog is a hand-maintained floor and goes stale between model
+ * releases, so this is the escape hatch: paste any llama.cpp-compatible
+ * GGUF repo, any MLX repo (Apple silicon), or any Ollama tag. Sizes and
+ * quant choice come from the repo's real file list at resolve time, so
+ * nothing has to be pre-registered. Search hits the live HF index for
+ * the same reason.
+ */
+function CustomModelInstall({
+  backends, ram, onInstalled,
+}: {
+  backends: LocalBackends | undefined;
+  ram: number;
+  onInstalled: () => void;
+}) {
+  const mlxOk = !!backends?.mlx?.supported;
+  const ollamaOk = !!backends?.ollama?.available;
+  const [backend, setBackend] = useState<"llamacpp" | "mlx" | "ollama">("llamacpp");
+  const [text, setText] = useState("");
+  const [sort, setSort] = useState<"downloads" | "trendingScore" | "lastModified">("downloads");
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [cand, setCand] = useState<ResolvedCand | null>(null);
+  const [busy, setBusy] = useState<"" | "search" | "resolve" | "install">("");
+  const [err, setErr] = useState<string | null>(null);
+
+  const isOllama = backend === "ollama";
+  const placeholder = isOllama
+    ? "qwen3.6:27b"
+    : backend === "mlx"
+      ? "mlx-community/Qwen3.6-27B-4bit"
+      : "unsloth/Qwen3.6-27B-GGUF";
+
+  const search = async () => {
+    if (isOllama) return;   // Ollama has no public search API
+    setBusy("search"); setErr(null); setCand(null);
+    try {
+      const qs = new URLSearchParams({
+        q: text.trim(), backend, sort, limit: "12",
+      });
+      const r = await fetch(`/api/local-models/search?${qs}`);
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) { setErr(String(b.error ?? `HTTP ${r.status}`)); return; }
+      setHits((b.results ?? []) as SearchHit[]);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally { setBusy(""); }
+  };
+
+  const resolve = async (id?: string) => {
+    const value = (id ?? text).trim();
+    if (!value) return;
+    setBusy("resolve"); setErr(null); setHits(null);
+    try {
+      const r = await fetch("/api/local-models/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isOllama ? { backend, ollama_tag: value } : { backend, repo: value },
+        ),
+      });
+      const b = (await r.json().catch(() => ({}))) as ResolvedCand;
+      if (!r.ok || !b.ok) { setErr(b.error ?? `HTTP ${r.status}`); return; }
+      setCand(b);
+      setText(value);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally { setBusy(""); }
+  };
+
+  const install = async () => {
+    if (!cand) return;
+    setBusy("install"); setErr(null);
+    try {
+      const r = await fetch("/api/localllm/install", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          isOllama
+            ? { backend, ollama_tag: cand.ollama_tag }
+            : { backend, repo: cand.repo, quant: cand.quant },
+        ),
+      });
+      const b = await r.json().catch(() => ({} as { error?: string }));
+      if (!r.ok) { setErr(b.error ?? `HTTP ${r.status}`); return; }
+      setCand(null); setText("");
+      onInstalled();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally { setBusy(""); }
+  };
+
+  const mlxBlocked = backend === "mlx" && !backends?.mlx?.installed;
+
+  return (
+    <details className="sy-settings-adv" style={{ marginBottom: 10 }}>
+      <summary className="sy-settings-blurb" style={{ cursor: "pointer", fontWeight: 600 }}>
+        Install a specific model…
+      </summary>
+      <p className="sy-settings-blurb" style={{ marginTop: 6 }}>
+        Paste any model id — the suggestions above are a starting point, not
+        the whole list. Sizes and quantisation are read from the repo itself,
+        so anything published works, including models released after this
+        build.
+      </p>
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
+        {(["llamacpp", "mlx", "ollama"] as const).map((b) => {
+          const disabled = (b === "mlx" && !mlxOk) || (b === "ollama" && !ollamaOk);
+          const label = b === "llamacpp" ? "llama.cpp (GGUF)"
+            : b === "mlx" ? "MLX (Apple silicon)" : "Ollama";
+          return (
+            <button
+              key={b}
+              type="button"
+              className={backend === b ? "sy-confirm-btn sy-confirm-btn--primary" : "sy-confirm-btn"}
+              disabled={disabled}
+              onClick={() => { setBackend(b); setHits(null); setCand(null); setErr(null); }}
+              title={
+                disabled && b === "mlx" ? (backends?.mlx?.reason ?? "unavailable")
+                  : disabled ? "Not installed on this machine"
+                    : label
+              }
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {mlxBlocked && (
+        <p className="sy-settings-blurb">
+          MLX runs on this Mac but <code>mlx-lm</code> isn't installed yet —{" "}
+          <code>{backends?.mlx?.install_hint ?? "uv tool install mlx-lm"}</code>,
+          then reopen Settings.
+        </p>
+      )}
+
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+        <input
+          type="text"
+          value={text}
+          placeholder={placeholder}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void resolve(); } }}
+          style={{ flex: "1 1 260px", minWidth: 200 }}
+          aria-label="Model id"
+        />
+        <button
+          type="button"
+          className="sy-confirm-btn"
+          disabled={!!busy || !text.trim()}
+          onClick={() => void resolve()}
+        >
+          {busy === "resolve" ? "Checking…" : "Check"}
+        </button>
+        {!isOllama && (
+          <button
+            type="button"
+            className="sy-confirm-btn"
+            disabled={!!busy}
+            onClick={() => void search()}
+            title="Search Hugging Face live"
+          >
+            {busy === "search" ? "Searching…" : "Search"}
+          </button>
+        )}
+        {!isOllama && (
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as typeof sort)}
+            aria-label="Sort search by"
+            style={{ fontSize: 12 }}
+          >
+            <option value="downloads">most downloaded</option>
+            <option value="trendingScore">trending</option>
+            <option value="lastModified">recently updated</option>
+          </select>
+        )}
+      </div>
+
+      {isOllama && (
+        <p className="sy-settings-blurb" style={{ marginTop: 6 }}>
+          Any tag from the Ollama library — <code>ollama pull</code> does the
+          rest. Browse at <code>ollama.com/library</code>.
+        </p>
+      )}
+
+      {hits && hits.length === 0 && (
+        <p className="sy-settings-blurb">No matches.</p>
+      )}
+      {hits && hits.length > 0 && (
+        <div style={{ marginTop: 8 }}>
+          {hits.map((h) => (
+            <div key={h.repo} className="sy-settings-local-cand">
+              <div>
+                <strong>{h.repo}</strong>
+                {h.trusted && (
+                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
+                    · known publisher
+                  </span>
+                )}
+                {h.off_task && (
+                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
+                    · roleplay finetune
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, opacity: 0.85 }}>
+                {typeof h.downloads === "number" ? `${h.downloads.toLocaleString()} downloads` : ""}
+                {typeof h.likes === "number" ? ` · ${h.likes} likes` : ""}
+                {h.last_modified ? ` · updated ${String(h.last_modified).slice(0, 10)}` : ""}
+              </div>
+              <div className="sy-settings-local-cand-actions">
+                <button
+                  type="button"
+                  className="sy-confirm-btn"
+                  disabled={!!busy}
+                  onClick={() => void resolve(h.repo)}
+                >
+                  Check
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {cand && (
+        <div className="sy-settings-local-cand" style={{ marginTop: 8 }}>
+          <div>
+            <strong>{cand.label}</strong>
+            <span style={{ opacity: 0.7 }}> · {cand.backend}</span>
+            {cand.quant && <span style={{ opacity: 0.7 }}> · {cand.quant}</span>}
+            {cand.weights_gb != null && (
+              <span style={{ opacity: 0.7 }}> · {cand.weights_gb} GB weights</span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.85 }}>
+            {cand.est_gb != null && `~${cand.est_gb} GB while serving on ~${ram} GB RAM. `}
+            {cand.fits === false && (
+              <strong>Tight fit — it will run heavily quantised or swap. </strong>
+            )}
+            {cand.off_task && (
+              <>This looks like a roleplay/uncensored finetune; fine to run,
+              but weaker at the tool-calling the agents rely on. </>
+            )}
+            {cand.installed && <>Already installed. </>}
+          </div>
+          {cand.quants_available && cand.quants_available.length > 1 && (
+            <div style={{ fontSize: 12, opacity: 0.75 }}>
+              Other quants: {cand.quants_available.join(", ")}
+            </div>
+          )}
+          <div className="sy-settings-local-cand-actions">
+            <button
+              type="button"
+              className="sy-confirm-btn sy-confirm-btn--primary"
+              disabled={!!busy || cand.installed}
+              onClick={() => void install()}
+            >
+              {busy === "install" ? "Starting…"
+                : cand.installed ? "Installed"
+                  : isOllama ? "Pull with Ollama" : "Install"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {err && <p className="sy-settings-status sy-settings-status--err">{err}</p>}
+    </details>
+  );
+}
+
 
 function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [body, setBody] = useState<LocalLlmBody | null>(null);
@@ -2037,14 +2594,16 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     <section className="sy-settings-packs" ref={sectionRef}>
       <h3 className="sy-settings-h3">Local agent model</h3>
       <p className="sy-settings-blurb">
-        Hardware-calibrated easy installs via managed{" "}
-        <code>llama-server</code> (GGUF) or <strong>Ollama</strong> when
-        present. We surface the best three fits for this machine (~
-        {body.top3?.ram_gb ?? plan.ram_gb} GB RAM) — Ornith is one option,
-        not the only one. Installing points ladder{" "}
+        Hardware-calibrated installs via managed <code>llama-server</code>{" "}
+        (GGUF)
+        {body.backends?.mlx?.supported ? <>, <strong>MLX</strong> on this Mac</> : null}
+        {body.backends?.ollama?.available ? <>, or <strong>Ollama</strong></> : null}
+        . We surface the best fits for this machine (~
+        {body.top3?.ram_gb ?? plan.ram_gb} GB RAM) from a live Hugging Face
+        query — and you can install any model id directly, whether or not
+        it's listed. Installing points ladder{" "}
         <strong>trivial + normal</strong> at the local model; planning/review
-        stay on your best cloud provider. Every ~6 weeks we offer a
-        non-blocking check for newer HF/Ollama options.
+        stay on your best cloud provider.
       </p>
       {(body.installed?.length ?? 0) > 0 && (
         <div style={{ marginBottom: 12 }}>
@@ -2153,13 +2712,18 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
           ))}
         </div>
       )}
+      <CustomModelInstall
+        backends={body.backends}
+        ram={body.top3?.ram_gb ?? plan.ram_gb}
+        onInstalled={() => void load()}
+      />
       <div style={{ marginBottom: 8 }}>
         <button
           type="button"
           className="sy-confirm-btn"
           disabled={busy}
           onClick={() => void checkUpdates()}
-          title="Search catalog + Hugging Face signals for newer local options"
+          title="Query Hugging Face live for current GGUF/MLX models that fit this machine"
         >
           Check for newer local models
         </button>

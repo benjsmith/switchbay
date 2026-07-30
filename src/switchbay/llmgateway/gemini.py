@@ -124,6 +124,24 @@ def _to_gemini_contents(messages: list[dict]) -> list[dict]:
     return out
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# Gemini's thinking control is `thinkingConfig.thinkingBudget`, a token
+# count, so ids are symbolic and this module owns the mapping (see
+# base.REASONING_NOTES). Budget 0 disables thinking; -1 hands the model
+# dynamic control, which is the API default when the field is omitted.
+
+_THINKING_BUDGETS = {base.REASONING_OFF: 0, "low": 2048, "medium": 8192, "high": 24576}
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    return [
+        base.reasoning_option(base.REASONING_OFF, "Off", "no thinking budget"),
+        base.reasoning_option("low", "Low", "~2k thinking tokens"),
+        base.reasoning_option("medium", "Medium", "~8k thinking tokens"),
+        base.reasoning_option("high", "High", "~24k thinking tokens"),
+    ]
+
+
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     model = req.model or DEFAULT_MODEL
     url = f"{API_BASE}/{quote(model)}:streamGenerateContent?alt=sse"
@@ -142,6 +160,10 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         body["generationConfig"]["temperature"] = req.temperature
     if req.max_tokens:
         body["generationConfig"]["maxOutputTokens"] = req.max_tokens
+    effort = base.coerce_effort(req.reasoning_effort, reasoning_options(req.model))
+    budget = _THINKING_BUDGETS.get(effort or "")
+    if budget is not None:
+        body["generationConfig"]["thinkingConfig"] = {"thinkingBudget": budget}
     if not body["generationConfig"]:
         del body["generationConfig"]
 

@@ -365,6 +365,30 @@ def _verify_workspace(raw: str | None) -> Path:
     return p.resolve()
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# `grok --reasoning-effort <EFFORT>` (alias `--effort`) — "Reasoning
+# effort for reasoning models". Enum verified against the installed
+# binary: an unknown value is a hard error listing the valid set, so
+# this must stay in step with the CLI rather than be assumed.
+#
+# Narrower than the API provider's low/high because the CLI accepts a
+# middle rung; gated to reasoning-capable models for the same reason as
+# `xai` — the flag is meaningless on the others.
+
+_NON_REASONING_HINTS = ("non-reasoning", "composer")
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    m = (model or DEFAULT_MODEL or "").lower()
+    if any(h in m for h in _NON_REASONING_HINTS):
+        return []
+    return [
+        base.reasoning_option("low", "Low", "fast and much cheaper"),
+        base.reasoning_option("medium", "Medium", "balanced"),
+        base.reasoning_option("high", "High", "for planning and hard problems"),
+    ]
+
+
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     if not has_key():
         raise base.ProviderError(
@@ -396,6 +420,10 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
             # we deliberately deny).
             "--allow", "MCPTool(switchbay__*)",
             ]
+
+    effort = base.coerce_effort(req.reasoning_effort, reasoning_options(req.model))
+    if effort:
+        argv.extend(["--reasoning-effort", effort])
 
     # Scoped shell/edit/write via hook-mediated approval (2026-07-24 —
     # see module docstring).

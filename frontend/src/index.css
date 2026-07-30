@@ -5914,6 +5914,83 @@ body {
   padding: 10px 12px;
   position: relative;
 }
+/* Reasoning-effort control — sits immediately left of the mic in the
+ * composer's bottom-right corner. Deliberately quiet: plain grey text,
+ * no chrome until hover, because it's an occasional adjustment rather
+ * than a primary action. Opens UPWARD so the menu never covers the
+ * text being typed. Hidden entirely when the model offers no efforts
+ * (the component returns null), so the corner stays clean. */
+.sy-effort {
+  position: absolute;
+  right: 48px;   /* mic is right:20px + 22px wide, then a 6px gap */
+  bottom: 66px;
+  z-index: 5;
+}
+.sy-effort-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+.sy-effort-btn:hover {
+  opacity: 1;
+  color: var(--text);
+  border-color: var(--line);
+}
+.sy-effort-btn--set { color: var(--text-muted); opacity: 1; }
+.sy-effort-menu {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 6px);
+  min-width: 190px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.sy-effort-head {
+  font-size: 10px;
+  color: var(--text-faint);
+  padding: 3px 6px 5px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sy-effort-head span { color: var(--text-muted); font-family: var(--font-mono); }
+.sy-effort-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 1px;
+  width: 100%;
+  padding: 4px 6px;
+  background: transparent;
+  border: 0;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--text);
+}
+.sy-effort-item:hover:not(:disabled) { background: var(--bg-hover, rgba(255, 255, 255, 0.06)); }
+.sy-effort-item:disabled { opacity: 0.5; cursor: default; }
+.sy-effort-item--on { color: var(--accent); }
+.sy-effort-item--on .sy-effort-item-label::after { content: " ✓"; }
+.sy-effort-item-label { font-size: 11.5px; }
+.sy-effort-item-hint { font-size: 10px; color: var(--text-faint); }
+
 /* Voice-mode (dictation) mic — floats in the composer's corner.
  * Faint until hover; pulses while listening. Shared with Zen mode. */
 .sy-mic {
@@ -7032,11 +7109,15 @@ body {
   color: var(--text-faint);
   font-size: 11px;
 }
-.sy-zen-surf-item--agents {
+/* Non-tab surfaces (Browser, Agents) sit below the real tabs behind a
+ * single divider — the rule rides the first of the group. */
+.sy-zen-surf-item--syn-first {
   border-top: 1px solid var(--line);
-  border-radius: 0 0 6px 6px;
   margin-top: 2px;
   padding-top: 8px;
+}
+.sy-zen-surf-item--syn:last-child {
+  border-radius: 0 0 6px 6px;
 }
 .sy-zen-surf-ptynote { color: var(--text-faint); font-size: 11px; }
 .sy-zen-surf-body {
@@ -7049,6 +7130,47 @@ body {
 }
 .sy-zen-surf-body > * { flex: 1 1 auto; min-height: 0; }
 .sy-zen-surf-body .sy-rail-pty { height: 100%; }
+
+/* ── Zen Browser surface ───────────────────────────────────────────
+ * The three browsers Power stacks in its left column, laid out as
+ * equal side-by-side columns: files | wiki | sources. The pane is a
+ * full half-shell wide here, so nothing has to hide behind a toggle. */
+.sy-zen-browse {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  position: relative;   /* anchors the drop veil */
+  overflow: hidden;
+}
+.sy-zen-browse-col {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sy-zen-browse-col + .sy-zen-browse-col {
+  border-left: 1px solid var(--line);
+}
+/* SourceBrowser doesn't own its scroll (in Power the column above it
+ * does) — give it one here so a long provenance tree can't push the
+ * surface out of the pane. */
+.sy-zen-browse-col > .sy-src {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+.sy-zen-browse-pages {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+/* Match the head height of the two browsers that bring their own. */
+.sy-zen-browse-col--wiki > .sy-fb-head {
+  flex-shrink: 0;
+}
 
 /* Pulse badge: agent produced/updated a surface. Clicking JUMPS
  * straight to it (never merely opens the dropdown). */

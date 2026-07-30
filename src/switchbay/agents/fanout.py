@@ -43,7 +43,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .. import conversations, llmgateway, modestore, protocol, statedir
+from .. import (
+    conversations, llmgateway, modestore, protocol, routing_status, statedir,
+)
 
 log = logging.getLogger("switchbay.agents.fanout")
 
@@ -123,6 +125,8 @@ async def plan(
         model=model,
         system=PLANNER_SYSTEM,
         max_tokens=2048,
+        reasoning_effort=routing_status.effort_for(
+            getattr(provider, "ID", ""), model, "ladder"),
         workspace=str(workspace),
     )
     accumulated = ""
@@ -258,6 +262,8 @@ async def run_worker(
         model=model,
         system=WORKER_SYSTEM_PREFIX,
         max_tokens=4096,
+        reasoning_effort=routing_status.effort_for(
+            getattr(provider, "ID", ""), model, "ladder"),
         workspace=str(workspace),
     )
 

@@ -8,6 +8,7 @@ import {
 } from "../rail/Rail";
 import PtyThreadSurface, { type TerminalWsApi } from "../rail/PtyThreadSurface";
 import VoiceButton from "../rail/VoiceButton";
+import ReasoningPicker from "../rail/ReasoningPicker";
 
 // One persisted, drag-resizable height for BOTH the chat and the pty
 // view — so the box no longer jumps between a content-sized chat and a
@@ -555,6 +556,7 @@ export default function ZenChatBox({
                 }}
                 placeholder="chat, or use a prefix… (try /view)"
               />
+              <ReasoningPicker />
               <VoiceButton
                 onText={(text) =>
                   setInput((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")} ${text}` : text))

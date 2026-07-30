@@ -159,6 +159,39 @@ def _to_openai_messages(messages: list[dict], system: str | None) -> list[dict]:
     return out
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# A GGUF chat template exposes thinking as a BOOLEAN
+# (`enable_thinking`), not a scale, so this provider honestly offers two
+# options rather than pretending to a four-rung ladder it can't deliver
+# (see base.REASONING_NOTES).
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    return [
+        base.reasoning_option(
+            base.REASONING_OFF, "Off",
+            "no thinking — use for one-shot drafting"),
+        base.reasoning_option(
+            "on", "On", "thinking enabled (default; most of the capability)"),
+    ]
+
+
+def _thinking_enabled(req: base.ChatRequest, cfg: dict) -> bool:
+    """Resolve thinking for this request.
+
+    Precedence: explicit per-request `reasoning` bool (the one-shot
+    drafting path) → picker `reasoning_effort` → the Settings default,
+    which is ON because Ornith derives most of its capability from
+    thinking.
+    """
+    if req.reasoning is not None:
+        return bool(req.reasoning)
+    effort = base.coerce_effort(req.reasoning_effort, reasoning_options(req.model))
+    if effort:
+        return effort != base.REASONING_OFF
+    return bool(cfg.get("reasoning", True))
+
+
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     cfg = localllm.load_config() or {}
     base_url = localllm.server_url_for(cfg)
@@ -185,11 +218,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         # (req.reasoning) wins over the Settings default — one-shot
         # content drafts pass False to avoid an all-reasoning empty body.
         "chat_template_kwargs": {
-            "enable_thinking": (
-                bool(req.reasoning)
-                if req.reasoning is not None
-                else bool(cfg.get("reasoning", True))
-            ),
+            "enable_thinking": _thinking_enabled(req, cfg),
         },
     }
     tools = _tools_to_openai(req.tools)

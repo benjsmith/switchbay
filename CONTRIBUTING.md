@@ -71,3 +71,22 @@ The DCO text you certify by signing off:
   your employer's authorization to submit it under these terms.
 - Maintainers may accept, request changes to, or decline any contribution at
   their discretion.
+
+## Dependency install-script policy
+
+`frontend/package.json` runs pnpm in allowlist mode: only the packages in
+`pnpm.onlyBuiltDependencies` may run install scripts (`esbuild` and
+`@tailwindcss/oxide` — both fetch a platform binary and genuinely need one).
+Everything else is blocked, which is the default we want.
+
+pnpm warns on each install about blocked scripts it hasn't been told about, so
+deliberate refusals go in `pnpm.ignoredBuiltDependencies` to keep `make install`
+output clean:
+
+- **`protobufjs`** (transitive: `@grpc/grpc-js` → `@grpc/proto-loader`) — its
+  `postinstall` only prints a version-scheme advisory to stderr. It writes no
+  files and builds nothing, so skipping it is a no-op.
+
+When a new dependency trips this warning, read its install script before
+choosing a list: `onlyBuiltDependencies` if the package is genuinely unusable
+without it, `ignoredBuiltDependencies` (with a line here saying why) otherwise.

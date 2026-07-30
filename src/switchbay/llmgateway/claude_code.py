@@ -172,6 +172,28 @@ def _verify_workspace(raw: str | None) -> Path:
     return p.resolve()
 
 
+# ── Reasoning effort ────────────────────────────────────────────────
+# `claude --effort <level>` — "Effort level for the current session".
+# The enum is verified against the installed binary rather than assumed:
+# passing an unknown value makes the CLI warn and fall back to its
+# default, and it enumerates the valid set in that warning.
+#
+# Applies session-wide, which suits us: each turn is its own `claude -p`
+# invocation, so the flag is effectively per-request.
+
+_CLI_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def reasoning_options(model: str | None = None) -> list[dict]:
+    return [
+        base.reasoning_option("low", "Low", "fastest and cheapest"),
+        base.reasoning_option("medium", "Medium", "balanced"),
+        base.reasoning_option("high", "High", "the usual choice for real work"),
+        base.reasoning_option("xhigh", "Extra high", "harder problems, slower"),
+        base.reasoning_option("max", "Max", "no ceiling — slowest and dearest"),
+    ]
+
+
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     if not has_key():
         raise base.ProviderError(
@@ -220,6 +242,9 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         argv.extend(["--resume", req.session_id])
     if req.model:
         argv.extend(["--model", req.model])
+    effort = base.coerce_effort(req.reasoning_effort, reasoning_options(req.model))
+    if effort:
+        argv.extend(["--effort", effort])
 
     # Strip API key so the CLI can't fall through to API mode — must
     # use the subscription path. Also strip uv / venv leftovers that

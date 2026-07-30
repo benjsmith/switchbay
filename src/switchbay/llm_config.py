@@ -81,3 +81,102 @@ def set_model(provider: str, model: str | None) -> None:
         models.pop(provider, None)
     data["models"] = models
     save(data)
+
+
+# ── Reasoning effort ────────────────────────────────────────────────
+# The third picker dimension, stored per `provider/model` rather than
+# per provider: the options themselves are per model (a provider's
+# reasoning models and its plain ones take different values), so one
+# effort per provider would be meaningless the moment you switch model.
+# Keying on the pair also means flipping between two models remembers
+# what each was set to.
+#
+#   "reasoning_effort": { "xai/grok-4.5": "low" }
+#
+# Unset → absent key → the provider's own default (we send nothing),
+# consistent with the rest of this file: unset means unset.
+
+
+# Dispatch lanes. Each already resolves its OWN provider+model — the
+# rail from the picker, micro-edits from their fast-model setting,
+# routed work from the model ladder — so effort resolves against
+# whichever pair that lane landed on. `LANE_POLICIES` is what happens
+# when that pair carries no effort of its own.
+LANES = ("rail", "micro", "ladder", "background")
+
+POLICY_INHERIT = "inherit"
+"""Fall back to the rail picker's effort, coerced to this pair's own
+options (dropped if the pair doesn't offer it). The default: it means
+background work tracks how hard you've said you want things thought
+about, instead of silently reverting to the provider's idea."""
+
+POLICY_DEFAULT = "default"
+"""Send nothing — the provider's own default."""
+
+
+def _effort_key(provider: str, model: str | None) -> str:
+    return f"{provider}/{model or ''}"
+
+
+def get_reasoning_effort(provider: str, model: str | None) -> str | None:
+    """The user's chosen effort for this provider+model, or None."""
+    efforts = load().get("reasoning_effort")
+    if not isinstance(efforts, dict):
+        return None
+    val = efforts.get(_effort_key(provider, model))
+    return str(val) if isinstance(val, str) and val else None
+
+
+def set_reasoning_effort(
+    provider: str, model: str | None, effort: str | None,
+) -> None:
+    """Persist (or clear, when `effort` is falsy) the reasoning effort
+    for this provider+model."""
+    data = load()
+    efforts = data.get("reasoning_effort")
+    if not isinstance(efforts, dict):
+        efforts = {}
+    key = _effort_key(provider, model)
+    if effort:
+        efforts[key] = effort
+    else:
+        efforts.pop(key, None)
+    if efforts:
+        data["reasoning_effort"] = efforts
+    else:
+        data.pop("reasoning_effort", None)
+    save(data)
+
+
+def get_reasoning_policy(lane: str) -> str:
+    """Fallback policy for `lane` — what to do when the provider+model
+    it resolved to carries no effort of its own.
+
+    `inherit` (the default) or `default`, or an explicit effort id that
+    pins the lane regardless of which model it routes to.
+    """
+    pol = load().get("reasoning_policy")
+    if isinstance(pol, dict):
+        val = pol.get(lane)
+        if isinstance(val, str) and val:
+            return val
+    return POLICY_INHERIT
+
+
+def set_reasoning_policy(lane: str, policy: str | None) -> None:
+    """Set (or clear, back to `inherit`) a lane's fallback policy."""
+    if lane not in LANES:
+        raise ValueError(f"unknown lane: {lane}")
+    data = load()
+    pol = data.get("reasoning_policy")
+    if not isinstance(pol, dict):
+        pol = {}
+    if policy and policy != POLICY_INHERIT:
+        pol[lane] = policy
+    else:
+        pol.pop(lane, None)
+    if pol:
+        data["reasoning_policy"] = pol
+    else:
+        data.pop("reasoning_policy", None)
+    save(data)

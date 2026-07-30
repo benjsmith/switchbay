@@ -6,6 +6,7 @@ import type { ParsedKind } from "../ws";
 import ProviderPicker from "./ProviderPicker";
 import PtyThreadSurface, { type TerminalWsApi } from "./PtyThreadSurface";
 import VoiceButton from "./VoiceButton";
+import ReasoningPicker from "./ReasoningPicker";
 import { registerChord } from "../keys";
 
 type VerbInfo = { name: string; aliases: string[]; description: string };
@@ -1394,6 +1395,7 @@ export default function Rail({
           }}
           placeholder="chat, or use a prefix… (try /view)"
         />
+        <ReasoningPicker />
         <VoiceButton
           onText={(text) =>
             setInput((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")} ${text}` : text))
@@ -2031,7 +2033,12 @@ function groupOtherApprovals(entries: PermEntry[]): ApprovalGroup[] {
   const groups: ApprovalGroup[] = [];
   const byKey = new Map<string, ApprovalGroup>();
   for (const e of entries) {
-    const key = e.origin ?? " internal";
+    // Sentinel for "no origin" (background-thread cards). Written
+    // as an escape rather than a literal NUL byte: the raw byte
+    // made this whole file read as BINARY, so grep/ripgrep
+    // silently skipped it and searches came back empty. Same
+    // runtime value, plain text on disk.
+    const key = e.origin ?? "\u0000internal";
     let g = byKey.get(key);
     if (!g) {
       g = {

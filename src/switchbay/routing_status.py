@@ -33,7 +33,84 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import llmgateway, micro_edits, modestore
+from . import llm_config, llmgateway, micro_edits, modestore
+
+
+# ── Reasoning effort ────────────────────────────────────────────────
+# The third routing dimension. Every lane already resolves its own
+# provider+model — the rail from the picker, micro-edits from their
+# fast-model setting, CE/routed work from the ladder rung — so effort
+# resolves against whichever pair the lane landed on. That is what makes
+# "inherit the ladder's setting" and "use the micro-edit setting" work
+# without a parallel config tree: set an effort for a provider+model and
+# every lane routing there picks it up.
+#
+# Lives here rather than in daemon.py so fan-out workers (which resolve
+# their own rung) can use the identical rule, and so it stays testable
+# without a server.
+
+
+def effort_for(
+    provider_id: str,
+    model: str | None,
+    lane: str = "background",
+    *,
+    picker_provider: str | None = None,
+) -> str | None:
+    """Reasoning effort for a dispatch on `provider_id`/`model`.
+
+    Order:
+      1. An explicit per-lane policy (a pinned effort id) wins outright —
+         "always think hard when curating", whatever the ladder points at.
+      2. Otherwise the effort stored for THIS provider+model.
+      3. Otherwise the lane's fallback policy. `inherit` (the default)
+         borrows the rail picker's effort so background work tracks how
+         hard you've said you want things thought about, instead of
+         silently reverting to the provider's idea; `default` sends
+         nothing.
+
+    Every branch is coerced against what the provider advertises for
+    this model, so a stale id, a renamed model, or an effort borrowed
+    from a provider with different rungs degrades to the provider
+    default rather than erroring the request.
+    """
+    try:
+        opts = llmgateway.reasoning_options(provider_id, model)
+        if not opts:
+            return None
+
+        policy = llm_config.get_reasoning_policy(lane)
+        if policy not in (llm_config.POLICY_INHERIT, llm_config.POLICY_DEFAULT):
+            pinned = llmgateway.base.coerce_effort(policy, opts)
+            if pinned:
+                return pinned
+
+        own = llm_config.get_reasoning_effort(provider_id, model)
+        if own:
+            coerced = llmgateway.base.coerce_effort(own, opts)
+            if coerced:
+                return coerced
+
+        if lane == "rail" or policy == llm_config.POLICY_DEFAULT:
+            return None
+
+        pick_pid = picker_provider or llm_config.get_default_provider()
+        if not pick_pid:
+            return None
+        pick_model = llm_config.get_model(pick_pid)
+        if pick_model is None:
+            try:
+                pick_model = str(
+                    llmgateway.get(pick_pid).PROVIDER.get("default_model") or "",
+                ) or None
+            except llmgateway.ProviderError:
+                pick_model = None
+        if pick_pid == provider_id and pick_model == model:
+            return None  # already tried as the pair's own effort
+        inherited = llm_config.get_reasoning_effort(pick_pid, pick_model)
+        return llmgateway.base.coerce_effort(inherited, opts)
+    except Exception:  # noqa: BLE001
+        return None
 
 
 # Model-id fragments that mark a small / fast / cheap tier.

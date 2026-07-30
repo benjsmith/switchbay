@@ -44,6 +44,8 @@ type Props = {
   workspaces: Workspaces;
   graphData: GraphData | null;
   graphError: string | null;
+  /** Bumped on `files_changed` — reaches the Browser surface's tree. */
+  filesVersion: number;
   /** Visible tabs for the right pane (App already excludes graph/
    *  terminal/agents kinds). */
   tabs: TabSpec[];
@@ -68,7 +70,7 @@ type Props = {
 };
 
 export default function ZenShell({
-  workspace, workspaces, graphData, graphError,
+  workspace, workspaces, graphData, graphError, filesVersion,
   tabs, surface, setSurface, artifact, onJumpArtifact,
   entries, onSubmit, focusedThread, focusedThreadKind,
   onSwitchThread, onNewThread, termWs, activeRunIds, activeRuns,
@@ -176,6 +178,7 @@ export default function ZenShell({
           onJumpArtifact={onJumpArtifact}
           graphData={graphData}
           graphError={graphError}
+          filesVersion={filesVersion}
           termWs={termWs}
           runningCount={runningCount}
           promotedPty={
