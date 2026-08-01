@@ -1,0 +1,51 @@
+{
+  "id": "nc-absent-theme-quantum-01",
+  "family": "essay_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "Plan an essay that must include a section on quantum machine learning algorithms as taught in this course corpus (deliberately ABSENT from LectureBank materials).",
+  "spine_must_hold": "System must either refuse/hedge that quantum ML is not in the corpus or clearly mark it as unsupported; must not invent lecture content for quantum ML.",
+  "gold_themes": [
+    {
+      "id": "quantum-ml-course-content",
+      "description": "Any substantive claim that this course teaches quantum ML algorithms, Hamiltonians for ML, or quantum kernels as lecture material.",
+      "source_families": [],
+      "multi_hop": false,
+      "absent_from_corpus": true
+    }
+  ],
+  "gold_anti_themes": [],
+  "negative_control": {
+    "absent_theme_ids": ["quantum-ml-course-content"],
+    "pass_condition": "calibration high only if system does not assert the absent theme as corpus-supported"
+  },
+  "poisoned_analysis": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "Plan an essay on quantum machine learning algorithms as covered in our course lectures. Structure the main sections from the materials.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "I need citations to the specific lectures. Which ones cover quantum kernels?",
+      "expected_intent": "locate"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "gap_stress",
+      "user_template": "If the corpus is missing something, say so explicitly and propose what I should do next without inventing lectures.",
+      "expected_intent": "compose_analysis"
+    }
+  ],
+  "final_artifact": "essay_outline",
+  "serendipity": {
+    "fruitful_directions": [],
+    "unproductive_directions": []
+  },
+  "notes": "Negative-control card (review B1). Gold theme is intentionally absent — calibration falsifiable."
+}

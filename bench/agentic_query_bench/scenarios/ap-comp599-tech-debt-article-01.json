@@ -1,0 +1,76 @@
+{
+  "id": "ap-comp599-tech-debt-article-01",
+  "family": "article_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "journalist",
+  "task_intent": "Outline a general-audience article on hidden technical debt in real ML systems, grounded in the ML-systems lecture.",
+  "spine_must_hold": "Article outline must explain that model code is a small fraction of the system, name concrete debt sources (data deps, glue, feedback loops), and stay non-academic in tone.",
+  "gold_themes": [
+    {
+      "id": "sculley-hidden-debt",
+      "description": "Sculley et al. framing: hidden technical debt in ML systems; model is a small % of code.",
+      "source_families": ["lb2-6673"],
+      "multi_hop": false
+    },
+    {
+      "id": "debt-mechanisms",
+      "description": "Concrete mechanisms: glue code, data dependencies, feedback loops, boundary erosion (as lecture frames).",
+      "source_families": ["lb2-6673"],
+      "multi_hop": false
+    },
+    {
+      "id": "bridge-to-responsible-ml",
+      "description": "Optional multi-hop: how debt interacts with monitoring/fairness/privacy ops without becoming a pure ethics essay.",
+      "source_families": ["lb2-6673", "lb2-6669", "lb2-6666"],
+      "multi_hop": true
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "optimizer-hyperparameter-deep-dive",
+      "description": "Adam/SGD hyperparameter recitation as the article core."
+    }
+  ],
+  "negative_control": null,
+  "poisoned_analysis": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "I need an outline for a general-audience article on hidden technical debt in ML systems, based only on our course materials.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "800–1000 words; avoid equations; include one concrete production vignette structure.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "multi_hop",
+      "user_template": "Should I connect debt to fairness or privacy operations at all? Only if the lectures support it.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t4",
+      "examiner_goal": "user_contribution",
+      "user_template": "My note: I think 'glue code' is just bad software engineering, not ML-specific. Integrate or push back using the corpus.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t5",
+      "examiner_goal": "gap_stress",
+      "user_template": "What is still missing for a sharp article, and what should I ask next?",
+      "expected_intent": "compose_analysis"
+    }
+  ],
+  "final_artifact": "article_outline",
+  "serendipity": {
+    "fruitful_directions": ["monitoring-debt-ops"],
+    "unproductive_directions": ["optimizer-hyperparameter-deep-dive"]
+  },
+  "notes": "Article family pilot; Sculley/tech debt present in densified wiki."
+}

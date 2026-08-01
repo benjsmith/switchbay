@@ -1,0 +1,77 @@
+{
+  "id": "rp-comp599-fairness-research-01",
+  "family": "research_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "academic",
+  "task_intent": "Map a mini research agenda on algorithmic fairness harms across the course lectures, with open questions and testable directions.",
+  "spine_must_hold": "Agenda must distinguish at least two harm types (e.g. allocation vs quality-of-service vs representation), cite lecture grounding, and list research questions — not a pure advocacy op-ed.",
+  "gold_themes": [
+    {
+      "id": "harm-types",
+      "description": "Multiple harm kinds (allocation, QoS, representation) as fairness lecture frames them.",
+      "source_families": ["lb2-6669"],
+      "multi_hop": false
+    },
+    {
+      "id": "mitigation-stages",
+      "description": "Mitigation can act at data/model/post-hoc stages (if lecture supports).",
+      "source_families": ["lb2-6669"],
+      "multi_hop": false
+    },
+    {
+      "id": "bridge-systems-lifecycle",
+      "description": "Connect fairness evaluation to ML systems lifecycle / monitoring debt.",
+      "source_families": ["lb2-6669", "lb2-6673"],
+      "multi_hop": true
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "cnn-imagenet-race",
+      "description": "ImageNet/architecture race as the research core."
+    }
+  ],
+  "negative_control": null,
+  "poisoned_analysis": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "Help me draft a mini research agenda on fairness harms grounded in our lectures.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "Keep it to three research questions and one evaluation sketch; course-corpus only.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "multi_hop",
+      "user_template": "How should systems/lifecycle material change the agenda if at all?",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t4",
+      "examiner_goal": "gap_stress",
+      "user_template": "What can this corpus not support, and what should I ask next?",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t5",
+      "examiner_goal": "serendipity_fork",
+      "branch": "examiner_side_path",
+      "user_template": "Examiner fork: consider a short optional angle on privacy attacks vs fairness harms — only if useful — then return to the fairness agenda spine.",
+      "expected_intent": "explore"
+    }
+  ],
+  "final_artifact": "research_agenda",
+  "serendipity": {
+    "fruitful_directions": ["privacy-vs-fairness-boundary"],
+    "unproductive_directions": ["cnn-imagenet-race"]
+  },
+  "notes": "Examiner-initiated fork (A6.5) — tests X-path without requiring system initiative."
+}

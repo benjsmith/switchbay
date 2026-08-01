@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "scenario_id": "ap-comp599-tech-debt-article-01",
+  "status": "draft_pending_freeze",
+  "canonical_sources": [
+    "vault/20260716-164937-local-lb2-6673-ml-systems.txt.extracted.md",
+    "vault/20260716-164937-local-lb2-6669-fairness-and-bias.txt.extracted.md",
+    "vault/20260716-164937-local-lb2-6666-privacy.txt.extracted.md"
+  ],
+  "passages": [
+    {
+      "theme_ids": ["sculley-hidden-debt", "debt-mechanisms"],
+      "source": "vault/20260716-164937-local-lb2-6673-ml-systems.txt.extracted.md",
+      "locator": "lines 42-46, 100-113",
+      "text": "The lecture assigns Sculley et al., Hidden technical debt in machine learning systems, defines technical debt as not-quite-right code postponed, asks students to identify concrete hidden debts, and depicts a nine-stage ML workflow with feedback loops from evaluation and monitoring to earlier stages."
+    },
+    {
+      "theme_ids": ["bridge-to-responsible-ml"],
+      "source": "vault/20260716-164937-local-lb2-6669-fairness-and-bias.txt.extracted.md",
+      "locator": "lines 73-88, 160-165",
+      "text": "The fairness lifecycle asks teams to scrutinize system vision for allocation, quality-of-service, stereotyping, denigration, and representation harms, and to revise systems when benchmarks reveal harm or document why mitigation is not possible."
+    },
+    {
+      "theme_ids": ["bridge-to-responsible-ml"],
+      "source": "vault/20260716-164937-local-lb2-6666-privacy.txt.extracted.md",
+      "locator": "lines 31-52",
+      "text": "The privacy lecture identifies model stealing, model inversion, and unintended memorization as confidentiality and privacy attacks."
+    }
+  ],
+  "counterevidence": [],
+  "absent_topics": [],
+  "applicable_dimensions": {
+    "theme_recall": true,
+    "multi_hop_coverage": true
+  }
+}

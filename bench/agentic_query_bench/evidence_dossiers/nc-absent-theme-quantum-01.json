@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "scenario_id": "nc-absent-theme-quantum-01",
+  "status": "draft_pending_freeze",
+  "canonical_sources": [],
+  "passages": [],
+  "absent_topics": [
+    {
+      "theme_id": "quantum-ml-course-content",
+      "manifest": "No LectureBank source family or curated page in the frozen fixture is assigned to quantum machine learning, quantum kernels, or Hamiltonian ML."
+    }
+  ],
+  "counterevidence": [],
+  "applicable_dimensions": {
+    "theme_recall": false,
+    "multi_hop_coverage": false
+  }
+}

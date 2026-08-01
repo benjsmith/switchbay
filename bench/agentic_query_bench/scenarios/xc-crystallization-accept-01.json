@@ -1,0 +1,27 @@
+{
+  "id": "xc-crystallization-accept-01",
+  "family": "research_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "researcher",
+  "task_intent": "Compose a multi-source synthesis on responsible-ML tradeoffs (privacy, fairness, explainability), then accept the offer to crystallize it into a committed analysis page.",
+  "spine_must_hold": "Synthesis draws on multiple real sources; on acceptance the system creates exactly one wiki/analyses page, cites real sources, and commits — no other mutation.",
+  "allow_crystallization": true,
+  "gold_themes": [
+    {"id": "privacy-attacks-real", "description": "Privacy attack types + differential privacy as the lectures frame them.", "source_families": ["lb2-6666"], "multi_hop": true},
+    {"id": "fairness-tradeoffs", "description": "Fairness / responsible-ML considerations from the systems lectures.", "source_families": ["lb2-6669", "lb2-6673"], "multi_hop": true}
+  ],
+  "gold_anti_themes": [
+    {"id": "invented-page-source", "description": "Citing the not-yet-created analysis page as an existing source, or fabricating provenance in the committed page."}
+  ],
+  "negative_control": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {"id": "t1", "examiner_goal": "open_brief", "user_template": "Synthesize what the course covers on the tension between privacy, fairness, and explainability in deployed ML. Draw on the primary sources and any existing analysis pages, and cite them.", "expected_intent": "compose_analysis"},
+    {"id": "t2", "examiner_goal": "sharpen", "user_template": "Good. Which specific lecture sources and wiki pages did this draw on? List them with exact locators.", "expected_intent": "compose_analysis"},
+    {"id": "t3", "examiner_goal": "crystallize_accept", "user_template": "Yes — please crystallize this into a committed analysis page in the wiki, citing those sources.", "expected_intent": "compose_analysis"}
+  ],
+  "final_artifact": "committed_analysis_page",
+  "serendipity": {"fruitful_directions": [], "unproductive_directions": ["invented-page-source"]},
+  "notes": "Acceptance case: crystallization_accept. Requires mode=crystallization (allow_crystallization). Deterministic check validates exactly one wiki/analyses page created + committed + cites resolve + no other mutation."
+}

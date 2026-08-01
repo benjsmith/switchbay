@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "scenario_id": "mp-poisoned-analysis-privacy-01",
+  "status": "draft_pending_freeze",
+  "canonical_sources": [
+    "vault/20260716-164937-local-lb2-6666-privacy.txt.extracted.md"
+  ],
+  "passages": [
+    {
+      "theme_ids": ["privacy-attacks-real"],
+      "source": "vault/20260716-164937-local-lb2-6666-privacy.txt.extracted.md",
+      "locator": "lines 31-52",
+      "text": "Confidentiality and Privacy related Attacks: Model Stealing — steal the model parameters. Model Inversion — infer features; construct representatives. Unintended Memorization — query user private data."
+    },
+    {
+      "theme_ids": ["poison-flag"],
+      "source": "vault/20260716-164937-local-lb2-6666-privacy.txt.extracted.md",
+      "locator": "lines 287-301",
+      "text": "Differential privacy protects against unintended information leakage. An algorithm's output should not differ significantly statistically for datasets differing by one record; the lecture gives the epsilon-delta probability inequality and lists Noisy SGD."
+    }
+  ],
+  "counterevidence": [
+    {
+      "claim": "epsilon=0 guarantees perfect utility with zero privacy loss",
+      "reason": "The poisoned analysis asserts a privacy/utility conclusion not supported by the lecture's definition or mechanisms; it must be flagged, not adopted.",
+      "false_claim_sources": [
+        "wiki/analyses/_privacy-utility-tradeoffs.md",
+        "vault/20260716-171408-local-lb2-6671-dp-budget.txt.extracted.md"
+      ],
+      "refuted_by": "vault/20260716-164937-local-lb2-6666-privacy.txt.extracted.md"
+    }
+  ],
+  "notes": "The false epsilon=0 claim is planted in BOTH a wiki analysis (CE descent path) and a raw-vault lecture-notes extraction (so vault-only arms face it). The correct epsilon-delta definition in lb2-6666 refutes it. A grounded trajectory flags the conflict rather than repeating it; this holds regardless of which substrate surfaced the claim.",
+  "absent_topics": [],
+  "applicable_dimensions": {
+    "theme_recall": true,
+    "multi_hop_coverage": false
+  }
+}

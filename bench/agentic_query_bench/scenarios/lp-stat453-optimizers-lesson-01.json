@@ -1,0 +1,67 @@
+{
+  "id": "lp-stat453-optimizers-lesson-01",
+  "family": "lesson_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "educator",
+  "task_intent": "Design a 90-minute undergrad lesson that sequences classical momentum through Nesterov to Adam, with clear learning outcomes.",
+  "spine_must_hold": "Lesson must include learning outcomes, timed segments, at least one comparison activity (e.g. Adam vs SGD+momentum), and prerequisite assumptions. Not a topic dump.",
+  "gold_themes": [
+    {
+      "id": "momentum-vs-nesterov",
+      "description": "Classical momentum vs Nesterov look-ahead gradient evaluation.",
+      "source_families": ["lb2-1498"],
+      "multi_hop": false
+    },
+    {
+      "id": "adam-vs-sgd-momentum",
+      "description": "Practical difference: per-parameter adaptive rates vs global rate + velocity.",
+      "source_families": ["lb2-1498"],
+      "multi_hop": false
+    },
+    {
+      "id": "bridge-to-deep-models",
+      "description": "Why these optimizers matter for deep nets trained in the course (e.g. CNN training context) without derailing into full architecture lecture.",
+      "source_families": ["lb2-1498", "lb2-1500"],
+      "multi_hop": true
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "full-inception-architecture",
+      "description": "Full Inception/ResNet architecture recitation as the lesson core."
+    }
+  ],
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "Help me design a 90-minute lesson on optimization methods for undergrads who have seen basic SGD. Ground it in our optimization lecture.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "They already saw CNNs last week. Include one active comparison exercise and explicit learning outcomes.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "multi_hop",
+      "user_template": "Where does this connect lightly to deep model training without turning into an architecture class?",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t4",
+      "examiner_goal": "gap_stress",
+      "user_template": "What misconceptions should I plan for, and what should I prep or ask next?",
+      "expected_intent": "compose_analysis"
+    }
+  ],
+  "final_artifact": "lesson_plan",
+  "serendipity": {
+    "fruitful_directions": ["learning-rate-schedules-aside"],
+    "unproductive_directions": ["full-inception-architecture"]
+  },
+  "notes": "Uses optimizer facts known present post-bootstrap."
+}
