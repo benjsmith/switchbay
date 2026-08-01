@@ -36,3 +36,17 @@ log.md
 
 # ── regenerable / local-only ──
 docs/*.pdf
+
+# ── bench run output (never ship) ──
+bench/results/
+bench/cache/
+bench/repro-out/
+bench/**/__pycache__/
+
+# ── sample workspace runtime (regenerable) ──
+samples/**/vault.db
+samples/**/.curator/
+samples/**/wiki-history.bundle
+samples/**/vault/*.extracted.md
+samples/**/vault/raw/
+samples/**/uv.toml

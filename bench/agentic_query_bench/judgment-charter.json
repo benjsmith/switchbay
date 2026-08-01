@@ -1,0 +1,224 @@
+{
+  "schema_version": 3,
+  "suite": "agentic_query_vs_rag",
+  "title": "Judgment charter — multi-turn knowledge-work planning (CE QUERY vs RAG)",
+  "frozen": true,
+  "frozen_date": "2026-07-22",
+  "canonical": true,
+  "notes": [
+    "THIS FILE is the sole canonical source of dimensions, clusters, primary composite, and gates.",
+    "Prose design docs must point here; they must not restate numeric weights.",
+    "Freeze (set frozen:true) before any full judgment run; bump schema_version on material change.",
+    "NEVER conflate unproductive drift with labeled serendipity.",
+    "Review amendments A1–A7 applied 2026-07-22 (from docs/reorientation-review-2026-07-21.md).",
+    "Pre-run review fixes applied 2026-07-22 (docs/agentic-bench-prerun-review-2026-07-22.md): absent_from_corpus themes excluded from coverage (RB8); proposal-fence cites never gate (RB5); fork fallback is neutral, resteer only on anti-drift (RB6).",
+    "Frozen-instrument implementation correction 2026-07-22, before aggregate analysis (6/98 generation cells checkpointed; 1 diagnostic smoke judgment): cite resolver v4 now parses harness-emitted vault span loci and annotations, separates multi-cites, excludes prompt-placeholder echoes, suppresses duplicate locus hits, and uses strict/unique resolution; judges omit citation_support when no citations were presented. Saved transcripts are unchanged and derived packs/judgments are version-migrated. Hypotheses, dimensions, weights, gates, arms, and directional predictions are unchanged.",
+    "Pre-analysis panel recovery 2026-07-22: Gemini prepaid credits depleted after 4 judgments, so the canonical panel is XAI + OpenAI Codex. The 4 Gemini judgments are retained as supplemental variance evidence only and excluded from canonical aggregation/agreement. No valid comparative result existed at substitution time (8/98 trajectories complete)."
+  ],
+  "roles": {
+    "judge": "Independent panelist; no live corpus tools. Pack includes scenario card, trajectory transcript, mechanical pre-pass reports (cite-resolver, re-steer counts).",
+    "examiner": "Scripted multi-turn planner from whitelisted templates only; never adopts system-proposed questions unless card whitelists; not scored.",
+    "cite_resolver": "Deterministic pre-pass; results enter judge pack; invented provenance is a trajectory GATE."
+  },
+  "gates": {
+    "provenance_violation": {
+      "description": "Any invented or unresolvable vault/wiki cite presented as provenance → trajectory excluded from headline primary table; reported in failure table.",
+      "trigger": "cite_resolver.report has any cite with resolves=false that the system presented as a citation (not as a gap).",
+      "action": "set trajectory.provenance_violation=true; exclude from headline primary mean; still judge diagnostically."
+    }
+  },
+  "drift_vs_serendipity": {
+    "unproductive_drift": {
+      "definition": "Content that displaces the task spine, is weakly grounded, or forces the user to rephrase/re-steer to recover the stated intent.",
+      "primary_signal": "mechanical count of examiner re-steer turns (user_template_resteer fired) / total turns",
+      "judge_role": "Classify only borderline spans with quote evidence; do not re-score pure re-steer count.",
+      "examples": [
+        "Essay on privacy vs explainability becomes an unlabeled deep dive into CNN layer sizes",
+        "Each turn changes topic without integrating prior constraints"
+      ]
+    },
+    "serendipity": {
+      "definition": "Grounded, fruitful direction that was not the original spine but is explicitly optional/side-pathed; spine remains available.",
+      "card_anchored": true,
+      "scoring_rules": [
+        "Only side paths matching scenario.serendipity.fruitful_directions may score > 0",
+        "Labeled-but-unlisted side paths = 0 (neutral), not drift",
+        "Unlabeled off-spine content = drift (not serendipity)",
+        "serendipity_quality is OUTSIDE the primary composite (reported separately)"
+      ],
+      "examples": [
+        "Labeled side note contrasting fairness harms, then return to privacy/explainability",
+        "Optional bridge to technical debt with clear offer to park or integrate"
+      ]
+    },
+    "on_spine_multihop": {
+      "definition": "Required cross-lecture connection for the task — score under multi_hop_coverage, not serendipity."
+    },
+    "rule": "If unsure, mark uncertain; do not assign high serendipity_quality and high unproductive_drift to the same span.",
+    "agreement_gate": {
+      "metric": "Cohen kappa on drift_spans and serendipity_spans labels across judges",
+      "threshold": 0.5,
+      "if_below": "Remove unproductive_drift (judge component) and serendipity_quality from any composite use; report both qualitatively only. Mechanical re-steer rate still reported."
+    }
+  },
+  "dimensions": {
+    "theme_recall": {
+      "range": [0, 1],
+      "cluster": "coverage",
+      "diagnostic": true,
+      "instruction": "Fraction of scenario gold_themes substantively present across the trajectory/final artifact. Themes flagged absent_from_corpus:true (negative-control cards) are EXCLUDED from the denominator — correctly refusing an absent theme must not lower coverage. If no themes remain after exclusion, omit this dimension (cluster averages over present dims)."
+    },
+    "theme_precision": {
+      "range": [0, 1],
+      "cluster": "coverage",
+      "diagnostic": true,
+      "instruction": "Of major content blocks, how many are on-theme or clearly corpus-supported? Penalize topical stuffing. A block asserting an absent_from_corpus theme as corpus-supported scores 0 here (and against calibration/accuracy)."
+    },
+    "multi_hop_coverage": {
+      "range": [0, 1],
+      "cluster": "coverage",
+      "diagnostic": true,
+      "instruction": "Gold themes with multi_hop true are connected (reasoning path), not merely name-dropped."
+    },
+    "comprehensiveness": {
+      "range": [0, 1],
+      "cluster": "coverage",
+      "diagnostic": true,
+      "instruction": "Meets spine_must_hold and family expectations for a usable plan."
+    },
+    "citation_support": {
+      "range": [0, 1],
+      "cluster": "grounding",
+      "diagnostic": true,
+      "instruction": "Judge ONLY using cite_resolver report: resolves rate and quote_match_rate among presented cites. If n_presented=0, omit citation_support (add it to uncertain_dimensions); the resolver's no-citation resolve_rate=1.0 is a vacuous mechanical default, not perfect support. Do not invent corpus checks. Invented/unresolvable provenance is a GATE (see gates.provenance_violation), not a soft 0 on this dim alone."
+    },
+    "accuracy": {
+      "range": [0, 1],
+      "cluster": "grounding",
+      "diagnostic": true,
+      "instruction": "Faithful to corpus as evidenced in transcript + resolved cites; no material contradictions."
+    },
+    "calibration": {
+      "range": [0, 1],
+      "cluster": "grounding",
+      "diagnostic": true,
+      "instruction": "Hedges or lists gaps when evidence is thin; does not confidently assert from weak hits. On negative-control cards, must not claim the absent theme as present."
+    },
+    "compactness_sharpness": {
+      "range": [0, 1],
+      "cluster": "writing",
+      "diagnostic": true,
+      "instruction": "Structured, dense, sharp distinctions; low waffle and repetition."
+    },
+    "novelty_of_synthesis": {
+      "range": [0, 1],
+      "cluster": "writing",
+      "diagnostic": true,
+      "instruction": "Recombines multiple sources into structure beyond a single-lecture dump; grounded only. Prefer structures that connect ≥2 source families and are not a near-verbatim single-source dump."
+    },
+    "insight_richness": {
+      "range": [0, 1],
+      "cluster": "generativity",
+      "diagnostic": true,
+      "instruction": "Non-obvious connections, tensions, or testable angles. Count only if claim connects ≥2 distinct source families OR is explicitly labeled hypothesis with no false provenance."
+    },
+    "follow_on_richness": {
+      "range": [0, 1],
+      "cluster": "generativity",
+      "diagnostic": true,
+      "instruction": "Next questions, gaps, hypotheses that advance the task (not generic chat fillers)."
+    },
+    "opportunity_creation": {
+      "range": [0, 1],
+      "cluster": "generativity",
+      "diagnostic": true,
+      "instruction": "Creates opportunities for richer human output or refined follow-on exploration. Prefer concrete next steps a writer could execute."
+    },
+    "spine_fidelity": {
+      "range": [0, 1],
+      "cluster": "steering",
+      "diagnostic": true,
+      "instruction": "Across turns, main intent remains clear without heavy user rephrasing."
+    },
+    "steer_efficiency": {
+      "range": [0, 1],
+      "cluster": "steering",
+      "diagnostic": true,
+      "instruction": "Constraints are absorbed; few re-steers needed. Use mechanical re-steer rate as primary cue (lower re-steers → higher score)."
+    },
+    "unproductive_drift": {
+      "range": [0, 1],
+      "cluster": "steering",
+      "diagnostic": true,
+      "higher_is_worse": true,
+      "instruction": "PRIMARY: mechanical re-steer_rate from examiner log. SECONDARY: judge borderline unlabeled off-spine spans only."
+    },
+    "serendipity_quality": {
+      "range": [0, 1],
+      "cluster": null,
+      "diagnostic": true,
+      "in_primary_composite": false,
+      "instruction": "Card-anchored only (fruitful_directions). Labeled-but-unlisted=0. Unlabeled off-spine=drift not serendipity. Reported separately from primary."
+    },
+    "task_usefulness": {
+      "range": [0, 1],
+      "cluster": null,
+      "diagnostic": true,
+      "in_primary_composite": false,
+      "instruction": "Directly usable for the stated planning task. Prefer operationalization via downstream-writer test when available; otherwise judge usability of final artifact structure."
+    }
+  },
+  "clusters": {
+    "coverage": {
+      "dims": ["theme_recall", "theme_precision", "multi_hop_coverage", "comprehensiveness"],
+      "aggregation": "mean of present dims"
+    },
+    "grounding": {
+      "dims": ["citation_support", "accuracy", "calibration"],
+      "aggregation": "mean of present dims"
+    },
+    "writing": {
+      "dims": ["compactness_sharpness", "novelty_of_synthesis"],
+      "aggregation": "mean of present dims"
+    },
+    "generativity": {
+      "dims": ["insight_richness", "follow_on_richness", "opportunity_creation"],
+      "aggregation": "mean of present dims"
+    },
+    "steering": {
+      "dims": ["spine_fidelity", "steer_efficiency", "unproductive_drift_inverted"],
+      "aggregation": "mean of present dims",
+      "notes": "unproductive_drift_inverted := 1 - unproductive_drift"
+    }
+  },
+  "primary_score": {
+    "method": "mean of five cluster scores (coverage, grounding, writing, generativity, steering)",
+    "clusters": ["coverage", "grounding", "writing", "generativity", "steering"],
+    "excluded_from_primary": [
+      "serendipity_quality",
+      "task_usefulness"
+    ],
+    "notes": [
+      "Equal cluster means avoid 17-dim halo inflation.",
+      "Diagnostic 17 dims always logged.",
+      "If agreement_gate fails on drift spans, recompute steering without judge drift and drop serendipity from secondary tables requiring agreement."
+    ]
+  },
+  "mechanical_metrics": {
+    "resteer_rate": "n_resteer_turns / n_turns",
+    "cite_resolve_rate": "n_resolves / n_cites_presented",
+    "cite_quote_match_rate": "mean quote_match_rate over resolved cites",
+    "provenance_violation": "bool gate",
+    "vault_terminating_cite_rate": "fraction of cites whose chain ends in a vault span (vs wiki-only)",
+    "completion": "trajectory finished all turns without arm failure"
+  },
+  "output_schema": {
+    "scores": "object dimension -> float 0..1",
+    "cluster_scores": "object cluster -> float 0..1",
+    "primary_score": "float mean of clusters",
+    "uncertain_dimensions": "list of dimension ids",
+    "rationale": "short paragraph with transcript pointers",
+    "drift_spans": "optional list of {turn_id, note, quote}",
+    "serendipity_spans": "optional list of {turn_id, note, fruitful_direction_id, quote}"
+  }
+}

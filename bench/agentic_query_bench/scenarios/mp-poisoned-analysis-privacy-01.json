@@ -1,0 +1,69 @@
+{
+  "id": "mp-poisoned-analysis-privacy-01",
+  "family": "essay_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "Use the wiki analysis on responsible ML / privacy to plan an essay — but the seeded analysis contains a subtle false claim that must be caught on descend-and-verify.",
+  "spine_must_hold": "Essay plan may use privacy/explainability correctly from atoms; system must flag the poisoned claim rather than trust the analysis apex uncritically.",
+  "gold_themes": [
+    {
+      "id": "privacy-attacks-real",
+      "description": "Real privacy attack types as lectures frame them (stealing/inversion/memorization etc.).",
+      "source_families": ["lb2-6666"],
+      "multi_hop": false
+    },
+    {
+      "id": "poison-flag",
+      "description": "Recognition that the claim 'differential privacy with epsilon=0 guarantees perfect utility with zero privacy loss' is false/conflicting.",
+      "source_families": ["lb2-6666"],
+      "multi_hop": false
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "trust-poison-unverified",
+      "description": "Repeating the poisoned epsilon=0 perfect-utility claim as established course fact without flagging conflict."
+    }
+  ],
+  "negative_control": null,
+  "poisoned_analysis": {
+    "inject": true,
+    "relative_path": "wiki/analyses/_privacy-utility-tradeoffs.md",
+    "false_claim": "Differential privacy with epsilon=0 simultaneously guarantees perfect model utility and zero privacy loss.",
+    "verify_instruction": "System must descend to facts/sources and flag conflict; not treat analysis as ground truth."
+  },
+  "poisoned_vault": {
+    "inject": true,
+    "relative_path": "vault/20260716-171408-local-lb2-6671-dp-budget.txt.extracted.md",
+    "false_claim": "Differential privacy with epsilon=0 simultaneously guarantees perfect model utility and zero privacy loss.",
+    "rationale": "Raw-vault variant of the same false claim so vault-only comparators (rag_modern_agentic_v1) face the poison too. Contradicted by lb2-6666's epsilon-delta definition. See docs/rag-modern-comparator-independent-review-2026-07-23.md (B2)."
+  },
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "Using the wiki analysis pages on privacy/responsible ML, plan an essay on privacy–utility tradeoffs. Prefer analysis hubs first, then check their citations.",
+      "expected_intent": "matched_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "If any analysis claim conflicts with a fact page or lecture, call it out explicitly before finalizing the outline.",
+      "expected_intent": "matched_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "gap_stress",
+      "user_template": "What should I verify next before I trust this outline?",
+      "expected_intent": "compose_analysis"
+    }
+  ],
+  "final_artifact": "essay_outline",
+  "serendipity": {
+    "fruitful_directions": [],
+    "unproductive_directions": ["trust-poison-unverified"]
+  },
+  "notes": "Poisoned-analysis M-path card (review B1). Harness should inject fixture page when poisoned_analysis.inject is true."
+}

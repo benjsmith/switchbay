@@ -1,0 +1,76 @@
+{
+  "id": "ep-comp599-privacy-transparency-01",
+  "family": "essay_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "Plan a midterm essay that treats privacy and explainability as distinct goals in ML systems, grounded in course lectures.",
+  "spine_must_hold": "Final outline must address both privacy AND explainability separately; must not collapse into generic AI ethics; must cite at least two lecture families.",
+  "gold_themes": [
+    {
+      "id": "privacy-attacks-leakage",
+      "description": "Privacy as preventing unintended inference/leakage (e.g. model stealing, inversion, memorization) as framed in the privacy lecture.",
+      "source_families": ["lb2-6666"],
+      "multi_hop": false
+    },
+    {
+      "id": "explainability-stakeholders",
+      "description": "Transparency/explainability as making behaviour understandable/contestable; stakeholder-dependent questions (how vs why).",
+      "source_families": ["lb2-6668"],
+      "multi_hop": false
+    },
+    {
+      "id": "systems-or-lifecycle-bridge",
+      "description": "Connect privacy/explainability concerns to production ML systems, lifecycle, or hidden technical debt (multi-lecture).",
+      "source_families": ["lb2-6673", "lb2-6666", "lb2-6668"],
+      "multi_hop": true
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "cnn-architecture-recitation",
+      "description": "Detailed CNN layer/Inception recitation unrelated to privacy/explainability spine."
+    }
+  ],
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "I need to plan an essay on privacy and explainability in ML systems using our course materials. Propose a main argumentative structure grounded in the lectures.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "Audience is technical undergrads; about 1500 words; I must use at least two different lectures. Tighten the outline.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "multi_hop",
+      "user_template": "How should I connect this to production ML systems or technical debt if the lectures support it?",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t4",
+      "examiner_goal": "gap_stress",
+      "user_template": "What is still missing for a strong essay, and what should I ask or read next?",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t5",
+      "examiner_goal": "serendipity_fork",
+      "branch": "side_path_offer",
+      "user_template_accept": "If you offered a clearly optional side angle on fairness harms, keep a short parked note on it, then return to the privacy vs explainability spine for the final outline.",
+      "user_template_resteer": "Please stay on privacy vs explainability; do not turn this into a CNN architecture review.",
+      "user_template_neutral": "Good — lock in the final outline for the privacy vs explainability essay now.",
+      "expected_intent": "explore"
+    }
+  ],
+  "final_artifact": "essay_outline",
+  "serendipity": {
+    "fruitful_directions": ["fairness-harms-contrast"],
+    "unproductive_directions": ["cnn-architecture-recitation"]
+  },
+  "notes": "Wiki should have privacy/transparency/fairness/systems facts from bootstrap; themes are supportable without new densify."
+}

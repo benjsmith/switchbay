@@ -1101,8 +1101,8 @@ ul.tight li b{color:var(--ink)}
   <!-- ============ APPENDIX F — ROADMAP ============ -->
   <section class="slide" data-name="Appendix · roadmap">
     <div class="slide-head">
-      <p class="eyebrow"><span class="apx">Appendix F</span> · in progress &amp; next</p>
-      <h1>What's still running, and what upstreams to CE.</h1>
+      <p class="eyebrow"><span class="apx">Appendix F</span> · benchmarking overview</p>
+      <h1>Benchmarking Overview</h1>
     </div>
     <div class="slide-body">
       <div class="col" style="flex:1;gap:20px">
@@ -1113,7 +1113,7 @@ ul.tight li b{color:var(--ink)}
             <div class="rm"><span class="st done">done</span><div class="tx"><b>Retrieval arms — PPR, adaptive routing, granularity</b><div>PPR rejected at scale; per-type routing led here; chunk ≈ whole-page here</div></div></div>
             <div class="rm"><span class="st done">done</span><div class="tx"><b>Frontier cross-judge + length-controlled global</b><div>Fable-5 + gpt-5.6: facts / multi-hop robust; sensemaking was mostly answer length</div></div></div>
             <div class="rm"><span class="st done">done</span><div class="tx"><b>H5 — synonym / alias resolution</b><div>end-to-end, raw-vault RAG can't answer invented-codename aliases (0.00); curated wiki-RAG 1.00; see Appendix H</div></div></div>
-            <div class="rm"><span class="st prog">first run</span><div class="tx"><b>Phase 2 — long study-notes across courses</b><div>90 Q · 7 blinded arms · gen claude-sonnet-5 · judges sonnet+xai. Headline: <b>chunked raw RAG leads</b> (single-hop ~0.46, global themes ~0.43); CE wiki arms trail on this thin first-pass wiki (45 sources + light concepts). Multi-hop near floor for all arms. Denser CE curate still optional follow-up — raw baseline is already solid.</div></div></div>
+            <div class="rm"><span class="st done">done</span><div class="tx"><b>Phase 2 — product verdict (skill vs structure)</b><div>Preregistered CE vs tool-matched (no skill) vs modern-RAG · live agents (opus-4-8 + opus-5) · dual blind LLM judges + human adjudicator. <b>Structure carried the value again</b>; the skill layer did not improve quality in this test (did not test all aspects). See Appendices J–K–L.</div></div></div>
           </div>
         </div>
         <div>
@@ -1275,6 +1275,117 @@ ul.tight li b{color:var(--ink)}
           its project</b> (B′ 1.00, routed 0.90). The provenanced split is what makes the ambiguity visible.</div>
           <div class="small" style="margin-top:7px;color:var(--faint)">10 collision terms, gemini-2.5-flash, deterministic
           scoring. H6a (context named in the query) is a null — the gap is specifically on <i>ambiguous</i> queries.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ APPENDIX J — PRODUCT VERDICT: THE TEST ============ -->
+  <section class="slide" data-name="Appendix · product verdict — test">
+    <div class="slide-head">
+      <p class="eyebrow"><span class="apx">Appendix J</span> · product verdict (2026) — the harder test</p>
+      <h1>Does the <span class="hl">query skill</span> add value beyond the structure? A preregistered test isolates it.</h1>
+      <p class="lede">The study above established that <b style="color:var(--ink)">curation / structure</b> beats raw-vault RAG.
+      This newer, stricter test asks the next question: given the same structure, does the CE <b style="color:var(--ink)">query
+      skill itself</b> make single-shot answers better? It runs <b style="color:var(--ink)">live agents</b> (opus-4-8 + opus-5),
+      blind-judged by grok-4.5 + gpt-5.5 with a human third adjudicator, preregistered, on a frozen corpus.</p>
+    </div>
+    <div class="slide-body">
+      <div class="col grow" style="justify-content:center">
+        <div class="panel" style="padding:16px 20px">
+          <span class="label">Three arms — each isolates one variable</span>
+          <div style="overflow-x:auto;margin-top:8px">
+          <table class="tbl compact">
+            <thead><tr><th>Arm</th><th>Knowledge access</th><th>Isolates</th></tr></thead>
+            <tbody>
+              <tr><td class="metric">CE product</td><td>CE skill + wiki/graph + CE scripts + direct reads</td><td class="mono">the product</td></tr>
+              <tr><td class="metric">Tool-matched</td><td>Same structure + <b style="color:var(--ink)">byte-identical</b> CE scripts, <b style="color:var(--ink)">no skill</b></td><td class="mono best">the skill</td></tr>
+              <tr><td class="metric">Modern-RAG</td><td>Agentic hybrid + rerank over <b style="color:var(--ink)">raw vault only</b></td><td class="mono">the structure</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <div class="small" style="margin-top:11px;line-height:1.5"><b style="color:var(--ink)">Tool-matched is the load-bearing
+          control:</b> it has everything CE has <i>except the skill wrapper</i>, so CE − tool-matched isolates the skill's
+          contribution. Behavioural gates (abstention, poison-catching, provenance, mutations) are scored deterministically
+          and unblinded; answer quality by the blind panel.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ APPENDIX K — PRODUCT VERDICT: RESULT ============ -->
+  <section class="slide" data-name="Appendix · product verdict — result">
+    <div class="slide-head">
+      <p class="eyebrow"><span class="apx">Appendix K</span> · product verdict — result</p>
+      <h1>The structure carries the value; the skill layer <span class="hl">doesn't add measurable single-shot quality</span>.</h1>
+    </div>
+    <div class="slide-body">
+      <div class="col" style="flex:0 0 47%;gap:12px;justify-content:center">
+        <div class="panel" style="padding:15px 18px">
+          <span class="label">Did CE clear the preregistered quality bars? (Δ≥.05 · wins≥8/12 · scenario≥3/4)</span>
+          <div style="overflow-x:auto;margin-top:8px">
+          <table class="tbl compact">
+            <thead><tr><th>CE vs</th><th>Δ mean</th><th>wins</th><th>scen</th><th>bars</th></tr></thead>
+            <tbody>
+              <tr><td class="metric">tool-matched · o4.8</td><td class="mono" style="color:var(--bad)">−0.021</td><td class="mono">3/12</td><td class="mono">0/4</td><td class="mono" style="color:var(--bad)">0/3</td></tr>
+              <tr><td class="metric">tool-matched · o5</td><td class="mono" style="color:var(--bad)">−0.012</td><td class="mono">3/12</td><td class="mono">0/4</td><td class="mono" style="color:var(--bad)">0/3</td></tr>
+              <tr><td class="metric">modern-RAG · o4.8</td><td class="mono">+0.069</td><td class="mono">5/12</td><td class="mono">2/4</td><td class="mono" style="color:var(--bad)">1/3</td></tr>
+              <tr><td class="metric">modern-RAG · o5</td><td class="mono">+0.031</td><td class="mono">4/12</td><td class="mono">2/4</td><td class="mono" style="color:var(--bad)">0/3</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <div class="small" style="margin-top:9px;line-height:1.5">Arm quality (0–1): tool-matched <b style="color:var(--ink)">0.887 /
+          0.872</b> · CE 0.866 / 0.861 · RAG 0.797 / 0.830. Ordering on both models: <b style="color:var(--ink)">tool-matched ≳
+          CE &gt; modern-RAG</b>.</div>
+        </div>
+      </div>
+      <div class="col grow" style="justify-content:center;gap:12px">
+        <span class="label">What each contrast means</span>
+        <div class="findings">
+          <div class="finding"><span class="tag" style="background:var(--faint)">≈</span><div><b>CE ≈ tool-matched (a wash).</b>
+          <span>Within ~0.02 on both models; CE does not beat the same-tools agent, and judged calibration / citation slightly
+          favour it. The skill doesn't raise grounded single-shot quality.</span></div></div>
+          <div class="finding"><span class="tag g">&gt;</span><div><b>Structure &gt; raw RAG — modestly.</b> <span>Both structure
+          arms beat raw-vault RAG on recall / coverage, but clean RAG is competitive and CE doesn't win the head-to-head.
+          Consistent with the thesis above: curation / structure is the win.</span></div></div>
+          <div class="finding"><span class="tag w">✓</span><div><b>Three layers agree.</b> <span>Deterministic gates, the blind
+          panel, and the human adjudicator all land on the same result — <b style="color:var(--ink)">not a positive
+          verdict</b>. The counterfactual did its job and prevented a false-positive.</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ APPENDIX L — WHAT IT DOES / DOESN'T SAY ============ -->
+  <section class="slide" data-name="Appendix · product verdict — scope">
+    <div class="slide-head">
+      <p class="eyebrow"><span class="apx">Appendix L</span> · what the verdict does &amp; doesn't say</p>
+      <h1>A null on the <span class="hl">single-shot skill</span> — not on CE's real, compounding value.</h1>
+    </div>
+    <div class="slide-body">
+      <div class="col grow" style="justify-content:center">
+        <div class="takeaways">
+          <div class="take"><div class="no">01</div><div class="tx"><b>Structure → quality: yes (modest).</b> The curated
+          wiki / graph is what lifts quality over generic RAG — concentrated on recall / coverage, and model-dependent.</div></div>
+          <div class="take"><div class="no">02</div><div class="tx"><b>Skill doctrine → reliability: no.</b> Every arm abstained
+          3/3 on the absent topic; CE and tool-matched both caught the planted poison. Reliability comes from structure + a
+          capable model, not the skill.</div></div>
+          <div class="take"><div class="no">03</div><div class="tx"><b>Skill → teaching behaviour: real, unmeasured.</b> CE ends
+          on a probing follow-up question far more often, but the single-shot judges didn't reward it.</div></div>
+        </div>
+      </div>
+      <div class="col" style="flex:0 0 42%;justify-content:center">
+        <div class="panel soft" style="padding:15px 17px;border:1px solid var(--warm)">
+          <span class="label" style="color:var(--warm)">What this test did NOT measure</span>
+          <div class="small" style="margin-top:6px;line-height:1.55">By design it was <b style="color:var(--ink)">single-shot and
+          grounded</b> — which suppresses where CE is built to win: using reasoning + closed-book knowledge to <b style="color:var(--ink)">suggest
+          sources, questions &amp; hypotheses</b>; the <b style="color:var(--ink)">crystallized analysis pages</b> (the matrix ran
+          propose-only, so none were authored for the scored questions); and <b style="color:var(--ink)">compounding memory</b>
+          over many sessions. Read the null as "the skill doesn't raise grounded single-turn quality," <i>not</i> "the skill has
+          no value."</div>
+          <div class="small" style="margin-top:9px;color:var(--faint)">A secondary qualitative analysis of the generated
+          material — analysis pages vs replies, and off-the-leash generativity across the three methods — is designed to probe
+          exactly this.</div>
         </div>
       </div>
     </div>

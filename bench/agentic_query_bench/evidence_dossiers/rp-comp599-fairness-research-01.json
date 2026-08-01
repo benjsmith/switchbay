@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "scenario_id": "rp-comp599-fairness-research-01",
+  "status": "draft_pending_freeze",
+  "canonical_sources": [
+    "vault/20260716-164937-local-lb2-6669-fairness-and-bias.txt.extracted.md",
+    "vault/20260716-164937-local-lb2-6673-ml-systems.txt.extracted.md"
+  ],
+  "passages": [
+    {
+      "theme_ids": ["harm-types"],
+      "source": "vault/20260716-164937-local-lb2-6669-fairness-and-bias.txt.extracted.md",
+      "locator": "lines 17-22",
+      "text": "The lecture distinguishes harm of allocation (withheld opportunity or resources), quality-of-service harm (degraded user experience), and representational harm (subordination or stereotyping along identity lines)."
+    },
+    {
+      "theme_ids": ["mitigation-stages"],
+      "source": "vault/20260716-164937-local-lb2-6669-fairness-and-bias.txt.extracted.md",
+      "locator": "lines 48-60, 160-165, 204-228",
+      "text": "The lecture organizes sources of bias and mitigation across requirements, data, model, deployment, and monitoring, and lists pre-processing, learning-time, and post-processing mitigation methods."
+    },
+    {
+      "theme_ids": ["bridge-systems-lifecycle"],
+      "source": "vault/20260716-164937-local-lb2-6673-ml-systems.txt.extracted.md",
+      "locator": "lines 110-114",
+      "text": "The ML systems lecture presents a nine-stage workflow with feedback loops from model evaluation and monitoring back to earlier data- and model-oriented stages."
+    }
+  ],
+  "counterevidence": [],
+  "absent_topics": [],
+  "applicable_dimensions": {
+    "theme_recall": true,
+    "multi_hop_coverage": true
+  }
+}

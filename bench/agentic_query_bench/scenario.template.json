@@ -1,0 +1,72 @@
+{
+  "id": "family-short-slug-01",
+  "family": "essay_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "One paragraph: what the human is trying to produce.",
+  "spine_must_hold": "Non-negotiable constraints on the final artifact.",
+  "gold_themes": [
+    {
+      "id": "theme-id",
+      "description": "What substantive content counts as covering this theme.",
+      "source_families": ["lb2-XXXX"],
+      "multi_hop": false
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "anti-id",
+      "description": "Off-spine topic; primary focus counts as unproductive drift."
+    }
+  ],
+  "negative_control": null,
+  "poisoned_analysis": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "First user message.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "Add constraints (audience, length, modules).",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "multi_hop",
+      "user_template": "Force a cross-lecture or cross-theme connection.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t4",
+      "examiner_goal": "user_contribution",
+      "user_template": "Here is my own note/hypothesis: … Please integrate and check against the corpus.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t5",
+      "examiner_goal": "gap_stress",
+      "user_template": "What is still missing, and what should I ask next?",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t6",
+      "examiner_goal": "serendipity_fork",
+      "branch": "side_path_offer",
+      "user_template_accept": "Accept a labeled fruitful side path once, then demand return to spine.",
+      "user_template_resteer": "Re-steer if the system drifted into gold_anti_themes unlabeled.",
+      "expected_intent": "explore"
+    }
+  ],
+  "final_artifact": "essay_outline",
+  "serendipity": {
+    "fruitful_directions": ["optional-fruitful-id"],
+    "unproductive_directions": ["anti-id"]
+  },
+  "notes": "Authoring notes for examiners; not shown to systems under test."
+}

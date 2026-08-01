@@ -1,0 +1,23 @@
+{
+  "id": "xm-auto-discovery-multihop-01",
+  "family": "matched_analysis",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "researcher",
+  "task_intent": "A MULTI-HOP synthesis query (no /curiosity-engine prefix) that grep cannot assemble — it needs CE query's ranked multi-hop graph retrieval + shared-source linking. Tests whether CE QUERY is auto-invoked.",
+  "spine_must_hold": "A correct answer requires connecting privacy, fairness, and explainability material across pages and attributing each connection to shared sources — CE query's graph retrieval, not a flat keyword grep.",
+  "gold_themes": [
+    {"id": "privacy-fairness-explain-links", "description": "Cross-cutting tradeoffs the course draws between privacy, fairness, and explainability, with the sources supporting each link.", "source_families": ["lb2-6666", "lb2-6669", "lb2-6673"], "multi_hop": true}
+  ],
+  "gold_anti_themes": [
+    {"id": "flat-grep-answer", "description": "A shallow keyword-grep answer that lists pages without the ranked multi-hop connections + shared-source attribution CE query provides."}
+  ],
+  "negative_control": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {"id": "t1", "examiner_goal": "open_brief", "user_template": "Trace how this course's material on privacy, fairness, and explainability connects — what cross-cutting tradeoffs does it draw between them, and which specific sources support each connection? I want the linked multi-hop picture, not a page-by-page summary.", "expected_intent": "matched_analysis"}
+  ],
+  "final_artifact": "linked_synthesis",
+  "serendipity": {"fruitful_directions": [], "unproductive_directions": ["flat-grep-answer"]},
+  "notes": "Acceptance case: automatic_skill_discovery (multi-hop). Run WITHOUT the /curiosity-engine prefix. grep-insufficient by design so CE query is the sensible path. Strict gate = ce_query_invoked; the STRUCTURE-benefit-without-query count is tracked separately (mechanics.structure_benefit_without_ce_query)."
+}

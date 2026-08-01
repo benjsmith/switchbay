@@ -695,7 +695,7 @@ name = "importlib-metadata"
 version = "9.0.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp" },
+    { name = "zipp", marker = "python_full_version < '3.12'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/a9/01/15bb152d77b21318514a96f43af312635eb2500c96b55398d020c93d86ea/importlib_metadata-9.0.0.tar.gz", hash = "sha256:a4f57ab599e6a2e3016d7595cfd72eb4661a5106e787a95bcc90c7105b831efc", size = 56405 }
 wheels = [
@@ -2264,6 +2264,7 @@ dev = [
 ]
 semantic = [
     { name = "fastembed" },
+    { name = "numpy" },
 ]
 semantic-torch = [
     { name = "sentence-transformers" },
@@ -2283,7 +2284,10 @@ dev = [
     { name = "pytest", specifier = ">=8.3,<9" },
     { name = "pytest-asyncio", specifier = ">=0.24,<0.26" },
 ]
-semantic = [{ name = "fastembed", specifier = ">=0.8.0" }]
+semantic = [
+    { name = "fastembed", specifier = ">=0.8.0" },
+    { name = "numpy", specifier = ">=1.26" },
+]
 semantic-torch = [{ name = "sentence-transformers", specifier = ">=5.4.1" }]
 
 [[package]]

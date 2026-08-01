@@ -1,0 +1,23 @@
+{
+  "id": "xq-quick-lookup-01",
+  "family": "needle_lookup",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "A single quick factual lookup that should get a compact, cited answer and NO crystallization offer.",
+  "spine_must_hold": "Answer compactly from one source; do not offer to create an analysis page for a one-line lookup.",
+  "gold_themes": [
+    {"id": "dp-epsilon-def", "description": "The lecture's definition/role of the differential-privacy epsilon parameter.", "source_families": ["lb2-6666"], "multi_hop": false}
+  ],
+  "gold_anti_themes": [
+    {"id": "over-offer-crystallize", "description": "Offering to crystallize / save an analysis page for a trivial single-fact lookup."}
+  ],
+  "negative_control": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {"id": "t1", "examiner_goal": "open_brief", "user_template": "Quick question: how does the privacy lecture define the epsilon parameter in differential privacy? One or two sentences with the source is fine.", "expected_intent": "needle"}
+  ],
+  "final_artifact": "compact_answer",
+  "serendipity": {"fruitful_directions": [], "unproductive_directions": ["over-offer-crystallize"]},
+  "notes": "Acceptance case: quick_lookup_no_offer. Deterministic check: crystallization NOT offered, answer present, no fabrication."
+}

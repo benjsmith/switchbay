@@ -1,0 +1,106 @@
+{
+  "schema_version": 3,
+  "suite": "agentic_query_vs_rag",
+  "frozen": true,
+  "frozen_date": "2026-07-22",
+  "amendments": [
+    {
+      "date": "2026-07-22",
+      "stage": "pre-analysis; 6/98 generation cells checkpointed and 1 diagnostic smoke judgment",
+      "change": "Cite resolver v4 implementation correction: normalize harness-emitted vault span loci/annotations and multi-cites; exclude prompt-placeholder echoes; suppress duplicate locus hits; require exact or unique logical-source resolution; omit citation_support when n_presented=0; version-migrate derived checkpoint fields, judge packs, and stale judgments without regenerating transcripts.",
+      "unchanged": "Hypotheses, dimensions, weights, gates, arms, repeats, model assignments, and directional predictions."
+    },
+    {
+      "date": "2026-07-22",
+      "stage": "pre-analysis recovery; 8/98 completed trajectories, no valid comparative result",
+      "change": "Replace depleted Gemini panelist with OpenAI Codex. Canonical pilot panel is XAI + OpenAI Codex. Retain the four existing Gemini judgments as supplemental variance signal only; they do not enter the primary panel, agreement gate, cluster means, or paired bootstrap.",
+      "unchanged": "Generator, examiner, hypotheses, dimensions, weights, gates, arms, repeats, scenarios, and directional predictions."
+    }
+  ],
+  "pilot_run_config": {
+    "generator": "claude-code / claude-opus-4-8 (user-chosen: latest Opus; slower limit burn than Claude 5 tier)",
+    "judges": ["xai (grok-4.5 gateway default)", "openai-codex (subscription CLI; non-Anthropic)"],
+    "supplemental_judges": ["gemini (4 pre-depletion judgments retained for later variance analysis; excluded from canonical pilot aggregation)"],
+    "examiner": "templated (no LLM) — family separation trivially satisfied",
+    "arms": ["closed_book", "rag_std", "rag_wiki_text", "long_ctx", "agentic_plain", "ce_retrieve_only", "ce_query"],
+    "repeats": 2,
+    "note": "ce_query arm is ce_query_sim_v1 (harness simulation) — full-suite claims require real CE QUERY wiring"
+  },
+  "charter": "judgment-charter.json",
+  "review": "docs/reorientation-review-2026-07-21.md",
+  "n_per_cell": {
+    "trajectories_per_scenario_arm": 2,
+    "notes": "Subscription-CLI loops are non-deterministic; report mean±sd; no silent exclusion of failed traj."
+  },
+  "test": {
+    "primary": "paired bootstrap by scenario on primary_score (cluster mean)",
+    "cluster_by": "family",
+    "report_per_arm_completion_rate": true
+  },
+  "directional_predictions": [
+    {
+      "claim": "CE-QUERY > RAG-std on multi_hop_coverage and follow_on_richness (cluster generativity / multi_hop dim)",
+      "metric": ["multi_hop_coverage", "follow_on_richness", "generativity"]
+    },
+    {
+      "claim": "CE-QUERY > AGENTIC-plain on multi_hop_coverage if wiki/graph substrate matters",
+      "metric": ["multi_hop_coverage", "coverage"]
+    },
+    {
+      "claim": "RAG-std may win compactness_sharpness and usefulness_per_token",
+      "metric": ["compactness_sharpness", "tokens_per_trajectory"]
+    },
+    {
+      "claim": "CLOSED-BOOK substantially below corpus arms on theme_recall if suite is not pure pretraining",
+      "metric": ["theme_recall", "coverage"]
+    },
+    {
+      "claim": "CE-QUERY ≤ RAG-std on resteer_rate (lower better) if spine control works",
+      "metric": ["resteer_rate"]
+    },
+    {
+      "claim": "On negative-control cards, calibration high only if absent theme not asserted",
+      "metric": ["calibration"]
+    },
+    {
+      "claim": "On poisoned-analysis cards, CE-QUERY flags conflict more often than analysis-trusting one-shot",
+      "metric": ["accuracy", "calibration"]
+    }
+  ],
+  "arms": {
+    "mandatory": [
+      "ce_query",
+      "rag_std",
+      "agentic_plain",
+      "closed_book",
+      "ce_retrieve_only"
+    ],
+    "pilot_extra": [
+      "long_ctx",
+      "rag_wiki_text"
+    ],
+    "optional": [
+      "rag_graph"
+    ]
+  },
+  "model_family_separation": {
+    "examiner_family": "must differ from generator families and judge families",
+    "generator_families": "per arm",
+    "judge_families": "≥2, distinct from examiner and generators where possible",
+    "judges_see": "blind arm codes only"
+  },
+  "agreement_gate": {
+    "kappa_min": 0.5,
+    "on": ["drift_spans", "serendipity_spans"]
+  },
+  "exclusion_rules": [
+    "provenance_violation trajectories excluded from headline primary table",
+    "arm crashes reported in completion table; not silently dropped from denominators"
+  ],
+  "non_claims": [
+    "No one-shot exam SH superiority",
+    "No pedagogy / learning-outcome claims for lesson plans — grounding and structure only",
+    "No absolute score comparison across corpora",
+    "No intro claims until frozen full run + human review"
+  ]
+}

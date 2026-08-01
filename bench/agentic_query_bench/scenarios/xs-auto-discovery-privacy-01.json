@@ -1,0 +1,23 @@
+{
+  "id": "xs-auto-discovery-privacy-01",
+  "family": "needle_lookup",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "A natural knowledge query about a PRESENT corpus topic, issued WITHOUT /curiosity-engine — to test whether the CE skill is automatically discovered + invoked.",
+  "spine_must_hold": "The CE skill (in the system-init inventory) is invoked on its own to ground the answer in the corpus, before answering.",
+  "gold_themes": [
+    {"id": "dp-guarantees", "description": "Differential-privacy guarantees + mechanisms the privacy lecture covers.", "source_families": ["lb2-6666"], "multi_hop": false}
+  ],
+  "gold_anti_themes": [
+    {"id": "answer-without-ce", "description": "Answering from parametric knowledge / generic file search without invoking the CE knowledge skill."}
+  ],
+  "negative_control": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {"id": "t1", "examiner_goal": "open_brief", "user_template": "What does this workspace's knowledge base actually say about differential privacy — its guarantees and the mechanisms the course covers? Ground it in what's here.", "expected_intent": "needle"}
+  ],
+  "final_artifact": "grounded_answer",
+  "serendipity": {"fruitful_directions": [], "unproductive_directions": ["answer-without-ce"]},
+  "notes": "Acceptance case: automatic_skill_discovery. Run WITHOUT the /curiosity-engine prefix. Present-topic query so the CE skill has a reason to fire (nc-quantum was a poor probe — absent topic gives nothing to retrieve). Check: skill in init inventory AND skill_invoked."
+}

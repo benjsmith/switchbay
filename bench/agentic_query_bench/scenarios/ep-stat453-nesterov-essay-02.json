@@ -1,0 +1,70 @@
+{
+  "id": "ep-stat453-nesterov-essay-02",
+  "family": "essay_planning",
+  "corpus": "lecturebank_phase2",
+  "workspace_hint": "~/.cache/sy-phase2-bench/ws",
+  "persona": "student",
+  "task_intent": "Plan a short essay explaining why Nesterov momentum differs from classical momentum and when Adam changes the practical story.",
+  "spine_must_hold": "Must correctly contrast Nesterov look-ahead vs classical momentum and state one practical Adam difference; no architecture digression as core.",
+  "gold_themes": [
+    {
+      "id": "nesterov-lookahead",
+      "description": "Nesterov evaluates gradient at a look-ahead point after momentum step.",
+      "source_families": ["lb2-1498"],
+      "multi_hop": false
+    },
+    {
+      "id": "adam-adaptive",
+      "description": "Adam uses per-parameter adaptive rates via moment estimates vs global rate + momentum.",
+      "source_families": ["lb2-1498"],
+      "multi_hop": false
+    },
+    {
+      "id": "bridge-deep-training",
+      "description": "Light bridge to why this matters for deep model training in the course.",
+      "source_families": ["lb2-1498", "lb2-1499"],
+      "multi_hop": true
+    }
+  ],
+  "gold_anti_themes": [
+    {
+      "id": "fairness-harms-core",
+      "description": "Making fairness harms the essay core."
+    }
+  ],
+  "negative_control": null,
+  "poisoned_analysis": null,
+  "whitelist_adopt_system_questions": false,
+  "turns": [
+    {
+      "id": "t1",
+      "examiner_goal": "open_brief",
+      "user_template": "Plan a short technical essay on Nesterov vs classical momentum, and where Adam fits, using our optimization lecture.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t2",
+      "examiner_goal": "sharpen",
+      "user_template": "Max 1000 words; one figure description slot; must include a comparison table structure.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t3",
+      "examiner_goal": "multi_hop",
+      "user_template": "Add a short bridge to deep network training context without becoming a CNN architecture essay.",
+      "expected_intent": "compose_analysis"
+    },
+    {
+      "id": "t4",
+      "examiner_goal": "gap_stress",
+      "user_template": "What is still thin, and what should I ask next?",
+      "expected_intent": "compose_analysis"
+    }
+  ],
+  "final_artifact": "essay_outline",
+  "serendipity": {
+    "fruitful_directions": ["learning-rate-schedules-aside"],
+    "unproductive_directions": ["fairness-harms-core"]
+  },
+  "notes": "Second essay pilot for family coverage."
+}
