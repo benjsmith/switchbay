@@ -210,16 +210,19 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
               to disk.
             </p>
           )}
-          {/* Ollama is configured via Local agent model (below llama.cpp);
-              hide the redundant top-level Ollama provider card. It remains
-              available in the model ladder provider dropdown. */}
-          {info?.providers.filter((p) => p.id !== "ollama").map((p) => {
+          {/* Local backends (llama.cpp / MLX / Ollama) live only in the
+              Local agent model section below — hide their provider cards
+              here so cloud vs local isn't duplicated/confusing. They
+              remain available in the model ladder provider dropdown. */}
+          {info?.providers
+            .filter((p) => p.id !== "ollama" && p.id !== "llamacpp" && p.id !== "mlx")
+            .map((p) => {
             const s = status[p.id];
             const isDefault = info.default_provider === p.id;
             const isSubscription = p.category === "subscription";
             // Anything that doesn't take a user-typed API key (subscription
-            // CLIs, local llama.cpp) shares the
-            // "no key field" UI: status badge + Test + Make-default.
+            // CLIs) shares the "no key field" UI: status badge + Test +
+            // Make-default.
             const isKeyless = p.category !== "byok";
             return (
               <React.Fragment key={p.id}>
@@ -228,11 +231,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
                   <span className="sy-settings-provider-label">{p.label}</span>
                   <span className="sy-settings-provider-meta">
                     {p.category}
-                    {p.id === "llamacpp"
-                      ? (p.models?.[0] || p.chosen_model
-                        ? ` · ${p.models?.[0] || p.chosen_model}`
-                        : " · managed GGUF")
-                      : ` · ${p.default_model}`}
+                    {` · ${p.default_model}`}
                   </span>
                   {isDefault && (
                     <span className="sy-settings-badge sy-settings-badge--default">
@@ -243,18 +242,6 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
                     <span className="sy-settings-badge sy-settings-badge--ok">
                       {isKeyless ? "available" : "key set"}
                     </span>
-                  ) : p.id === "llamacpp" ? (
-                    // Install entry point — jumps to Local agent model panel.
-                    <button
-                      type="button"
-                      className="sy-settings-badge sy-settings-badge--action"
-                      title="Install a local model — jumps to the installer below"
-                      onClick={() =>
-                        window.dispatchEvent(new CustomEvent("sy:focus-localllm-install"))
-                      }
-                    >
-                      not installed
-                    </button>
                   ) : (
                     <span className="sy-settings-badge">
                       {isKeyless ? "not installed" : "no key"}
@@ -262,10 +249,40 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
                   )}
                 </div>
                 {isKeyless ? (
-                  <div className="sy-settings-row">
-                    {p.auth_flow === "github_device" && (
+                  p.auth_flow === "github_device" ? (
+                    /* Full-width stack: device-flow UI must not share a
+                     * horizontal flex row with long auth_help (that
+                     * collapses help to one char/line). */
+                    <div className="sy-settings-keyless-stack">
                       <CopilotAuth authed={p.has_key} onChanged={() => void refresh()} />
-                    )}
+                      <div className="sy-settings-keyless-footer">
+                        <p className="sy-settings-help">
+                          {p.has_key
+                            ? "Signed in — subscription auth is reused; no API key stored."
+                            : "Browser sign-in. Needs an active Copilot subscription. Personal accounts: Sign in. Enterprise / EMU: Enterprise… first."}
+                        </p>
+                        <button
+                          type="button"
+                          className="sy-confirm-btn"
+                          onClick={() => testKey(p.id)}
+                          disabled={busy !== null || !p.has_key}
+                        >
+                          {busy === `test:${p.id}` ? "Testing…" : "Test"}
+                        </button>
+                        {p.has_key && !isDefault && (
+                          <button
+                            type="button"
+                            className="sy-confirm-btn"
+                            onClick={() => makeDefault(p.id)}
+                            disabled={busy !== null}
+                          >
+                            Make default
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  ) : (
+                  <div className="sy-settings-row">
                     <span className="sy-settings-help" style={{ flex: 1, margin: 0 }}>
                       {linkify(
                         p.has_key
@@ -294,6 +311,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
                       </button>
                     )}
                   </div>
+                  )
                 ) : (
                   <div className="sy-settings-row">
                     <input
@@ -358,12 +376,10 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
                   </p>
                 )}
               </div>
-              {/* Ornith's installer sits directly under its provider
-                  card — the "not installed" pill scrolls here + arms it. */}
-              {p.id === "llamacpp" && <LocalModelPanel open={open} onClose={onClose} />}
               </React.Fragment>
             );
           })}
+          <LocalModelPanel open={open} onClose={onClose} />
           <LadderPanel open={open} providers={info?.providers ?? []} />
           <PacksPanel open={open} />
           <McpServersPanel open={open} />
@@ -676,7 +692,7 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
         )}
       </div>
       {picker && (
-        <div className="sy-settings-ladder-row">
+        <div className="sy-settings-ladder-row sy-settings-ladder-row--effort">
           <span className="sy-settings-ladder-label">
             <strong>Rail effort</strong>
           </span>
@@ -747,12 +763,12 @@ function EffortSelect({
   if (options.length === 0) return null;
   return (
     <label
-      style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12 }}
+      className="sy-effort-select"
       title="How hard this model thinks. Higher costs more and is slower."
     >
-      {label}
+      <span className="sy-effort-select-meta" title={label}>{label}</span>
       <select
-        className="sy-settings-input"
+        className="sy-settings-input sy-effort-select-input"
         value={selected}
         disabled={busy}
         onChange={(e) => void choose(e.target.value)}
@@ -1857,18 +1873,32 @@ type SettingsBody = {
 
 function CopilotAuth({ authed, onChanged }: { authed: boolean; onChanged: () => void }) {
   const [pending, setPending] = useState<
-    { code: string; uri: string; host?: string; ssoHint?: string } | null
+    {
+      code: string; uri: string; host?: string;
+      ssoHint?: string; ssoUri?: string;
+    } | null
   >(null);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  // Enterprise deployments (GHES, <slug>.ghe.com) have their own OAuth
-  // endpoints, and enterprise-managed accounts on github.com have to
-  // reach their IdP before the device code will bind to the right
-  // identity. Both are invisible on the default path, so the panel
-  // offers a host field + the SSO pointer rather than leaving people
-  // staring at a login page that only offers password/Google.
+  // Enterprise deployments (GHES, <slug>.ghe.com) and EMU accounts on
+  // github.com need a host / SSO URL before the device code binds to
+  // the right identity. Personal accounts leave the field blank.
   const [showEnterprise, setShowEnterprise] = useState(false);
   const [host, setHost] = useState("");
+
+  // Open a URL in the same browser via a real <a> click. window.open
+  // with "noopener" returns null; a blank pre-opened URL throws
+  // OSStatus -50 in a PWA.
+  const openInBrowser = (url: string) => {
+    if (!url) return;
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  };
 
   // Poll while a sign-in is out; GitHub grants land daemon-side.
   useEffect(() => {
@@ -1883,43 +1913,70 @@ function CopilotAuth({ authed, onChanged }: { authed: boolean; onChanged: () => 
         if (b.authed) {
           setPending(null);
           onChanged();
-        } else if (b.login?.state === "error") {
+        } else if (b.login?.state === "error" || b.login?.state === "cancelled") {
           setPending(null);
-          setErr(b.login.error ?? "sign-in failed");
+          setErr(b.login.error || "sign-in failed");
         }
       } catch { /* transient */ }
     }, 3000);
     return () => window.clearInterval(iv);
   }, [pending, onChanged]);
 
-  const start = async () => {
+  const start = async (opts?: { enterprise?: boolean }) => {
     if (busy) return;
+    const useEnterprise = !!opts?.enterprise || showEnterprise;
+    if (useEnterprise && !host.trim()) {
+      setShowEnterprise(true);
+      setErr("Enter your enterprise SSO URL or host, then Sign in.");
+      return;
+    }
     setBusy(true);
     setErr(null);
     try {
       const r = await fetch("/api/copilot/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(host.trim() ? { host: host.trim() } : {}),
+        body: JSON.stringify(
+          useEnterprise && host.trim() ? { host: host.trim() } : {},
+        ),
       });
       const b = await r.json().catch(() => ({} as Record<string, unknown>));
       if (!r.ok) {
-        setErr(String((b as { error?: string }).error ?? r.status));
+        setErr(String((b as { error?: string }).error || r.status));
         return;
       }
       const body = b as {
         user_code?: string; verification_uri?: string;
-        host?: string; sso_hint?: string;
+        host?: string; sso_hint?: string; sso_uri?: string;
       };
       const code = String(body.user_code ?? "");
       const uri = String(body.verification_uri ?? "");
-      setPending({ code, uri, host: body.host, ssoHint: body.sso_hint });
-      window.open(uri, "_blank", "noopener");
+      const ssoUri = String(body.sso_uri || "").trim();
+      const ssoHint = String(body.sso_hint || "").trim();
+      setPending({
+        code, uri, host: body.host,
+        ssoHint: ssoHint || undefined,
+        ssoUri: ssoUri || undefined,
+      });
+      // EMU: open SSO first (same browser) so the device-code page
+      // binds to the enterprise IdP session — cold /login/device only
+      // shows password/Google.
+      if (ssoUri && !ssoUri.includes("<your-enterprise>")) {
+        openInBrowser(ssoUri);
+      } else {
+        openInBrowser(uri);
+      }
     } catch (e) {
       setErr((e as Error).message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const cancel = async () => {
+    await fetch("/api/copilot/login/cancel", { method: "POST" }).catch(() => null);
+    setPending(null);
+    setErr(null);
   };
 
   const signOut = async () => {
@@ -1929,96 +1986,159 @@ function CopilotAuth({ authed, onChanged }: { authed: boolean; onChanged: () => 
 
   if (authed) {
     return (
-      <button type="button" className="sy-confirm-btn" onClick={() => void signOut()}>
-        Sign out
-      </button>
+      <div className="sy-copilot-auth-actions">
+        <button type="button" className="sy-confirm-btn" onClick={() => void signOut()}>
+          Sign out
+        </button>
+      </div>
     );
   }
+
   return (
-    <span style={{
-      display: "inline-flex", alignItems: "flex-end", gap: 8,
-      flexShrink: 0, flexDirection: "column",
-    }}>
-      <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-        {pending ? (
-          <span className="sy-settings-help" style={{ margin: 0 }}>
-            Enter code <code style={{ fontWeight: 700, fontSize: 13 }}>{pending.code}</code>{" "}
-            at <a href={pending.uri} target="_blank" rel="noreferrer">{pending.uri}</a> — waiting…
-          </span>
-        ) : (
-          <>
-            <button
-              type="button"
+    <div className="sy-copilot-auth">
+      {pending ? (
+        <div className="sy-copilot-pending">
+          {pending.ssoUri && !pending.ssoUri.includes("<your-enterprise>") ? (
+            <>
+              <div>
+                <strong>1.</strong> Complete SSO in the same browser:{" "}
+                <a href={pending.ssoUri} target="_blank" rel="noreferrer">
+                  {pending.ssoUri}
+                </a>
+              </div>
+              <div>
+                <strong>2.</strong> Enter code <code>{pending.code}</code> at{" "}
+                <a href={pending.uri} target="_blank" rel="noreferrer">{pending.uri}</a>
+                {" "}— waiting for GitHub…
+              </div>
+            </>
+          ) : (
+            <div>
+              Enter code <code>{pending.code}</code> at{" "}
+              <a href={pending.uri} target="_blank" rel="noreferrer">{pending.uri}</a>
+              {" "}— waiting for GitHub…
+            </div>
+          )}
+          {pending.ssoHint && !pending.ssoUri && (
+            <div>
+              Wrong account? Sign in at <code>{pending.ssoHint}</code> first,
+              then Cancel and retry.
+            </div>
+          )}
+          <div className="sy-copilot-pending-actions">
+            {pending.ssoUri && !pending.ssoUri.includes("<your-enterprise>") && (
+              <a
+                className="sy-confirm-btn"
+                href={pending.ssoUri}
+                target="_blank"
+                rel="noreferrer"
+              >
+                Open SSO
+              </a>
+            )}
+            <a
               className="sy-confirm-btn sy-confirm-btn--primary"
-              onClick={() => void start()}
-              disabled={busy}
-              title={host.trim()
-                ? `Opens ${host.trim()} in your browser`
-                : "Opens github.com in your browser"}
+              href={pending.uri}
+              target="_blank"
+              rel="noreferrer"
             >
-              {busy ? "Starting…" : "Sign in with GitHub"}
-            </button>
+              Open code page
+            </a>
             <button
               type="button"
               className="sy-confirm-btn"
-              onClick={() => setShowEnterprise((v) => !v)}
-              title="GitHub Enterprise Server / ghe.com, or SSO-managed accounts"
+              onClick={() => void cancel()}
+              title="Cancel and free the sign-in slot for a retry"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="sy-copilot-auth-actions">
+            <button
+              type="button"
+              className="sy-confirm-btn sy-confirm-btn--primary"
+              onClick={() => void start({ enterprise: false })}
+              disabled={busy}
+              title="Personal github.com account"
+            >
+              {busy && !showEnterprise ? "Starting…" : "Sign in with GitHub"}
+            </button>
+            <button
+              type="button"
+              className={
+                "sy-confirm-btn" + (showEnterprise ? " sy-confirm-btn--primary" : "")
+              }
+              onClick={() => {
+                setShowEnterprise((v) => !v);
+                setErr(null);
+              }}
+              title="GitHub Enterprise Server, ghe.com, or EMU SSO"
             >
               Enterprise…
             </button>
-          </>
-        )}
-      </span>
-      {showEnterprise && !pending && (
-        <span className="sy-settings-help" style={{ margin: 0, textAlign: "right", maxWidth: 420 }}>
-          <input
-            type="text"
-            value={host}
-            placeholder="acme.ghe.com or github.example.com"
-            onChange={(e) => setHost(e.target.value)}
-            style={{ width: "100%", marginBottom: 4 }}
-            aria-label="GitHub Enterprise host"
-          />
-          Leave blank for github.com. If your account is{" "}
-          <strong>managed by your organisation</strong> (Enterprise Managed
-          User), the generic GitHub login page won't offer your SSO provider
-          — sign in at{" "}
-          <code>github.com/enterprises/&lt;your-enterprise&gt;/sso</code>{" "}
-          first, then start the sign-in here.
+          </div>
+          {showEnterprise && (
+            <div className="sy-copilot-enterprise">
+              <label htmlFor="sy-copilot-host">Enterprise SSO URL or host</label>
+              <input
+                id="sy-copilot-host"
+                type="text"
+                className="sy-ws-input"
+                value={host}
+                placeholder="github.com/enterprises/acme  or  acme.ghe.com"
+                onChange={(e) => setHost(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void start({ enterprise: true });
+                  }
+                }}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <p className="sy-settings-blurb">
+                <strong>Personal:</strong> leave this closed and use{" "}
+                <em>Sign in with GitHub</em>.
+                <br />
+                <strong>EMU / org SSO:</strong> paste{" "}
+                <code>github.com/enterprises/&lt;slug&gt;/sso</code>, then Sign in —
+                we open SSO first, then the device code (same browser).
+                <br />
+                <strong>GHES / ghe.com:</strong> paste the host only
+                (e.g. <code>acme.ghe.com</code>).
+              </p>
+              <div className="sy-copilot-auth-actions">
+                <button
+                  type="button"
+                  className="sy-confirm-btn sy-confirm-btn--primary"
+                  onClick={() => void start({ enterprise: true })}
+                  disabled={busy || !host.trim()}
+                >
+                  {busy ? "Starting…" : "Sign in with Enterprise"}
+                </button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      {err && (
+        <span className="sy-settings-status sy-settings-status--err" style={{ margin: 0 }}>
+          {err}
         </span>
       )}
-      {pending?.ssoHint && (
-        <span className="sy-settings-help" style={{ margin: 0, textAlign: "right", maxWidth: 420 }}>
-          Signing in to <strong>{pending.host}</strong>. Wrong account, or no
-          SSO option on that page? Authenticate at{" "}
-          <code>{pending.ssoHint}</code> first, then retry.
-        </span>
-      )}
-      {err && <span className="sy-settings-status sy-settings-status--err" style={{ margin: 0 }}>{err}</span>}
-    </span>
+    </div>
   );
 }
 
 
-// ── Local agent model panel (llama.cpp GGUF + Ollama) ───────────────
-// One-click install, RAM-planned. On completion the model ladder's
-// trivial + normal rungs point at the local model — cheap chores stop
-// burning provider tokens; planning/review keeps the best models.
-// Ollama is managed here (not as a separate top-level provider card).
+// ── Local agent model panel (llama.cpp / MLX / Ollama) ───────────────
+// One section: pick a server type, see installed models for it, then
+// search/install. Cloud providers stay above; no duplicate local cards.
 
-type LocalCand = {
-  id: string;
-  label: string;
-  backend?: string;
-  blurb?: string;
-  why?: string;
-  quant?: string;
-  est_gb?: number;
-  weights_gb?: number;
-  installed?: boolean;
-  ollama_tag?: string;
-  rank?: number;
-};
+type LocalBackendId = "llamacpp" | "mlx" | "ollama";
 
 type LocalInstalled = {
   id: string;
@@ -2047,6 +2167,7 @@ type LocalBackends = {
   mlx?: {
     supported?: boolean; installed?: boolean; label?: string;
     reason?: string; install_hint?: string; version?: string | null;
+    binary?: string | null;
   };
 };
 
@@ -2059,6 +2180,8 @@ type SearchHit = {
   last_modified?: string | null;
   trusted?: boolean;
   off_task?: boolean;
+  /** UI rank tag after client-side ranking */
+  _tier?: "exact" | "match" | "alt";
 };
 
 type ResolvedCand = {
@@ -2091,321 +2214,125 @@ type LocalLlmBody = {
     weights_gb?: number;
     ctx_options?: { ctx: number; est_gb: number; recommended?: boolean; experimental?: boolean }[];
   };
-  top3?: { ok?: boolean; candidates?: LocalCand[]; reason?: string; ram_gb?: number };
+  top3?: { ok?: boolean; candidates?: unknown[]; reason?: string; ram_gb?: number };
   installed?: LocalInstalled[];
   active?: string | null;
   servers?: LocalServer[];
   server_url?: string | null;
   backends?: LocalBackends;
-  config: {
+  config?: {
     model_label?: string;
     quant?: string;
     ctx?: number;
-    reasoning?: boolean;
     port?: number;
+    reasoning?: boolean;
     candidate_id?: string;
     alias?: string;
+    backend?: string;
   } | null;
-  server_healthy: boolean;
-  install: { state: string; step?: string; percent?: number; error?: string | null } | null;
+  server_healthy?: boolean;
+  install?: {
+    state?: string;
+    step?: string;
+    percent?: number;
+    error?: string | null;
+    candidate_id?: string;
+  } | null;
 };
 
-/**
- * Install any local model, not just the curated three.
- *
- * The catalog is a hand-maintained floor and goes stale between model
- * releases, so this is the escape hatch: paste any llama.cpp-compatible
- * GGUF repo, any MLX repo (Apple silicon), or any Ollama tag. Sizes and
- * quant choice come from the repo's real file list at resolve time, so
- * nothing has to be pre-registered. Search hits the live HF index for
- * the same reason.
- */
-function CustomModelInstall({
-  backends, ram, onInstalled,
-}: {
-  backends: LocalBackends | undefined;
-  ram: number;
-  onInstalled: () => void;
-}) {
-  const mlxOk = !!backends?.mlx?.supported;
-  const ollamaOk = !!backends?.ollama?.available;
-  const [backend, setBackend] = useState<"llamacpp" | "mlx" | "ollama">("llamacpp");
-  const [text, setText] = useState("");
-  const [sort, setSort] = useState<"downloads" | "trendingScore" | "lastModified">("downloads");
-  const [hits, setHits] = useState<SearchHit[] | null>(null);
-  const [cand, setCand] = useState<ResolvedCand | null>(null);
-  const [busy, setBusy] = useState<"" | "search" | "resolve" | "install">("");
-  const [err, setErr] = useState<string | null>(null);
+type SortKey = "downloads" | "trendingScore" | "lastModified";
 
-  const isOllama = backend === "ollama";
-  const placeholder = isOllama
-    ? "qwen3.6:27b"
-    : backend === "mlx"
-      ? "mlx-community/Qwen3.6-27B-4bit"
-      : "unsloth/Qwen3.6-27B-GGUF";
-
-  const search = async () => {
-    if (isOllama) return;   // Ollama has no public search API
-    setBusy("search"); setErr(null); setCand(null);
-    try {
-      const qs = new URLSearchParams({
-        q: text.trim(), backend, sort, limit: "12",
-      });
-      const r = await fetch(`/api/local-models/search?${qs}`);
-      const b = await r.json().catch(() => ({}));
-      if (!r.ok) { setErr(String(b.error ?? `HTTP ${r.status}`)); return; }
-      setHits((b.results ?? []) as SearchHit[]);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally { setBusy(""); }
+/** Rank HF search hits for the install list (settings "rail"). */
+function rankLocalSearchHits(
+  query: string,
+  hits: SearchHit[],
+  sort: SortKey,
+): SearchHit[] {
+  const q = query.trim().toLowerCase();
+  const bySort = (a: SearchHit, b: SearchHit) => {
+    if (sort === "trendingScore") {
+      return (Number(b.trending) || 0) - (Number(a.trending) || 0);
+    }
+    if (sort === "lastModified") {
+      return String(b.last_modified || "").localeCompare(String(a.last_modified || ""));
+    }
+    return (Number(b.downloads) || 0) - (Number(a.downloads) || 0);
   };
 
-  const resolve = async (id?: string) => {
-    const value = (id ?? text).trim();
-    if (!value) return;
-    setBusy("resolve"); setErr(null); setHits(null);
-    try {
-      const r = await fetch("/api/local-models/resolve", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isOllama ? { backend, ollama_tag: value } : { backend, repo: value },
-        ),
-      });
-      const b = (await r.json().catch(() => ({}))) as ResolvedCand;
-      if (!r.ok || !b.ok) { setErr(b.error ?? `HTTP ${r.status}`); return; }
-      setCand(b);
-      setText(value);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally { setBusy(""); }
-  };
+  // Blank query: up to 8, already sorted by API.
+  if (!q) {
+    return hits.slice(0, 8).map((h) => ({ ...h, _tier: "match" as const }));
+  }
 
-  const install = async () => {
-    if (!cand) return;
-    setBusy("install"); setErr(null);
-    try {
-      const r = await fetch("/api/localllm/install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          isOllama
-            ? { backend, ollama_tag: cand.ollama_tag }
-            : { backend, repo: cand.repo, quant: cand.quant },
-        ),
-      });
-      const b = await r.json().catch(() => ({} as { error?: string }));
-      if (!r.ok) { setErr(b.error ?? `HTTP ${r.status}`); return; }
-      setCand(null); setText("");
-      onInstalled();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally { setBusy(""); }
-  };
+  const exact = hits.filter((h) => h.repo.toLowerCase() === q);
+  const partial = hits
+    .filter((h) => {
+      const r = h.repo.toLowerCase();
+      return r !== q && (r.includes(q) || r.endsWith("/" + q) || r.split("/")[1] === q);
+    })
+    .sort(bySort);
 
-  const mlxBlocked = backend === "mlx" && !backends?.mlx?.installed;
+  // Unambiguous exact (or sole partial that equals path segment)
+  if (exact.length === 1 && partial.length === 0) {
+    const alts = hits
+      .filter((h) => h.repo !== exact[0].repo)
+      .sort(bySort)
+      .slice(0, 3)
+      .map((h) => ({ ...h, _tier: "alt" as const }));
+    return [{ ...exact[0], _tier: "exact" }, ...alts];
+  }
+  if (exact.length === 1) {
+    const alts = partial.slice(0, 3).map((h) => ({ ...h, _tier: "alt" as const }));
+    // If few partials, pad with non-match top downloads
+    if (alts.length < 3) {
+      const used = new Set([exact[0].repo, ...alts.map((a) => a.repo)]);
+      for (const h of [...hits].sort(bySort)) {
+        if (used.has(h.repo)) continue;
+        alts.push({ ...h, _tier: "alt" });
+        if (alts.length >= 3) break;
+      }
+    }
+    return [{ ...exact[0], _tier: "exact" }, ...alts];
+  }
 
-  return (
-    <details className="sy-settings-adv" style={{ marginBottom: 10 }}>
-      <summary className="sy-settings-blurb" style={{ cursor: "pointer", fontWeight: 600 }}>
-        Install a specific model…
-      </summary>
-      <p className="sy-settings-blurb" style={{ marginTop: 6 }}>
-        Paste any model id — the suggestions above are a starting point, not
-        the whole list. Sizes and quantisation are read from the repo itself,
-        so anything published works, including models released after this
-        build.
-      </p>
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 6 }}>
-        {(["llamacpp", "mlx", "ollama"] as const).map((b) => {
-          const disabled = (b === "mlx" && !mlxOk) || (b === "ollama" && !ollamaOk);
-          const label = b === "llamacpp" ? "llama.cpp (GGUF)"
-            : b === "mlx" ? "MLX (Apple silicon)" : "Ollama";
-          return (
-            <button
-              key={b}
-              type="button"
-              className={backend === b ? "sy-confirm-btn sy-confirm-btn--primary" : "sy-confirm-btn"}
-              disabled={disabled}
-              onClick={() => { setBackend(b); setHits(null); setCand(null); setErr(null); }}
-              title={
-                disabled && b === "mlx" ? (backends?.mlx?.reason ?? "unavailable")
-                  : disabled ? "Not installed on this machine"
-                    : label
-              }
-            >
-              {label}
-            </button>
-          );
-        })}
-      </div>
-
-      {mlxBlocked && (
-        <p className="sy-settings-blurb">
-          MLX runs on this Mac but <code>mlx-lm</code> isn't installed yet —{" "}
-          <code>{backends?.mlx?.install_hint ?? "uv tool install mlx-lm"}</code>,
-          then reopen Settings.
-        </p>
-      )}
-
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-        <input
-          type="text"
-          value={text}
-          placeholder={placeholder}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void resolve(); } }}
-          style={{ flex: "1 1 260px", minWidth: 200 }}
-          aria-label="Model id"
-        />
-        <button
-          type="button"
-          className="sy-confirm-btn"
-          disabled={!!busy || !text.trim()}
-          onClick={() => void resolve()}
-        >
-          {busy === "resolve" ? "Checking…" : "Check"}
-        </button>
-        {!isOllama && (
-          <button
-            type="button"
-            className="sy-confirm-btn"
-            disabled={!!busy}
-            onClick={() => void search()}
-            title="Search Hugging Face live"
-          >
-            {busy === "search" ? "Searching…" : "Search"}
-          </button>
-        )}
-        {!isOllama && (
-          <select
-            value={sort}
-            onChange={(e) => setSort(e.target.value as typeof sort)}
-            aria-label="Sort search by"
-            style={{ fontSize: 12 }}
-          >
-            <option value="downloads">most downloaded</option>
-            <option value="trendingScore">trending</option>
-            <option value="lastModified">recently updated</option>
-          </select>
-        )}
-      </div>
-
-      {isOllama && (
-        <p className="sy-settings-blurb" style={{ marginTop: 6 }}>
-          Any tag from the Ollama library — <code>ollama pull</code> does the
-          rest. Browse at <code>ollama.com/library</code>.
-        </p>
-      )}
-
-      {hits && hits.length === 0 && (
-        <p className="sy-settings-blurb">No matches.</p>
-      )}
-      {hits && hits.length > 0 && (
-        <div style={{ marginTop: 8 }}>
-          {hits.map((h) => (
-            <div key={h.repo} className="sy-settings-local-cand">
-              <div>
-                <strong>{h.repo}</strong>
-                {h.trusted && (
-                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
-                    · known publisher
-                  </span>
-                )}
-                {h.off_task && (
-                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
-                    · roleplay finetune
-                  </span>
-                )}
-              </div>
-              <div style={{ fontSize: 12, opacity: 0.85 }}>
-                {typeof h.downloads === "number" ? `${h.downloads.toLocaleString()} downloads` : ""}
-                {typeof h.likes === "number" ? ` · ${h.likes} likes` : ""}
-                {h.last_modified ? ` · updated ${String(h.last_modified).slice(0, 10)}` : ""}
-              </div>
-              <div className="sy-settings-local-cand-actions">
-                <button
-                  type="button"
-                  className="sy-confirm-btn"
-                  disabled={!!busy}
-                  onClick={() => void resolve(h.repo)}
-                >
-                  Check
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {cand && (
-        <div className="sy-settings-local-cand" style={{ marginTop: 8 }}>
-          <div>
-            <strong>{cand.label}</strong>
-            <span style={{ opacity: 0.7 }}> · {cand.backend}</span>
-            {cand.quant && <span style={{ opacity: 0.7 }}> · {cand.quant}</span>}
-            {cand.weights_gb != null && (
-              <span style={{ opacity: 0.7 }}> · {cand.weights_gb} GB weights</span>
-            )}
-          </div>
-          <div style={{ fontSize: 12, opacity: 0.85 }}>
-            {cand.est_gb != null && `~${cand.est_gb} GB while serving on ~${ram} GB RAM. `}
-            {cand.fits === false && (
-              <strong>Tight fit — it will run heavily quantised or swap. </strong>
-            )}
-            {cand.off_task && (
-              <>This looks like a roleplay/uncensored finetune; fine to run,
-              but weaker at the tool-calling the agents rely on. </>
-            )}
-            {cand.installed && <>Already installed. </>}
-          </div>
-          {cand.quants_available && cand.quants_available.length > 1 && (
-            <div style={{ fontSize: 12, opacity: 0.75 }}>
-              Other quants: {cand.quants_available.join(", ")}
-            </div>
-          )}
-          <div className="sy-settings-local-cand-actions">
-            <button
-              type="button"
-              className="sy-confirm-btn sy-confirm-btn--primary"
-              disabled={!!busy || cand.installed}
-              onClick={() => void install()}
-            >
-              {busy === "install" ? "Starting…"
-                : cand.installed ? "Installed"
-                  : isOllama ? "Pull with Ollama" : "Install"}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {err && <p className="sy-settings-status sy-settings-status--err">{err}</p>}
-    </details>
-  );
+  // Multiple matches: up to 5 matches, then up to 3 alternatives
+  const matches = (exact.length ? exact : partial).slice(0, 5)
+    .map((h) => ({ ...h, _tier: (exact.some((e) => e.repo === h.repo) ? "exact" : "match") as SearchHit["_tier"] }));
+  const used = new Set(matches.map((m) => m.repo));
+  const alts: SearchHit[] = [];
+  for (const h of [...hits].sort(bySort)) {
+    if (used.has(h.repo)) continue;
+    alts.push({ ...h, _tier: "alt" });
+    if (alts.length >= 3) break;
+  }
+  if (matches.length === 0) {
+    // No string matches — show top 8 by sort as soft results
+    return hits.slice(0, 8).map((h) => ({ ...h, _tier: "match" as const }));
+  }
+  return [...matches, ...alts];
 }
-
 
 function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [body, setBody] = useState<LocalLlmBody | null>(null);
-  const [ctx, setCtx] = useState<number | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [backend, setBackend] = useState<LocalBackendId>("llamacpp");
+  const [query, setQuery] = useState("");
+  const [sort, setSort] = useState<SortKey>("downloads");
+  const [hits, setHits] = useState<SearchHit[] | null>(null);
+  const [searchNote, setSearchNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState<"" | "search" | "install" | "activate" | "remove" | "other">("");
   const [err, setErr] = useState<string | null>(null);
+  const [keepOthers, setKeepOthers] = useState(true);
   const sectionRef = useRef<HTMLElement>(null);
-  const installBtnRef = useRef<HTMLButtonElement>(null);
-  // Power-user harness editor (collapsed by default; applies silently).
   const [harness, setHarness] = useState<{ text: string; lines: number; refine_lines: number; path: string } | null>(null);
   const [harnessDraft, setHarnessDraft] = useState("");
   const [harnessSaved, setHarnessSaved] = useState(false);
 
-  // The llama.cpp provider card's "not installed" pill scrolls here and
-  // arms the Install button so the user can press Enter (or click) to
-  // start. No-op if the button isn't rendered (already installed /
-  // installing / unsupported machine) — the scroll still lands.
   useEffect(() => {
-    const onFocus = () => {
+    const onFocus = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ backend?: string }>).detail;
+      const b = detail?.backend;
+      if (b === "mlx" || b === "llamacpp" || b === "ollama") setBackend(b);
       sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-      window.setTimeout(() => installBtnRef.current?.focus(), 400);
     };
     window.addEventListener("sy:focus-localllm-install", onFocus);
     return () => window.removeEventListener("sy:focus-localllm-install", onFocus);
@@ -2425,9 +2352,7 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
 
   useEffect(() => {
     if (!open) return;
-    void load().then((b) => {
-      if (b?.plan.ok && b.plan.ctx) setCtx((cur) => cur ?? b.plan.ctx!);
-    });
+    void load();
   }, [open]);
 
   const installing = body?.install?.state === "running";
@@ -2437,54 +2362,178 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     return () => window.clearInterval(iv);
   }, [open, installing]);
 
-  const install = async (candidateId?: string) => {
-    if (busy) return;
-    setBusy(true);
+  useEffect(() => {
+    if (!open) return;
+    void fetch("/api/localllm/harness")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h) => { if (h) { setHarness(h); setHarnessDraft(h.text); } })
+      .catch(() => { /* older daemon */ });
+  }, [open]);
+
+  // Clear results when switching server type
+  useEffect(() => {
+    setHits(null);
+    setSearchNote(null);
+    setErr(null);
+    setQuery("");
+  }, [backend]);
+
+  const backends = body?.backends;
+  const mlxSupported = !!backends?.mlx?.supported;
+  const mlxInstalled = !!backends?.mlx?.installed;
+  const ollamaOk = !!backends?.ollama?.available;
+  const ram = body?.top3?.ram_gb ?? body?.plan?.ram_gb ?? 16;
+
+  const installedForBackend = (body?.installed ?? []).filter((m) => {
+    const b = m.backend || "llamacpp";
+    return b === backend;
+  });
+
+  const runSearch = async () => {
+    setBusy("search");
+    setErr(null);
+    setHits(null);
+    setSearchNote(null);
+    try {
+      if (backend === "ollama") {
+        const tag = query.trim();
+        if (!tag) {
+          setSearchNote(
+            "Ollama has no public search index — paste a library tag (e.g. qwen2.5-coder:7b) and Search to resolve it.",
+          );
+          setHits([]);
+          return;
+        }
+        const r = await fetch("/api/local-models/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ backend: "ollama", ollama_tag: tag }),
+        });
+        const b = (await r.json().catch(() => ({}))) as ResolvedCand;
+        if (!r.ok || !b.ok) {
+          setErr(b.error || `HTTP ${r.status}`);
+          setHits([]);
+          return;
+        }
+        setHits([{
+          repo: String(b.ollama_tag || tag),
+          author: "ollama",
+          _tier: "exact",
+          trusted: true,
+        }]);
+        setSearchNote("Resolved Ollama tag — Install to pull.");
+        return;
+      }
+
+      if (backend === "mlx" && !mlxInstalled) {
+        setErr(
+          `MLX runtime not on PATH. Install with: ${
+            backends?.mlx?.install_hint || "uv tool install mlx-lm"
+          }`,
+        );
+        setHits([]);
+        return;
+      }
+
+      const q = query.trim();
+      // Over-fetch so client ranking can pick matches + alternatives.
+      const limit = q ? "40" : "8";
+      const qs = new URLSearchParams({
+        q, backend, sort, limit,
+      });
+      const r = await fetch(`/api/local-models/search?${qs}`);
+      const b = await r.json().catch(() => ({} as {
+        error?: string; results?: SearchHit[];
+      }));
+      if (!r.ok) {
+        setErr(String(b.error || `HTTP ${r.status}`));
+        setHits([]);
+        return;
+      }
+      if (b.error) {
+        setErr(String(b.error));
+        setHits((b.results || []) as SearchHit[]);
+        return;
+      }
+      const raw = (b.results || []) as SearchHit[];
+      const ranked = rankLocalSearchHits(q, raw, sort);
+      setHits(ranked);
+      if (ranked.length === 0) {
+        setSearchNote(q ? "No matches." : "No models returned.");
+      } else if (!q) {
+        setSearchNote(`Top ${ranked.length} by ${
+          sort === "downloads" ? "downloads"
+            : sort === "trendingScore" ? "trending"
+              : "recent updates"
+        }.`);
+      } else {
+        const nExact = ranked.filter((h) => h._tier === "exact").length;
+        const nMatch = ranked.filter((h) => h._tier === "match").length;
+        const nAlt = ranked.filter((h) => h._tier === "alt").length;
+        if (nExact && nMatch + nAlt) {
+          setSearchNote(
+            nExact === 1
+              ? "Exact match first, then similar alternatives."
+              : `${nExact} close matches, then alternatives.`,
+          );
+        } else if (nMatch && nAlt) {
+          setSearchNote(`Up to ${nMatch} matches, then ${nAlt} alternatives.`);
+        } else {
+          setSearchNote(null);
+        }
+      }
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const installHit = async (hit: SearchHit) => {
+    setBusy("install");
     setErr(null);
     try {
+      if (backend === "ollama") {
+        const r = await fetch("/api/localllm/install", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ backend: "ollama", ollama_tag: hit.repo }),
+        });
+        const b = await r.json().catch(() => ({} as { error?: string }));
+        if (!r.ok) { setErr(b.error || `HTTP ${r.status}`); return; }
+        void load();
+        return;
+      }
+      // Resolve first so we get a real quant/size, then install.
+      const res = await fetch("/api/local-models/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backend, repo: hit.repo }),
+      });
+      const cand = (await res.json().catch(() => ({}))) as ResolvedCand;
+      if (!res.ok || !cand.ok) {
+        setErr(cand.error || `resolve: HTTP ${res.status}`);
+        return;
+      }
       const r = await fetch("/api/localllm/install", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...(ctx ? { ctx } : {}),
-          ...(candidateId ? { candidate_id: candidateId } : {}),
+          backend, repo: cand.repo || hit.repo, quant: cand.quant,
         }),
       });
       const b = await r.json().catch(() => ({} as { error?: string }));
-      if (!r.ok) {
-        setErr(b.error ?? `HTTP ${r.status}`);
-        return;
-      }
+      if (!r.ok) { setErr(b.error || `HTTP ${r.status}`); return; }
       void load();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
-
-  const checkUpdates = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      const r = await fetch("/api/local-models/discover", { method: "POST" });
-      if (!r.ok) {
-        setErr(`discover: HTTP ${r.status}`);
-        return;
-      }
-      void load();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const [keepOthers, setKeepOthers] = useState(true);
 
   const activate = async (id: string) => {
-    if (busy) return;
-    setBusy(true);
+    setBusy("activate");
     setErr(null);
     try {
       const r = await fetch("/api/local-models/activate", {
@@ -2493,24 +2542,18 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
         body: JSON.stringify({ id, keep_others: keepOthers }),
       });
       const b = await r.json().catch(() => ({} as { error?: string }));
-      if (!r.ok) {
-        setErr(b.error ?? `activate: HTTP ${r.status}`);
-        return;
-      }
+      if (!r.ok) { setErr(b.error || `activate: HTTP ${r.status}`); return; }
       void load();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
 
   const removeModel = async (id: string) => {
-    if (busy) return;
-    if (!window.confirm(`Remove local model “${id}”? GGUF file is deleted if managed.`)) {
-      return;
-    }
-    setBusy(true);
+    if (!window.confirm(`Remove local model “${id}”?`)) return;
+    setBusy("remove");
     setErr(null);
     try {
       const r = await fetch("/api/local-models/remove", {
@@ -2519,26 +2562,42 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
         body: JSON.stringify({ id }),
       });
       const b = await r.json().catch(() => ({} as { error?: string }));
-      if (!r.ok) {
-        setErr(b.error ?? `remove: HTTP ${r.status}`);
-        return;
-      }
+      if (!r.ok) { setErr(b.error || `remove: HTTP ${r.status}`); return; }
       void load();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
-      setBusy(false);
+      setBusy("");
     }
   };
 
-  // Load the harness (advanced editor) when the panel opens.
-  useEffect(() => {
-    if (!open) return;
-    void fetch("/api/localllm/harness")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((h) => { if (h) { setHarness(h); setHarnessDraft(h.text); } })
-      .catch(() => { /* older daemon — editor stays hidden */ });
-  }, [open]);
+  const toggleReasoning = async (enabled: boolean) => {
+    try {
+      const r = await fetch("/api/localllm/reasoning", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!r.ok) { setErr(`reasoning toggle: HTTP ${r.status}`); return; }
+      void load();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
+
+  const watch = async () => {
+    try {
+      const r = await fetch("/api/localllm/watch", { method: "POST" });
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({} as { error?: string }));
+        setErr(b.error || `HTTP ${r.status}`);
+        return;
+      }
+      onClose();
+    } catch (e) {
+      setErr((e as Error).message);
+    }
+  };
 
   const saveHarness = async () => {
     try {
@@ -2557,80 +2616,123 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
-  const toggleReasoning = async (enabled: boolean) => {
-    try {
-      const r = await fetch("/api/localllm/reasoning", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      if (!r.ok) { setErr(`reasoning toggle: HTTP ${r.status}`); return; }
-      void load();
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  };
-
-  // Open a terminal tailing the server log; the daemon focuses that
-  // pty thread, so close Settings to reveal it.
-  const watch = async () => {
-    try {
-      const r = await fetch("/api/localllm/watch", { method: "POST" });
-      if (!r.ok) {
-        const b = await r.json().catch(() => ({} as { error?: string }));
-        setErr(b.error ?? `HTTP ${r.status}`);
-        return;
-      }
-      onClose();
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-  };
-
   if (body === null) return null;
-  const { plan, config, install: inst } = body;
+  const config = body.config;
+  const inst = body.install;
+  const activeBackend = (config?.backend as LocalBackendId | undefined) || "llamacpp";
+
+  const backendButtons: {
+    id: LocalBackendId; label: string; disabled: boolean; title: string;
+  }[] = [
+    {
+      id: "llamacpp",
+      label: "llama.cpp",
+      disabled: false,
+      title: "Managed llama-server · GGUF models from Hugging Face",
+    },
+    {
+      id: "mlx",
+      label: mlxSupported
+        ? (mlxInstalled ? "MLX" : "MLX · needs mlx-lm")
+        : "MLX",
+      disabled: !mlxSupported,
+      title: !mlxSupported
+        ? (backends?.mlx?.reason || "Apple silicon only")
+        : !mlxInstalled
+          ? (backends?.mlx?.install_hint || "uv tool install mlx-lm")
+          : "Apple-silicon MLX models from Hugging Face",
+    },
+    {
+      id: "ollama",
+      label: "Ollama",
+      disabled: !ollamaOk,
+      title: ollamaOk
+        ? "Ollama tags from the local library"
+        : "Install Ollama to enable",
+    },
+  ];
 
   return (
     <section className="sy-settings-packs" ref={sectionRef}>
       <h3 className="sy-settings-h3">Local agent model</h3>
       <p className="sy-settings-blurb">
-        Hardware-calibrated installs via managed <code>llama-server</code>{" "}
-        (GGUF)
-        {body.backends?.mlx?.supported ? <>, <strong>MLX</strong> on this Mac</> : null}
-        {body.backends?.ollama?.available ? <>, or <strong>Ollama</strong></> : null}
-        . We surface the best fits for this machine (~
-        {body.top3?.ram_gb ?? plan.ram_gb} GB RAM) from a live Hugging Face
-        query — and you can install any model id directly, whether or not
-        it's listed. Installing points ladder{" "}
-        <strong>trivial + normal</strong> at the local model; planning/review
-        stay on your best cloud provider.
+        Run models on this machine (~{ram} GB RAM). Pick a server type,
+        then search Hugging Face (or paste <code>owner/name</code>) to
+        install. Installing points ladder <strong>trivial + normal</strong> at
+        the local model; planning/review stay on your best cloud provider.
       </p>
-      {(body.installed?.length ?? 0) > 0 && (
+
+      {/* Server type */}
+      <div className="sy-copilot-auth-actions" style={{ marginBottom: 10 }}>
+        {backendButtons.map((b) => (
+          <button
+            key={b.id}
+            type="button"
+            className={
+              backend === b.id
+                ? "sy-confirm-btn sy-confirm-btn--primary"
+                : "sy-confirm-btn"
+            }
+            disabled={b.disabled}
+            title={b.title}
+            onClick={() => setBackend(b.id)}
+          >
+            {b.label}
+          </button>
+        ))}
+      </div>
+
+      {backend === "mlx" && mlxSupported && !mlxInstalled && (
+        <p className="sy-settings-blurb" style={{ color: "var(--type-fact)" }}>
+          This Mac supports MLX, but <code>mlx-lm</code> is not on the
+          daemon&apos;s PATH. Install with{" "}
+          <code>{backends?.mlx?.install_hint || "uv tool install mlx-lm"}</code>
+          , then restart the service (<code>make restart</code>).
+        </p>
+      )}
+      {backend === "mlx" && mlxInstalled && (
+        <p className="sy-settings-blurb">
+          MLX runtime ready
+          {backends?.mlx?.binary ? <> (<code>{backends.mlx.binary}</code>)</> : null}
+          . Search or paste an <code>mlx-community/…</code> (or any MLX) repo below.
+        </p>
+      )}
+      {backend === "llamacpp" && (
+        <p className="sy-settings-blurb">
+          GGUF models via managed <code>llama-server</code>. Search Hugging Face
+          or paste <code>owner/name</code> (e.g. <code>unsloth/Qwen3-8B-GGUF</code>).
+        </p>
+      )}
+      {backend === "ollama" && ollamaOk && (
+        <p className="sy-settings-blurb">
+          Paste an Ollama library tag (e.g. <code>qwen2.5-coder:7b</code>) and
+          Search, then Install to pull.
+        </p>
+      )}
+
+      {/* Installed for this backend */}
+      {installedForBackend.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <div className="sy-settings-blurb" style={{ fontWeight: 600 }}>
-            Installed — active model
+            Installed · {backend === "llamacpp" ? "llama.cpp" : backend === "mlx" ? "MLX" : "Ollama"}
           </div>
-          <p className="sy-settings-blurb" style={{ marginTop: 0 }}>
-            Chat and ladder <strong>trivial + normal</strong> use the active
-            model. Multiple GGUF servers can stay warm on different ports
-            (8878–8887) so switching is fast.
-          </p>
-          <label
-            style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}
-            title="When activating a GGUF, leave other llama-server processes running"
-          >
-            <input
-              type="checkbox"
-              checked={keepOthers}
-              onChange={(e) => setKeepOthers(e.target.checked)}
-            />
-            Keep other servers running when switching
-          </label>
-          {body.installed!.map((m) => {
+          {backend === "llamacpp" && (
+            <label
+              style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 6, marginBottom: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={keepOthers}
+                onChange={(e) => setKeepOthers(e.target.checked)}
+              />
+              Keep other servers running when switching
+            </label>
+          )}
+          {installedForBackend.map((m) => {
             const isActive = (body.active || config?.candidate_id) === m.id
               || (config?.alias && m.alias && config.alias === m.alias);
             const server = (body.servers || []).find((s) => s.id === m.id);
-            const port = m.port ?? server?.port ?? config?.port;
+            const port = m.port ?? server?.port ?? (isActive ? config?.port : undefined);
             const alive = server?.alive
               ?? (isActive ? body.server_healthy : false);
             return (
@@ -2642,7 +2744,6 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
                       ACTIVE
                     </span>
                   )}
-                  {m.backend && <span style={{ opacity: 0.7 }}> · {m.backend}</span>}
                   {m.quant && <span style={{ opacity: 0.7 }}> · {m.quant}</span>}
                   {port != null && (
                     <span style={{ opacity: 0.7 }}>
@@ -2663,18 +2764,16 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
                   <button
                     type="button"
                     className={isActive ? "sy-confirm-btn" : "sy-confirm-btn sy-confirm-btn--primary"}
-                    disabled={busy || !!isActive}
+                    disabled={!!busy || !!isActive}
                     onClick={() => void activate(m.id)}
-                    title={isActive ? "Already active" : "Point chat + ladder at this model"}
                   >
                     {isActive ? "Active" : "Use this"}
                   </button>
                   <button
                     type="button"
                     className="sy-confirm-btn"
-                    disabled={busy}
+                    disabled={!!busy}
                     onClick={() => void removeModel(m.id)}
-                    title="Unregister and delete managed GGUF"
                   >
                     Remove
                   </button>
@@ -2684,56 +2783,123 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
           })}
         </div>
       )}
-      {(body.top3?.candidates?.length ?? 0) > 0 && inst?.state !== "running" && (
+
+      {/* Search / install */}
+      <div className="sy-settings-blurb" style={{ fontWeight: 600, marginBottom: 6 }}>
+        Find &amp; install
+      </div>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+        <input
+          type="text"
+          className="sy-ws-input"
+          value={query}
+          placeholder={
+            backend === "ollama"
+              ? "qwen2.5-coder:7b"
+              : backend === "mlx"
+                ? "mlx-community/Qwen3-8B-4bit  (or leave blank to browse)"
+                : "unsloth/Qwen3-8B-GGUF  (or leave blank to browse)"
+          }
+          onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") { e.preventDefault(); void runSearch(); }
+          }}
+          style={{ flex: "1 1 220px", minWidth: 180 }}
+          aria-label="Model id or search"
+          disabled={backend === "mlx" && !mlxInstalled}
+        />
+        {backend !== "ollama" && (
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            aria-label="Sort by"
+            style={{ fontSize: 12 }}
+            disabled={!!busy}
+          >
+            <option value="downloads">most downloaded</option>
+            <option value="trendingScore">trending</option>
+            <option value="lastModified">recently updated</option>
+          </select>
+        )}
+        <button
+          type="button"
+          className="sy-confirm-btn sy-confirm-btn--primary"
+          disabled={!!busy || (backend === "mlx" && !mlxInstalled)}
+          onClick={() => void runSearch()}
+        >
+          {busy === "search" ? "Searching…" : "Search"}
+        </button>
+      </div>
+
+      {searchNote && (
+        <p className="sy-settings-blurb" style={{ marginTop: 0 }}>{searchNote}</p>
+      )}
+
+      {hits && hits.length > 0 && (
         <div style={{ marginBottom: 10 }}>
-          <div className="sy-settings-blurb" style={{ fontWeight: 600 }}>
-            Best fits for this machine
-          </div>
-          {body.top3!.candidates!.map((c) => (
-            <div key={c.id} className="sy-settings-local-cand">
+          {hits.map((h) => (
+            <div key={h.repo + (h._tier || "")} className="sy-settings-local-cand">
               <div>
-                <strong>{c.label}</strong>
-                {c.backend && <span style={{ opacity: 0.7 }}> · {c.backend}</span>}
-                {c.est_gb != null && <span style={{ opacity: 0.7 }}> · ~{c.est_gb} GB</span>}
+                <strong>{h.repo}</strong>
+                {h._tier === "exact" && (
+                  <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: "var(--accent)" }}>
+                    exact
+                  </span>
+                )}
+                {h._tier === "alt" && (
+                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.75 }}>
+                    alternative
+                  </span>
+                )}
+                {h.trusted && (
+                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
+                    · known publisher
+                  </span>
+                )}
+                {h.off_task && (
+                  <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.8 }}>
+                    · roleplay finetune
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: 12, opacity: 0.85 }}>{c.why || c.blurb}</div>
+              {backend !== "ollama" && (
+                <div style={{ fontSize: 12, opacity: 0.85 }}>
+                  {typeof h.downloads === "number" ? `${h.downloads.toLocaleString()} downloads` : ""}
+                  {typeof h.likes === "number" ? ` · ${h.likes} likes` : ""}
+                  {h.last_modified ? ` · updated ${String(h.last_modified).slice(0, 10)}` : ""}
+                </div>
+              )}
               <div className="sy-settings-local-cand-actions">
                 <button
                   type="button"
-                  className="sy-confirm-btn"
-                  ref={c.rank === 1 && !config ? installBtnRef : undefined}
-                  disabled={busy || c.installed}
-                  onClick={() => void install(c.id)}
+                  className="sy-confirm-btn sy-confirm-btn--primary"
+                  disabled={!!busy || inst?.state === "running"}
+                  onClick={() => void installHit(h)}
                 >
-                  {c.installed ? "Installed" : c.backend === "ollama" ? "Pull with Ollama" : "Install"}
+                  {busy === "install" ? "Starting…"
+                    : backend === "ollama" ? "Pull with Ollama" : "Install"}
                 </button>
               </div>
             </div>
           ))}
         </div>
       )}
-      <CustomModelInstall
-        backends={body.backends}
-        ram={body.top3?.ram_gb ?? plan.ram_gb}
-        onInstalled={() => void load()}
-      />
-      <div style={{ marginBottom: 8 }}>
-        <button
-          type="button"
-          className="sy-confirm-btn"
-          disabled={busy}
-          onClick={() => void checkUpdates()}
-          title="Query Hugging Face live for current GGUF/MLX models that fit this machine"
-        >
-          Check for newer local models
-        </button>
-      </div>
-      {!plan.ok && !(body.top3?.candidates?.length) && !(body.installed?.length) ? (
-        <p className="sy-settings-status sy-settings-status--err">
-          {body.top3?.reason || plan.reason}
+
+      {inst?.state === "running" && (
+        <p className="sy-settings-blurb">
+          Installing — {inst.step}
+          {typeof inst.percent === "number" && inst.step?.startsWith("downloading")
+            ? ` (${inst.percent}%)` : ""}
+          …
         </p>
-      ) : config ? (
-        <>
+      )}
+      {inst?.state === "error" && inst.error && (
+        <p className="sy-settings-status sy-settings-status--err">{inst.error}</p>
+      )}
+
+      {/* Active server controls (current backend) */}
+      {config && activeBackend === backend && (
+        <div style={{ marginTop: 8, marginBottom: 8 }}>
           <p className="sy-settings-blurb">
             ✓ Active: <strong>{config.model_label}</strong>
             {config.quant ? ` (${config.quant}, ` : " ("}
@@ -2747,12 +2913,14 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
               type="button"
               className="sy-confirm-btn"
               onClick={() => void watch()}
-              title="Open a terminal tailing the llama-server log to monitor it"
+              title="Open a terminal tailing the server log"
             >
               Watch server
             </button>
-            <label style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 5 }}
-              title="Off (recommended) makes the small model act directly and use far less context; on lets it think first (slower, can loop)">
+            <label
+              style={{ fontSize: 12, display: "flex", alignItems: "center", gap: 5 }}
+              title="Off (recommended) makes the small model act directly; on lets it think first"
+            >
               <input
                 type="checkbox"
                 checked={!!config.reasoning}
@@ -2761,53 +2929,11 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
               model reasoning
             </label>
           </div>
-        </>
-      ) : inst?.state === "running" ? (
-        <p className="sy-settings-blurb">
-          Installing — {inst.step}
-          {typeof inst.percent === "number" && inst.step?.startsWith("downloading")
-            ? ` (${inst.percent}%)` : ""}
-          …
-        </p>
-      ) : (
-        <>
-          <p className="sy-settings-blurb">
-            This machine ({plan.ram_gb} GB RAM) → <strong>{plan.model_label}</strong>,{" "}
-            {plan.quant} quantization, KV cache q8_0, ~{plan.est_gb} GB in use while serving
-            ({plan.weights_gb} GB download).
-          </p>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <label style={{ fontSize: 12 }}>
-              context:{" "}
-              <select
-                value={ctx ?? plan.ctx}
-                onChange={(e) => setCtx(parseInt(e.target.value, 10))}
-                disabled={busy}
-              >
-                {(plan.ctx_options ?? []).map((o) => (
-                  <option key={o.ctx} value={o.ctx}>
-                    {Math.round(o.ctx / 1024)}k (~{o.est_gb} GB)
-                    {o.recommended ? " — recommended" : o.experimental ? " — experimental" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <button
-              ref={installBtnRef}
-              type="button"
-              className="sy-confirm-btn sy-confirm-btn--primary"
-              onClick={() => void install()}
-              disabled={busy}
-            >
-              {busy ? "Starting…" : "Install"}
-            </button>
-          </div>
-        </>
+        </div>
       )}
-      {inst?.state === "error" && (
-        <p className="sy-settings-status sy-settings-status--err">{inst.error}</p>
-      )}
+
       {err && <p className="sy-settings-status sy-settings-status--err">{err}</p>}
+
       {harness && (
         <details className="sy-harness">
           <summary className="sy-harness-summary">
@@ -2817,11 +2943,8 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
             </span>
           </summary>
           <p className="sy-settings-blurb" style={{ marginTop: 6 }}>
-            Operating rules appended to the system prompt for the models in
-            its <code>applies_to:</code> frontmatter (default the local
-            model). It applies silently, self-tunes when the model loops,
-            and a strong model consolidates it when it grows large. Edit
-            here or in <code>{harness.path}</code>.
+            Operating rules appended to the system prompt for local models.
+            Edit here or in <code>{harness.path}</code>.
           </p>
           <textarea
             className="sy-harness-text"

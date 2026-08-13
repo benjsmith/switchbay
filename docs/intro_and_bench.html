@@ -1392,6 +1392,83 @@ ul.tight li b{color:var(--ink)}
   </section>
 
 
+  <!-- ============ APPENDIX M — PHASE-2 FOLLOW-UP: THE MATERIAL ============ -->
+  <section class="slide" data-name="Appendix · follow-up — material">
+    <div class="slide-head">
+      <p class="eyebrow"><span class="apx">Appendix M</span> · phase-2 follow-up — reading the material</p>
+      <h1>The single-shot verdict was a wash — so <span class="hl">where does the skill layer show up?</span></h1>
+      <p class="lede">A qualitative follow-up on the phase-2 material (both host models, blind 4-judge
+      panel). The verdict found CE ≈ tool-matched on grounded single-shot quality; this asks where CE's
+      distinctive value <i>does</i> surface — in the artifacts it authors, on the queries it was built for,
+      and in how it grounds. <b style="color:var(--ink)">Directional (small n), coherent with the verdict.</b></p>
+    </div>
+    <div class="slide-body">
+      <div class="col grow" style="justify-content:center;gap:12px">
+        <span class="label">Four reads on the generated material</span>
+        <div class="findings">
+          <div class="finding"><span class="tag g">✓</span><div><b>Analysis PAGES are richer than replies.</b>
+          <span>CE's crystallised pages are far denser-cited (one page 26 vault cites vs its reply's 4), durably
+          structured, and carry an explicit <i>source-request + hypothesis</i> layer the chat reply lacks — a
+          compounding artifact, not a transcript.</span></div></div>
+          <div class="finding"><span class="tag">≈</span><div><b>Framing flips the order.</b> <span>On
+          <i>synthesis</i>-framed queries (CE's native mode) CE grades <b style="color:var(--ink)">≥ tool-matched</b>
+          (0.62 vs 0.57) — the reverse of the task-prompt verdict. Small-n + model-dependent, so a hint not a
+          result: CE's edge is framing-sensitive.</span></div></div>
+          <div class="finding"><span class="tag" style="background:var(--faint)">=</span><div><b>Off-leash
+          generativity is a wash.</b> <span>Given the same "propose sources / open questions / hypotheses" prompt,
+          all three arms deliver comparably — the teaching move isn't CE-unique when explicitly elicited.</span></div></div>
+          <div class="finding"><span class="tag w">▲</span><div><b>CE is the conservative one.</b> <span>Heaviest
+          closed-book flagging — opens off-corpus answers with <i>"this is my background knowledge, not the corpus."</i>
+          The tightly-grounded discipline, visible in the material.</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ APPENDIX N — JUDGE INTEGRITY + THE BOUNDARY ============ -->
+  <section class="slide" data-name="Appendix · follow-up — boundary">
+    <div class="slide-head">
+      <p class="eyebrow"><span class="apx">Appendix N</span> · judge integrity &amp; the capability boundary</p>
+      <h1>No judge self-preference — and a <span class="hl">boundary worth naming</span>.</h1>
+    </div>
+    <div class="slide-body">
+      <div class="col" style="flex:0 0 44%;gap:12px;justify-content:center">
+        <div class="panel" style="padding:16px 20px">
+          <span class="label">Do Claude judges inflate Claude-authored answers?</span>
+          <div class="small" style="margin-top:8px;line-height:1.5">A 4-judge panel (grok-4.5 + gpt-5.5 + opus-4-8
+          + opus-5) — the Claude judges added <i>on purpose</i> to measure the self-preference the frozen primary
+          correctly excluded.</div>
+          <div style="overflow-x:auto;margin-top:10px">
+          <table class="tbl compact">
+            <thead><tr><th>judge</th><th>mean reply score</th></tr></thead>
+            <tbody>
+              <tr><td class="metric">grok-4.5</td><td class="mono">0.573</td></tr>
+              <tr><td class="metric">gpt-5.5</td><td class="mono">0.599</td></tr>
+              <tr><td class="metric">opus-4-8</td><td class="mono">0.610</td></tr>
+              <tr><td class="metric">opus-5</td><td class="mono">0.573</td></tr>
+            </tbody>
+          </table>
+          </div>
+          <div class="small" style="margin-top:9px">Claude − non-Claude Δ = <b style="color:var(--ink)">+0.005</b>
+          (t = 0.39, n.s., n = 24). <b style="color:var(--ink)">No self-preference</b> — including Claude judges
+          would not have moved the verdict.</div>
+        </div>
+      </div>
+      <div class="col grow" style="justify-content:center">
+        <div class="takeaways">
+          <div class="take"><div class="no">→</div><div class="tx"><b>The null is a boundary, not a defeat.</b>
+          Quality rose with newer models while the skill-scaffold gap stayed ~0 — on single-shot grounded tasks the
+          frontier model is good enough that a retrieval-skill layer adds ~nothing over the same tools.</div></div>
+          <div class="take"><div class="no">→</div><div class="tx"><b>The durable lever is the substrate.</b>
+          Structured curation (which CE provides) beats generic RAG; the skill wrapper on top is capability-bound.</div></div>
+          <div class="take"><div class="no">→</div><div class="tx"><b>CE's value lives outside this regime.</b>
+          Compounding memory, curate-time safety, and teaching over many sessions are what a single-shot benchmark
+          cannot see — the subject of the next study.</div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
 </div>
 
 <div class="progress" id="prog"></div>

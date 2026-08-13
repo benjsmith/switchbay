@@ -17,6 +17,7 @@ import aiohttp
 
 from .. import secrets
 from . import base
+from .openai_compat import messages_to_openai, parse_sse, tools_to_openai
 
 log = logging.getLogger("switchbay.llm.openai")
 
@@ -44,7 +45,7 @@ PROVIDER = {
     "capabilities": {
         "chat": True,
         "streaming": True,
-        "tools": False,           # tool-use plumbing lands later
+        "tools": True,
         # Execution surface — see base.CAPABILITY_NOTES.
         # HTTP: switchbay tool registry only (propose_*/create_report).
         "shell": False,
@@ -122,44 +123,24 @@ def reasoning_options(model: str | None = None) -> list[dict]:
     ]
 
 
-def _to_openai_messages(
-    messages: list[dict], system: str | None,
-) -> list[dict]:
-    """Translate the canonical {role, content} list into OpenAI's
-    chat-completions schema. System prompt slots in as a leading
-    `system` message (Anthropic uses a top-level `system` field; we
-    centralise on the canonical shape and translate per-provider)."""
-    out: list[dict] = []
-    if system:
-        out.append({"role": "system", "content": system})
-    for m in messages:
-        role = m.get("role") or "user"
-        content = m.get("content")
-        # Daemon stores plain strings for chat events; passing through.
-        if isinstance(content, str):
-            out.append({"role": role, "content": content})
-        elif isinstance(content, list):
-            # Caller passed pre-shaped blocks (e.g. multi-modal). Send
-            # them as-is; OpenAI accepts content arrays for vision.
-            out.append({"role": role, "content": content})
-        else:
-            out.append({"role": role, "content": str(content or "")})
-    return out
-
-
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
-    """Stream a chat completion. Yields TextChunks then a final DoneChunk."""
+    """Stream a chat completion. Yields TextChunks / ToolUseChunks / DoneChunk."""
+    model = req.model or DEFAULT_MODEL
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {_api_key()}",
     }
     body: dict = {
-        "model": req.model or DEFAULT_MODEL,
-        "messages": _to_openai_messages(req.messages, req.system),
+        "model": model,
+        "messages": messages_to_openai(req.messages, req.system),
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if req.temperature is not None:
+    tools = tools_to_openai(req.tools)
+    if tools:
+        body["tools"] = tools
+    # Reasoning / gpt-5 models reject temperature; only send when safe.
+    if req.temperature is not None and not _is_reasoning_model(model):
         body["temperature"] = req.temperature
     if req.max_tokens:
         # `max_completion_tokens` is the newer field; older models still
@@ -167,7 +148,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         # other is set, so passing the new one is safe across the board.
         body["max_completion_tokens"] = req.max_tokens
     effort = base.coerce_effort(
-        req.reasoning_effort, reasoning_options(req.model or DEFAULT_MODEL))
+        req.reasoning_effort, reasoning_options(model))
     if effort:
         body["reasoning_effort"] = effort
 
@@ -178,7 +159,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
                 if resp.status != 200:
                     text = await resp.text()
                     raise _http_error(resp.status, text)
-                async for chunk in _parse_sse(resp.content):
+                async for chunk in parse_sse(resp.content):
                     yield chunk
     except aiohttp.ClientConnectionError as e:
         raise base.ProviderError(
@@ -190,50 +171,6 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
             f"Request timed out after {int(DEFAULT_TIMEOUT_S)}s",
             code="timeout", retryable=True, cause=e,
         ) from e
-
-
-async def _parse_sse(content) -> AsyncIterator[base.ChunkEvent]:
-    """Parse OpenAI's SSE stream. Each `data: {…}` line is a delta
-    with `choices[0].delta.content` text fragments. The terminal
-    `data: [DONE]` ends the stream; the preceding chunk usually
-    carries `usage` and `choices[0].finish_reason`."""
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    stop_reason: str | None = None
-
-    async for raw in content:
-        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-        if not line.startswith("data: "):
-            continue
-        payload = line[6:]
-        if not payload:
-            continue
-        if payload == "[DONE]":
-            break
-        try:
-            evt = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        choices = evt.get("choices") or []
-        for choice in choices:
-            delta = choice.get("delta") or {}
-            text = delta.get("content")
-            if isinstance(text, str) and text:
-                yield base.TextChunk(text=text)
-            fr = choice.get("finish_reason")
-            if isinstance(fr, str):
-                stop_reason = fr
-        usage = evt.get("usage") or {}
-        if "prompt_tokens" in usage:
-            input_tokens = usage["prompt_tokens"]
-        if "completion_tokens" in usage:
-            output_tokens = usage["completion_tokens"]
-
-    yield base.DoneChunk(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        stop_reason=stop_reason,
-    )
 
 
 async def list_models() -> list[str]:

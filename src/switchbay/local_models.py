@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import platform
 import re
 import shutil
@@ -163,11 +164,27 @@ def mlx_supported() -> bool:
 
 
 def mlx_binary() -> str | None:
-    """`mlx_lm.server` on PATH, if the user has mlx-lm installed."""
+    """`mlx_lm.server` on PATH, if the user has mlx-lm installed.
+
+    Also probes common user install locations: launchd/systemd agents
+    often have a slim PATH that omits ``~/.local/bin`` (where
+    ``uv tool install mlx-lm`` drops the console scripts).
+    """
     for name in ("mlx_lm.server", "mlx_lm"):
         p = shutil.which(name)
         if p:
             return p
+    home = Path.home()
+    for base in (
+        home / ".local" / "bin",
+        home / ".cargo" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/usr/local/bin"),
+    ):
+        for name in ("mlx_lm.server", "mlx_lm"):
+            cand = base / name
+            if cand.is_file() and os.access(cand, os.X_OK):
+                return str(cand)
     return None
 
 
@@ -209,7 +226,13 @@ def mlx_status() -> dict[str, Any]:
     }
 
 
-def mlx_search(query: str = "", *, limit: int = 20, curated: bool = False) -> list[dict[str, Any]]:
+def mlx_search(
+    query: str = "",
+    *,
+    limit: int = 20,
+    curated: bool = False,
+    sort: str = "downloads",
+) -> list[dict[str, Any]]:
     """Live search for MLX-format models on Hugging Face.
 
     MLX weights are published under the `mlx` library tag — mostly by
@@ -217,15 +240,30 @@ def mlx_search(query: str = "", *, limit: int = 20, curated: bool = False) -> li
     gating story as GGUF search: `curated` for recommendations, ungated
     for the paste-any-id path.
     """
+    rows, _err = mlx_search_with_status(
+        query, limit=limit, curated=curated, sort=sort,
+    )
+    return rows
+
+
+def mlx_search_with_status(
+    query: str = "",
+    *,
+    limit: int = 20,
+    curated: bool = False,
+    sort: str = "downloads",
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Like mlx_search, but also returns a transport-error reason."""
+    sort = sort if sort in ("downloads", "trendingScore", "likes", "lastModified") else "downloads"
     q = urllib.parse.quote(query.strip())
     want = limit * 3 if curated else limit
     path = (
-        f"models?filter=mlx&sort=downloads&direction=-1&limit={min(want, 100)}"
+        f"models?filter=mlx&sort={sort}&direction=-1&limit={min(want, 100)}"
         + (f"&search={q}" if q else "")
     )
     rows = _hf_get(path)
     if not isinstance(rows, list):
-        return []
+        return [], last_hf_error() or "Hugging Face returned no data"
     out: list[dict[str, Any]] = []
     for m in rows:
         if not isinstance(m, dict):
@@ -251,7 +289,7 @@ def mlx_search(query: str = "", *, limit: int = 20, curated: bool = False) -> li
         })
         if len(out) >= limit:
             break
-    return out
+    return out, None
 
 
 def resolve_mlx_candidate(repo: str, *, ram: float | None = None) -> dict[str, Any]:
@@ -762,16 +800,43 @@ _AUX_GGUF_RE = re.compile(
 )
 
 
+# Last HF network/parse failure reason (cleared on success). Surfaced
+# to the UI so TLS/proxy failures don't masquerade as "No matches".
+_last_hf_error: str | None = None
+
+
+def last_hf_error() -> str | None:
+    return _last_hf_error
+
+
 def _hf_get(path: str, timeout: float = 20.0) -> Any:
     """GET a public HF API path. Returns parsed JSON, or None on any
-    network/parse failure — every caller degrades to catalog-only."""
+    network/parse failure — every caller degrades to catalog-only.
+    Records the reason in `_last_hf_error` so search endpoints can
+    distinguish empty results from transport failure."""
+    global _last_hf_error
     url = f"{_HF_API}/{path.lstrip('/')}"
     try:
         req = urllib.request.Request(
             url, headers={"User-Agent": "switchbay-local-models/1.0"})
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.load(r)
+            data = json.load(r)
+        _last_hf_error = None
+        return data
     except Exception as e:  # noqa: BLE001
+        # ssl.SSLCertVerificationError, URLError, TimeoutError, JSON…
+        name = type(e).__name__
+        msg = str(e).strip() or name
+        if "CERTIFICATE_VERIFY_FAILED" in msg or "SSL" in name:
+            _last_hf_error = (
+                f"TLS certificate verification failed talking to Hugging Face "
+                f"({msg}). If you're on a corporate proxy, ensure the daemon "
+                f"can use the OS trust store (truststore package)."
+            )
+        elif "timed out" in msg.lower() or name == "TimeoutError":
+            _last_hf_error = f"Hugging Face request timed out: {msg}"
+        else:
+            _last_hf_error = f"Hugging Face request failed: {name}: {msg}"
         log.debug("hf GET %s: %s", url, e)
         return None
 
@@ -933,6 +998,20 @@ def hf_search_gguf(
     no off-task finetunes); the UI's free-text search leaves it False so
     the user can find and install anything.
     """
+    rows, _err = hf_search_gguf_with_status(
+        query, sort=sort, limit=limit, curated=curated,
+    )
+    return rows
+
+
+def hf_search_gguf_with_status(
+    query: str = "",
+    *,
+    sort: str = "downloads",
+    limit: int = 20,
+    curated: bool = False,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Like hf_search_gguf, but also returns a transport-error reason."""
     sort = sort if sort in ("downloads", "trendingScore", "likes", "lastModified") else "downloads"
     q = urllib.parse.quote(query.strip())
     # Over-fetch when gating, since the gate drops a lot.
@@ -943,7 +1022,7 @@ def hf_search_gguf(
     )
     rows = _hf_get(path)
     if not isinstance(rows, list):
-        return []
+        return [], last_hf_error() or "Hugging Face returned no data"
     out: list[dict[str, Any]] = []
     for m in rows:
         if not isinstance(m, dict):
@@ -968,7 +1047,7 @@ def hf_search_gguf(
         })
         if len(out) >= limit:
             break
-    return out
+    return out, None
 
 
 def resolve_repo_candidate(

@@ -22,9 +22,51 @@ from switchbay.llmgateway import github_copilot as gc
     ("https://acme.ghe.com", "acme.ghe.com"),
     ("https://github.example.com/", "github.example.com"),
     ("http://ghes.internal/path/ignored", "ghes.internal"),
+    # EMU: path is stripped for host but slug is preserved separately.
+    ("https://github.com/enterprises/acme/sso", "github.com"),
+    ("www.github.com/enterprises/acme", "github.com"),
 ])
 def test_host_normalisation(raw, want):
     assert gc._normalize_host(raw) == want
+
+
+@pytest.mark.parametrize(("raw", "host", "slug"), [
+    ("https://github.com/enterprises/acme/sso", "github.com", "acme"),
+    ("github.com/enterprises/my-org", "github.com", "my-org"),
+    ("www.github.com/enterprises/Foo", "github.com", "Foo"),
+    ("acme.ghe.com", "acme.ghe.com", None),
+    ("", "github.com", None),
+])
+def test_parse_github_host_input_emu_slug(raw, host, slug):
+    h, s = gc.parse_github_host_input(raw)
+    assert h == host
+    assert s == slug
+
+
+def test_endpoints_include_sso_uri_for_emu_slug():
+    eps = gc._endpoints("github.com", sso_slug="acme")
+    assert eps["host"] == "github.com"
+    assert eps["sso_uri"] == "https://github.com/enterprises/acme/sso"
+    assert "acme" in eps["sso_hint"]
+
+
+def test_supports_chat_completions_prefers_model_picker_enabled():
+    assert gc._supports_chat_completions({
+        "id": "gpt-4o", "model_picker_enabled": True,
+    })
+    assert not gc._supports_chat_completions({
+        "id": "hidden", "model_picker_enabled": False,
+    })
+    assert not gc._supports_chat_completions({
+        "id": "resp-only",
+        "capabilities": {"supported_endpoints": ["/responses"]},
+    })
+    assert gc._supports_chat_completions({
+        "id": "chatty",
+        "capabilities": {
+            "supported_endpoints": ["/chat/completions", "/responses"],
+        },
+    })
 
 
 def test_dotcom_endpoints_are_unchanged():

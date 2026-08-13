@@ -254,6 +254,12 @@ ALLOWED_TOOLS = [
     "wiki_path",
     "wiki_shared_sources",
     "wiki_related_by_sources",
+    # CE-native vault/kuzu (additive — different corpus from search_wiki).
+    "ce_vault_search",
+    "ce_graph_neighbors",
+    "ce_graph_path",
+    "ce_shared_sources",
+    "ce_bridge_candidates",
     "list_duckdb_starters",
     "add_duckdb_starters",
     "replace_duckdb_starters",

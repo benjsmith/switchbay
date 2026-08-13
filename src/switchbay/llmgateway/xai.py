@@ -18,6 +18,7 @@ import aiohttp
 
 from .. import secrets
 from . import base
+from .openai_compat import messages_to_openai, parse_sse, tools_to_openai
 
 log = logging.getLogger("switchbay.llm.xai")
 
@@ -48,7 +49,7 @@ PROVIDER = {
     "capabilities": {
         "chat": True,
         "streaming": True,
-        "tools": False,           # tool-use plumbing lands later (matches openai)
+        "tools": True,
         # Execution surface — see base.CAPABILITY_NOTES.
         # HTTP: switchbay tool registry only (propose_*/create_report).
         "shell": False,
@@ -123,38 +124,30 @@ def reasoning_options(model: str | None = None) -> list[dict]:
     ]
 
 
-def _to_openai_messages(messages: list[dict], system: str | None) -> list[dict]:
-    out: list[dict] = []
-    if system:
-        out.append({"role": "system", "content": system})
-    for m in messages:
-        role = m.get("role") or "user"
-        content = m.get("content")
-        if isinstance(content, (str, list)):
-            out.append({"role": role, "content": content})
-        else:
-            out.append({"role": role, "content": str(content or "")})
-    return out
-
-
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
-    """Stream a chat completion. Yields TextChunks then a final DoneChunk."""
+    """Stream a chat completion. Yields TextChunks / ToolUseChunks / DoneChunk."""
+    model = req.model or DEFAULT_MODEL
     headers = {
         "Content-Type": "application/json",
         "Authorization": f"Bearer {_api_key()}",
     }
     body: dict = {
-        "model": req.model or DEFAULT_MODEL,
-        "messages": _to_openai_messages(req.messages, req.system),
+        "model": model,
+        "messages": messages_to_openai(req.messages, req.system),
         "stream": True,
         "stream_options": {"include_usage": True},
     }
-    if req.temperature is not None:
+    tools = tools_to_openai(req.tools)
+    if tools:
+        body["tools"] = tools
+    # Only send temperature when this model takes no reasoning_effort
+    # (non-reasoning family) — reasoning models often reject it.
+    if req.temperature is not None and not reasoning_options(model):
         body["temperature"] = req.temperature
     if req.max_tokens:
         body["max_tokens"] = req.max_tokens
     effort = base.coerce_effort(
-        req.reasoning_effort, reasoning_options(req.model or DEFAULT_MODEL))
+        req.reasoning_effort, reasoning_options(model))
     if effort:
         body["reasoning_effort"] = effort
 
@@ -164,7 +157,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
             async with session.post(API_URL, headers=headers, json=body) as resp:
                 if resp.status != 200:
                     raise _http_error(resp.status, await resp.text())
-                async for chunk in _parse_sse(resp.content):
+                async for chunk in parse_sse(resp.content):
                     yield chunk
     except aiohttp.ClientConnectionError as e:
         raise base.ProviderError(
@@ -176,47 +169,6 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
             f"Request timed out after {int(DEFAULT_TIMEOUT_S)}s",
             code="timeout", retryable=True, cause=e,
         ) from e
-
-
-async def _parse_sse(content) -> AsyncIterator[base.ChunkEvent]:
-    input_tokens: int | None = None
-    output_tokens: int | None = None
-    stop_reason: str | None = None
-    async for raw in content:
-        line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
-        if not line.startswith("data: "):
-            continue
-        payload = line[6:]
-        if not payload:
-            continue
-        if payload == "[DONE]":
-            break
-        try:
-            evt = json.loads(payload)
-        except json.JSONDecodeError:
-            continue
-        for choice in evt.get("choices") or []:
-            delta = choice.get("delta") or {}
-            text = delta.get("content")
-            if isinstance(text, str) and text:
-                yield base.TextChunk(text=text)
-            # Grok reasoning models surface chain-of-thought here.
-            rzn = delta.get("reasoning_content")
-            if isinstance(rzn, str) and rzn:
-                yield base.ReasoningChunk(text=rzn)
-            fr = choice.get("finish_reason")
-            if isinstance(fr, str):
-                stop_reason = fr
-        usage = evt.get("usage") or {}
-        if "prompt_tokens" in usage:
-            input_tokens = usage["prompt_tokens"]
-        if "completion_tokens" in usage:
-            output_tokens = usage["completion_tokens"]
-    yield base.DoneChunk(
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        stop_reason=stop_reason,
-    )
 
 
 async def list_models() -> list[str]:

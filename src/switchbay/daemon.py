@@ -5257,10 +5257,17 @@ async def _oneshot_json(
     JSON. Collects the streamed text, extracts the first JSON object,
     and parses it. Returns None on any failure. Used by cheap
     classifier/explainer paths (not the rail loop)."""
+    # Provider modules expose ID / PROVIDER["id"]; derive here so
+    # callers need not pass pid (several call sites have no pid in scope).
+    pid = str(getattr(provider, "ID", "") or "")
+    if not pid:
+        prov_meta = getattr(provider, "PROVIDER", None)
+        if isinstance(prov_meta, dict):
+            pid = str(prov_meta.get("id") or "")
     req = llmgateway.ChatRequest(
         messages=[{"role": "user", "content": prompt}],
         model=model, max_tokens=max_tokens, workspace=str(workspace),
-        reasoning_effort=_effort_for(pid, model, "background"),
+        reasoning_effort=_effort_for(pid, model, "background") if pid else None,
     )
     text = ""
     async for ev in provider.chat_stream(req):
@@ -5352,9 +5359,31 @@ async def handle_llm_set_default(request: web.Request) -> web.Response:
         # provider was supplied. Keeps the picker UI a single round-trip.
         target = pid or _resolve_default_provider()
         model = body.get("model")
+        force = bool(body.get("force"))
         if model is None or model == "":
             llm_config.set_model(target, None)
         elif isinstance(model, str):
+            if not force:
+                allowed, fresh = model_cache.get_cached(target)
+                try:
+                    prov = llmgateway.get(target)
+                    static = list(prov.PROVIDER.get("model_suggestions") or [])
+                    default_m = str(prov.PROVIDER.get("default_model") or "")
+                except Exception:  # noqa: BLE001
+                    static, default_m = [], ""
+                known = set(allowed or []) | set(static)
+                if default_m:
+                    known.add(default_m)
+                # Only reject when we have a non-empty known set; empty
+                # means offline/unfetched — don't trap the user.
+                if known and model not in known:
+                    return web.json_response({
+                        "error": (
+                            f"unknown model {model!r} for {target}. "
+                            "Pick from the list, or pass force:true to pin it."
+                        ),
+                        "known": sorted(known)[:40],
+                    }, status=400)
             llm_config.set_model(target, model)
         else:
             return web.json_response(
@@ -11101,6 +11130,8 @@ async def handle_copilot_login(request: web.Request) -> web.Response:
             "verification_uri": cur.get("verification_uri"),
             "host": cur.get("host"),
             "sso_hint": cur.get("sso_hint"),
+            "sso_uri": cur.get("sso_uri") or "",
+            "enterprise_slug": cur.get("enterprise_slug") or "",
         })
     try:
         device = await github_copilot.device_code(host)
@@ -11112,49 +11143,85 @@ async def handle_copilot_login(request: web.Request) -> web.Response:
         "verification_uri": device.get("verification_uri"),
         "host": device.get("host"),
         "sso_hint": device.get("sso_hint"),
+        "sso_uri": device.get("sso_uri") or "",
+        "enterprise_slug": device.get("enterprise_slug") or "",
         "error": None,
+        "task": None,
     }
     request.app["copilot_login"] = rec
 
     async def _poll() -> None:
         try:
             await github_copilot.poll_for_token(device)
+            if request.app.get("copilot_login") is not rec:
+                return  # cancelled
             rec["state"] = "done"
             await _broadcast(request.app, protocol.notice(
                 "GitHub Copilot signed in — pick it in the rail's provider menu.",
                 kind="chat",
             ))
+        except asyncio.CancelledError:
+            rec.update(state="cancelled", error="sign-in cancelled")
+            raise
         except llmgateway.ProviderError as e:
-            rec.update(state="error", error=str(e))
+            if request.app.get("copilot_login") is rec:
+                rec.update(state="error", error=str(e))
         except Exception as e:  # noqa: BLE001
             log.exception("copilot login poll crashed")
-            rec.update(state="error", error=str(e))
+            if request.app.get("copilot_login") is rec:
+                rec.update(state="error", error=str(e))
 
-    asyncio.create_task(_poll())
+    rec["task"] = asyncio.create_task(_poll())
     return web.json_response({
         "ok": True,
         "user_code": rec["user_code"],
         "verification_uri": rec["verification_uri"],
         "host": rec["host"],
         "sso_hint": rec["sso_hint"],
+        "sso_uri": rec["sso_uri"],
+        "enterprise_slug": rec["enterprise_slug"],
     })
 
 
 async def handle_copilot_login_status(request: web.Request) -> web.Response:
     from .llmgateway import github_copilot
     rec = request.app.get("copilot_login")
+    # Never ship the live Task over JSON.
+    login = None
+    if isinstance(rec, dict):
+        login = {k: v for k, v in rec.items() if k != "task"}
     return web.json_response({
         "authed": github_copilot.has_key(),
         "host": github_copilot.get_host(),
         "default_host": github_copilot.DEFAULT_HOST,
-        "login": rec if isinstance(rec, dict) else None,
+        "login": login,
     })
+
+
+async def handle_copilot_login_cancel(request: web.Request) -> web.Response:
+    """Abort a pending device-flow poll so the user can retry immediately
+    (otherwise a wedged pending record blocks for ~15 minutes)."""
+    rec = request.app.pop("copilot_login", None)
+    if isinstance(rec, dict):
+        task = rec.get("task")
+        if isinstance(task, asyncio.Task) and not task.done():
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                pass
+        rec["state"] = "cancelled"
+    return web.json_response({"ok": True})
 
 
 async def handle_copilot_logout(request: web.Request) -> web.Response:
     from .llmgateway import github_copilot
     await asyncio.to_thread(github_copilot.sign_out)
-    request.app.pop("copilot_login", None)
+    rec = request.app.pop("copilot_login", None)
+    if isinstance(rec, dict):
+        task = rec.get("task")
+        if isinstance(task, asyncio.Task) and not task.done():
+            task.cancel()
     return web.json_response({"ok": True})
 
 
@@ -11180,6 +11247,8 @@ async def handle_localllm_status(request: web.Request) -> web.Response:
         "server_url": localllm.server_url_for(cfg) if cfg else None,
         "servers": servers,
         "port_pool": multi.get("port_pool"),
+        # Which free-text install paths this machine supports (incl. MLX).
+        "backends": multi.get("backends"),
         "install": rec if isinstance(rec, dict) else None,
     })
 
@@ -11575,25 +11644,28 @@ async def handle_local_models_search(request: web.Request) -> web.Response:
     except ValueError:
         limit = 20
 
+    error: str | None = None
     if backend == "mlx":
         if not local_models.mlx_supported():
             return web.json_response({
                 "backend": "mlx", "results": [],
                 "error": local_models.mlx_status().get("reason"),
             })
-        results = await asyncio.to_thread(
-            local_models.mlx_search, query, limit=limit, curated=curated)
+        results, error = await asyncio.to_thread(
+            local_models.mlx_search_with_status, query,
+            limit=limit, curated=curated, sort=sort)
     elif backend == "ollama":
         # Ollama has no public search API; the tag is resolved directly.
         results = []
     else:
         backend = "llamacpp"
-        results = await asyncio.to_thread(
-            local_models.hf_search_gguf, query,
+        results, error = await asyncio.to_thread(
+            local_models.hf_search_gguf_with_status, query,
             sort=sort, limit=limit, curated=curated)
     return web.json_response({
         "backend": backend, "query": query, "sort": sort,
         "curated": curated, "results": results,
+        **({"error": error} if error else {}),
     })
 
 
@@ -13410,6 +13482,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/llm/reasoning-policy", handle_reasoning_policy)
     app.router.add_post("/api/copilot/login", handle_copilot_login)
     app.router.add_get("/api/copilot/login/status", handle_copilot_login_status)
+    app.router.add_post("/api/copilot/login/cancel", handle_copilot_login_cancel)
     app.router.add_post("/api/copilot/logout", handle_copilot_logout)
     app.router.add_get("/api/localllm/status", handle_localllm_status)
     app.router.add_post("/api/localllm/install", handle_localllm_install)

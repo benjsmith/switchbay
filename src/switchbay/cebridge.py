@@ -171,6 +171,136 @@ def graph_db_path(workspace: Path) -> Path:
     return workspace / ".curator" / "graph.kuzu"
 
 
+def _scrubbed_env() -> dict[str, str]:
+    """Env for CE subprocesses: drop switchbay venv pointers so CE's
+    own .venv / uv project (kuzu, embeddings) resolve correctly."""
+    return {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
+    }
+
+
+def _ce_python() -> list[str]:
+    """Argv prefix to run a CE script with the right interpreter.
+
+    Prefer CE's own `.venv` (kuzu + embedding stack live there), then
+    fall back to `uv run` from the CE root.
+    """
+    root = ce_root()
+    for rel in (
+        Path(".venv") / "bin" / "python",
+        Path(".venv") / "bin" / "python3",
+        Path(".venv") / "Scripts" / "python.exe",
+    ):
+        p = root / rel
+        if p.is_file():
+            return [str(p)]
+    return ["uv", "run", "--directory", str(root), "python3"]
+
+
+def run_script(
+    script: str,
+    args: list[str] | None = None,
+    *,
+    cwd: Path,
+    timeout: float = 120.0,
+) -> dict[str, Any]:
+    """Synchronously run a CE script and parse JSON from stdout.
+
+    Tool handlers are sync; the daemon offloads them via
+    ``asyncio.to_thread``. CE scripts emit JSON on stdout natively
+    (no ``--json`` flag). Stderr advisories (e.g. "graph stale") are
+    captured as ``note`` when results otherwise succeed; ``{"error":…}``
+    bodies are unwrapped to a flat ``error`` string.
+
+    Returns a dict always — never raises.
+    """
+    import subprocess
+
+    root = ce_root()
+    script_path = root / "scripts" / script
+    if not script_path.is_file():
+        # Allow bare name with or without .py
+        if not script.endswith(".py"):
+            script_path = root / "scripts" / f"{script}.py"
+        if not script_path.is_file():
+            return {"error": f"CE script not found: {script} (looked under {root / 'scripts'})"}
+    if not Path(cwd).is_dir():
+        return {"error": f"workspace is not a directory: {cwd}"}
+
+    cmd = [*_ce_python(), str(script_path), *(args or [])]
+    try:
+        proc = subprocess.run(
+            cmd,
+            cwd=str(cwd),
+            env=_scrubbed_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": f"{script} timed out after {int(timeout)}s"}
+    except OSError as e:
+        return {"error": f"failed to run {script}: {e}"}
+
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    note = stderr[-1500:] if stderr else None
+
+    parsed: Any = None
+    if stdout:
+        # Scripts may print a single JSON value or a trailing JSON object.
+        try:
+            parsed = json.loads(stdout)
+        except json.JSONDecodeError:
+            # Try last {...} or [...] block.
+            for open_c, close_c in (("{", "}"), ("[", "]")):
+                start = stdout.find(open_c)
+                end = stdout.rfind(close_c)
+                if start >= 0 and end > start:
+                    try:
+                        parsed = json.loads(stdout[start:end + 1])
+                        break
+                    except json.JSONDecodeError:
+                        pass
+
+    if isinstance(parsed, dict) and parsed.get("error"):
+        err = parsed["error"]
+        if isinstance(err, dict):
+            err = err.get("message") or json.dumps(err)
+        out: dict[str, Any] = {"error": f"{script}: {err}"}
+        if note and "error" not in (note or "").lower():
+            out["note"] = note
+        if proc.returncode:
+            out["returncode"] = proc.returncode
+        return out
+
+    if parsed is None:
+        if proc.returncode != 0:
+            return {
+                "error": (
+                    f"{script} exited {proc.returncode}: "
+                    f"{(stderr or stdout or 'no output')[-800:]}"
+                ),
+                "returncode": proc.returncode,
+            }
+        return {
+            "error": f"{script}: expected JSON on stdout, got: {(stdout or '')[:400]!r}",
+            "note": note,
+        }
+
+    if isinstance(parsed, dict):
+        if note:
+            parsed = {**parsed, "note": note}
+        return parsed
+    # list / scalar
+    result: dict[str, Any] = {"result": parsed}
+    if note:
+        result["note"] = note
+    return result
+
+
 async def graph_rebuild(workspace: Path) -> tuple[bool, str]:
     """Run CE's `graph.py rebuild wiki` against the workspace.
 
@@ -189,11 +319,7 @@ async def graph_rebuild(workspace: Path) -> tuple[bool, str]:
     script = ce_root() / "scripts" / "graph.py"
     if not script.is_file():
         return False, f"CE graph.py not found at {script}"
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
-    }
+    env = _scrubbed_env()
     try:
         proc = await asyncio.create_subprocess_exec(
             "uv", "run", "python3", str(script), "rebuild", "wiki",

@@ -2431,3 +2431,212 @@ register(Tool(
     },
     handler=_wiki_related_by_sources,
 ))
+
+
+# ── CE-native vault / kuzu tools (additive; do NOT replace search_wiki) ──
+# search_wiki queries curated wiki pages. ce_vault_search queries ingested
+# source documents in vault/vault.db. Different corpora — both offered so
+# the model can pick. Graph tools shell out to CE's graph.py (kuzu).
+
+
+def _ce_page_id(workspace: Path, ref: str) -> tuple[str | None, str | None]:
+    """Resolve a user/agent page ref to CE's `type/slug.md` form.
+
+    Bare stems return [] from graph.py with no error — resolve first.
+    """
+    hit = _resolve_wiki_page(workspace, ref)
+    if hit is None:
+        return None, f"no wiki page matching {ref!r} — try search_wiki"
+    rel, _p = hit
+    # rel is wiki-relative like "concepts/foo.md" or "concepts/foo"
+    rid = rel
+    if rid.startswith("wiki/"):
+        rid = rid[5:]
+    if not rid.endswith(".md"):
+        rid = f"{rid}.md"
+    return rid, None
+
+
+def _ce_vault_search(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import cebridge
+
+    query = str(payload.get("query") or "").strip()
+    if not query:
+        return {"error": "query is required"}
+    limit = max(1, min(int(payload.get("limit") or 10), 40))
+    mode = str(payload.get("mode") or "hybrid").strip().lower()
+    if mode not in ("fts5", "semantic", "hybrid"):
+        mode = "hybrid"
+    graph_expand = bool(payload.get("graph_expand", True))
+    args = [query, "--mode", mode, "--limit", str(limit)]
+    if graph_expand:
+        args.append("--graph-expand")
+    return cebridge.run_script("vault_search.py", args, cwd=workspace, timeout=90.0)
+
+
+def _ce_graph_neighbors(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import cebridge
+
+    page_id, err = _ce_page_id(workspace, str(payload.get("page") or ""))
+    if err:
+        return {"error": err}
+    hops = max(1, min(int(payload.get("hops") or 2), 6))
+    direction = str(payload.get("direction") or "both").strip().lower()
+    if direction not in ("out", "in", "both"):
+        direction = "both"
+    return cebridge.run_script(
+        "graph.py",
+        ["neighbors", "wiki", page_id, "--hops", str(hops), "--direction", direction],
+        cwd=workspace, timeout=60.0,
+    )
+
+
+def _ce_graph_path(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import cebridge
+
+    a, err_a = _ce_page_id(
+        workspace, str(payload.get("from") or payload.get("page_a") or ""))
+    b, err_b = _ce_page_id(
+        workspace, str(payload.get("to") or payload.get("page_b") or ""))
+    if err_a:
+        return {"error": err_a}
+    if err_b:
+        return {"error": err_b}
+    max_hops = max(1, min(int(payload.get("max_hops") or 6), 12))
+    return cebridge.run_script(
+        "graph.py",
+        ["path", "wiki", a, b, "--max-hops", str(max_hops)],
+        cwd=workspace, timeout=60.0,
+    )
+
+
+def _ce_shared_sources(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import cebridge
+
+    a, err_a = _ce_page_id(
+        workspace, str(payload.get("page_a") or payload.get("from") or ""))
+    b, err_b = _ce_page_id(
+        workspace, str(payload.get("page_b") or payload.get("to") or ""))
+    if err_a:
+        return {"error": err_a}
+    if err_b:
+        return {"error": err_b}
+    return cebridge.run_script(
+        "graph.py",
+        ["shared-sources", "wiki", a, b],
+        cwd=workspace, timeout=60.0,
+    )
+
+
+def _ce_bridge_candidates(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import cebridge
+
+    limit = max(1, min(int(payload.get("limit") or 20), 50))
+    return cebridge.run_script(
+        "graph.py",
+        ["bridge-candidates", "wiki", "--limit", str(limit)],
+        cwd=workspace, timeout=90.0,
+    )
+
+
+register(Tool(
+    name="ce_vault_search",
+    description=(
+        "Search INGESTED SOURCE DOCUMENTS in the vault (vault/vault.db) via "
+        "curiosity-engine: FTS5, semantic, or hybrid (default), optionally "
+        "graph-expanded through kuzu. Use when the user wants primary "
+        "sources / PDFs / raw notes — NOT the curated wiki. For curated "
+        "wiki pages use search_wiki instead. Returns ranked vault paths "
+        "and snippets. Missing embeddings/kuzu names the reason rather "
+        "than failing silently."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+            "query": {"type": "string", "description": "Search query over vault sources."},
+            "limit": {"type": "integer", "description": "Max hits (default 10, cap 40)."},
+            "mode": {
+                "type": "string",
+                "enum": ["fts5", "semantic", "hybrid"],
+                "description": "Retrieval mode (default hybrid).",
+            },
+            "graph_expand": {
+                "type": "boolean",
+                "description": "1-hop kuzu expansion (default true).",
+            },
+        },
+    },
+    handler=_ce_vault_search,
+))
+
+register(Tool(
+    name="ce_graph_neighbors",
+    description=(
+        "Kuzu-backed multi-hop neighbourhood of a wiki page (CE graph.py). "
+        "Richer typed edges than the in-process wiki_neighbors tool when "
+        "the graph DB is built. Accepts path/stem/title; resolved to "
+        "type/slug.md for CE. On missing kuzu returns a clear install hint."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["page"],
+        "properties": {
+            "page": {"type": "string"},
+            "hops": {"type": "integer", "description": "1–6 (default 2)."},
+            "direction": {"type": "string", "enum": ["out", "in", "both"]},
+        },
+    },
+    handler=_ce_graph_neighbors,
+))
+
+register(Tool(
+    name="ce_graph_path",
+    description=(
+        "Shortest kuzu wikilink path between two pages (CE graph.py path). "
+        "Prefer this over wiki_path when the CE graph is available."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["from", "to"],
+        "properties": {
+            "from": {"type": "string"},
+            "to": {"type": "string"},
+            "max_hops": {"type": "integer"},
+        },
+    },
+    handler=_ce_graph_path,
+))
+
+register(Tool(
+    name="ce_shared_sources",
+    description=(
+        "Vault sources cited by BOTH of two wiki pages (CE graph.py "
+        "shared-sources) — co-citation evidence from the kuzu graph."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["page_a", "page_b"],
+        "properties": {
+            "page_a": {"type": "string"},
+            "page_b": {"type": "string"},
+        },
+    },
+    handler=_ce_shared_sources,
+))
+
+register(Tool(
+    name="ce_bridge_candidates",
+    description=(
+        "Page pairs that share vault sources but are not wikilinked "
+        "(CE graph.py bridge-candidates) — candidate connections for "
+        "curation / multi-hop discovery."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "limit": {"type": "integer", "description": "Max pairs (default 20)."},
+        },
+    },
+    handler=_ce_bridge_candidates,
+))
