@@ -18,9 +18,9 @@ you send it.
 - **Local & private** — two processes and your files. No cloud, no
   accounts; your data and API keys stay on your machine.
 - **Bring your own models** — hosted APIs (Anthropic, xAI Grok, OpenAI,
-  Gemini), subscription coding CLIs (Claude Code, Grok Build, Codex,
-  Copilot), or fully-local models (llama.cpp / Ollama). Mix them per task
-  with a model ladder.
+  Gemini, Meta Muse Spark), subscription coding CLIs (Claude Code, Grok
+  Build, Muse Code, Codex, Copilot), or fully-local models (llama.cpp /
+  Ollama). Mix them per task with a model ladder.
 - **Knowledge that compounds** — capture → curate → graph. Every session
   leaves the graph richer, so the next one starts smarter. Agents propose
   wiki edits; a stronger reviewer (and you) keep them honest.
@@ -33,7 +33,9 @@ you send it.
 New here? Read **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)**
 — how Switch Bay is put together in one read: the core vocabulary
 (**Workspace → Thread → Run → Turn**), the runtime shape, and the data
-flows behind the things you do most.
+flows behind the things you do most. Provider coverage (what's
+first-class vs preview, including Muse Code) is
+**[`docs/providers.md`](docs/providers.md)**.
 
 A workspace is any folder with a **curiosity-engine**-shaped layout
 (`vault/` raw sources + `wiki/` docs & graph); Switch Bay degrades

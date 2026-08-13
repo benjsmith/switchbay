@@ -47,6 +47,15 @@ def test_cli_provider_efforts_match_the_installed_binaries():
     assert [o["id"] for o in llmgateway.reasoning_options("grok-build", "grok-4.5")] == [
         "low", "medium", "high",
     ]
+    assert [o["id"] for o in llmgateway.reasoning_options("grok-build", "grok-4.6")] == [
+        "low", "medium", "high", "xhigh",
+    ]
+    assert [o["id"] for o in llmgateway.reasoning_options("muse-code", "muse-spark-1.2")] == [
+        "minimal", "low", "medium", "high", "xhigh",
+    ]
+    assert [o["id"] for o in llmgateway.reasoning_options("meta", "muse-spark-1.2")] == [
+        "minimal", "low", "medium", "high", "xhigh",
+    ]
 
 
 def test_gateway_returns_empty_for_providers_genuinely_without_the_control():

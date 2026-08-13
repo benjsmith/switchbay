@@ -52,10 +52,11 @@ Two processes and your files. No cloud, no accounts.
  └─────────────────────────┘         │  ┌────────────────────────┐  │
                                       │  │ LLM gateway (providers) │  │
    Your knowledge base                │  │  APIs: Anthropic · xAI  │  │
-   (a "workspace"):                   │  │    · OpenAI · Gemini    │  │
-     <ws>/wiki/     docs + graph      │  │  CLIs: Claude Code ·    │  │
-     <ws>/vault/    raw sources       │  │    Grok Build · Codex · │  │
-     <ws>/.workbench/  config+state ◀─┼──┤    Copilot              │  │
+   (a "workspace"):                   │  │    · OpenAI · Gemini ·  │  │
+     <ws>/wiki/     docs + graph      │  │    Meta                 │  │
+     <ws>/vault/    raw sources       │  │  CLIs: Claude Code ·    │  │
+     <ws>/.workbench/  config+state ◀─┼──┤    Grok Build · Muse ·  │  │
+                                      │  │    Codex · Copilot      │  │
                                       │  │  local: llama.cpp/Ollama│  │
                                       │  │ tools · MCP bridge      │  │
                                       │  │ conversations.db (rail) │  │
@@ -112,10 +113,15 @@ reach Switch Bay's Python tools. The daemon runs an in-tree MCP server
 (`switchbay.mcp_server`, stdio JSON-RPC, no wheel dependency); Claude
 Code, Grok Build, and Codex are each pointed at it per-workspace, so the
 same tool surface (`propose_*`, `create_report`, the wiki tools,
-`save_skill`, …) works whoever is driving. You can also register **your
-own MCP servers** (Settings → MCP servers, verified with a real
-`initialize` handshake at add time); enabled ones are fanned into all
-three CLI configs, and their tools card in the rail like any other.
+`save_skill`, …) works whoever is driving. Muse Code is **not** on that
+bridge yet. You can also register **your own MCP servers** (Settings →
+MCP servers, verified with a real `initialize` handshake at add time);
+enabled ones are fanned into the CLI configs that support them, and
+their tools card in the rail like any other.
+
+Which provider is first-class vs preview (MCP, rail cards, live
+validation) is in **[`providers.md`](providers.md)** — read that before
+assuming every picker row is equivalent.
 
 **AG-UI — agent → you (frontend).** Agent runs speak the AG-UI lifecycle
 over the WebSocket: `RUN_STARTED` · `STEP_*` ·
@@ -176,13 +182,13 @@ Key points:
   command (spawns an `interactive-pty` thread) · `/foo` = slash command
   · `!exc`/`!sql`/`!py` = interpreted.
 - **Tools run in the daemon**, cwd = workspace, scoped to it. Subprocess
-  providers (Claude Code, **Grok Build**, Codex) can't call Switch Bay's
-  Python tools directly, so they reach them through the **MCP bridge**
-  (`switchbay.mcp_server`, stdio JSON-RPC) — registered per-workspace so
-  the same tool surface works whoever is driving.
+  providers can't call Switch Bay's Python tools directly. Claude Code,
+  Grok Build, and Codex reach them through the **MCP bridge**
+  (`switchbay.mcp_server`, stdio JSON-RPC), registered per-workspace.
+  Muse Code cannot yet — see [`providers.md`](providers.md).
 - **Provider-agnostic**: the same loop drives a hosted API (Anthropic,
-  **xAI Grok**, OpenAI, Gemini), a subscription coding CLI (Claude Code,
-  **Grok Build**, Codex, Copilot), or a fully-local llama.cpp/Ollama
+  **xAI Grok**, OpenAI, Gemini, Meta), a subscription coding CLI (Claude Code,
+  **Grok Build**, Muse Code, Codex, Copilot), or a fully-local llama.cpp/Ollama
   model — **your choice, your keys, your machine**. A per-rung **model
   ladder** mixes providers by difficulty: the lead/orchestrator model
   follows your picker, while worker and trivial tiers route to cheaper

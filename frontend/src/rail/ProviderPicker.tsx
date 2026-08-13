@@ -145,11 +145,11 @@ export default function ProviderPicker() {
     }
   };
 
-  const choose = async (provider: string, model: string | null) => {
+  const choose = async (provider: string, model: string | null, force = false) => {
     const r = await fetch("/api/llm/default", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider, model }),
+      body: JSON.stringify({ provider, model, force }),
     });
     if (r.ok) {
       await refresh();
@@ -228,7 +228,7 @@ export default function ProviderPicker() {
                     </button>
                   );
                 })}
-                <CustomModelInput provider={p} onPick={(m) => choose(p.id, m)} />
+                <CustomModelInput provider={p} onPick={(m) => choose(p.id, m, true)} />
               </div>
             );
           })}

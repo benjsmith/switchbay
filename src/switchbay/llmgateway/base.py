@@ -105,7 +105,7 @@ can only PROPOSE it back through switchbay's own tool registry
 (`propose_wiki_page`, `propose_page_edit`, `create_report`, …).
 
 Only the subprocess-CLI providers (claude-code, openai-codex,
-grok-build) have a real shell. The HTTP providers — including the
+grok-build, muse-code) have a real shell. The HTTP providers — including the
 local ones — are limited to the curated tool registry by
 construction: there is no Bash tool to give them.
 

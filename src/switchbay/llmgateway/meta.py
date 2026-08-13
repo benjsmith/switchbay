@@ -1,10 +1,16 @@
-"""xAI (Grok) provider — OpenAI-compatible Chat Completions over SSE.
+"""Meta Model API — OpenAI-compatible Chat Completions over SSE.
 
-BYOK pattern (sibling of `openai.py`). xAI's API is OpenAI-compatible,
-so this is the same SSE transport pointed at `https://api.x.ai/v1`.
-The subscription "Grok Build" CLI path is a separate provider
-(`grok_build.py`) — same vendor, different auth + transport — mirroring
-how anthropic/claude_code and openai/openai_codex live as siblings.
+BYOK sibling of `openai.py` / `xai.py`, pointed at `https://api.meta.ai/v1`.
+The subscription "Muse Code" CLI path is a separate provider
+(`muse_code.py`) — same vendor, different auth + transport.
+
+Docs (2026-08): https://dev.meta.ai/docs/overview
+  · Base URL `https://api.meta.ai/v1`
+  · Bearer `MODEL_API_KEY` (keys look like `LLM|…`)
+  · Models: muse-spark-1.2 (default), muse-spark-1.1,
+    muse-spark-1.2-contributor (discounted; may train on your data)
+  · `reasoning_effort`: minimal / low / medium / high / xhigh
+    (`none` is a 400 — Muse Spark always reasons)
 """
 
 from __future__ import annotations
@@ -20,13 +26,13 @@ from .. import secrets
 from . import base
 from .openai_compat import messages_to_openai, parse_sse, tools_to_openai
 
-log = logging.getLogger("switchbay.llm.xai")
+log = logging.getLogger("switchbay.llm.meta")
 
-ID = "xai"
-LABEL = "xAI Grok"
-API_URL = "https://api.x.ai/v1/chat/completions"
-MODELS_URL = "https://api.x.ai/v1/models"
-DEFAULT_MODEL = "grok-4.5"
+ID = "meta"
+LABEL = "Meta (Muse Spark)"
+API_URL = "https://api.meta.ai/v1/chat/completions"
+MODELS_URL = "https://api.meta.ai/v1/models"
+DEFAULT_MODEL = "muse-spark-1.2"
 DEFAULT_TIMEOUT_S = 300.0
 
 PROVIDER = {
@@ -34,45 +40,46 @@ PROVIDER = {
     "label": LABEL,
     "category": "byok",
     "default_model": DEFAULT_MODEL,
-    "key_placeholder": "xai-…",
-    "key_help_url": "https://console.x.ai",
-    # Live ids as of 2026-07 (validated against /v1/models). The
-    # provider also fetches the live list via list_models(), so this
-    # only seeds the picker before the first fetch.
+    "key_placeholder": "LLM|…",
+    "key_help_url": "https://dev.meta.ai/",
     "model_suggestions": [
-        "grok-4.6",
-        "grok-4.5",
-        "grok-4.3",
-        "grok-build-0.1",
-        "grok-4.20-0309-reasoning",
-        "grok-4.20-0309-non-reasoning",
+        "muse-spark-1.2",
+        "muse-spark-1.1",
+        "muse-spark-1.2-contributor",
     ],
     "capabilities": {
         "chat": True,
         "streaming": True,
         "tools": True,
-        # Execution surface — see base.CAPABILITY_NOTES.
         # HTTP: switchbay tool registry only (propose_*/create_report).
         "shell": False,
         "file_write": False,
         "key_validation": True,
-        # Media: Settings → Media generation (see media_settings.CATALOG).
-        "image": True,
-        "video": True,
-        "voice": True,
+        # Multimodal *understanding* is on the API; we don't offer
+        # image/video *generation* through Settings → Media.
+        "image": False,
+        "video": False,
+        "voice": False,
     },
 }
 
 
 def has_key() -> bool:
-    return secrets.has(ID) or bool(os.environ.get("XAI_API_KEY"))
+    return secrets.has(ID) or bool(
+        os.environ.get("MODEL_API_KEY") or os.environ.get("META_API_KEY")
+    )
 
 
 def _api_key() -> str:
-    key = secrets.get(ID) or os.environ.get("XAI_API_KEY")
+    key = (
+        secrets.get(ID)
+        or os.environ.get("MODEL_API_KEY")
+        or os.environ.get("META_API_KEY")
+    )
     if not key:
         raise base.ProviderError(
-            "xAI API key required. Set it in Settings.",
+            "Meta Model API key required. Set it in Settings "
+            "(https://dev.meta.ai/).",
             code="missing-key",
         )
     return key
@@ -98,35 +105,29 @@ def _http_error(status: int, text: str) -> base.ProviderError:
     except (ValueError, TypeError):
         pass
     return base.ProviderError(
-        f"xAI: {msg}",
+        f"Meta: {msg}",
         code=code,
         status=status,
         retryable=code in ("rate-limit", "server", "timeout"),
     )
 
 
-# ── Reasoning effort ────────────────────────────────────────────────
-# xAI takes an OpenAI-shaped `reasoning_effort` enum. Non-reasoning
-# models reject it outright, so the option list is gated on the model
-# id rather than advertised provider-wide (see base.REASONING_NOTES).
-
-_NON_REASONING_HINTS = ("non-reasoning", "grok-build")
+# Muse Spark is a reasoning model. `none` is rejected with HTTP 400.
+# Contributor vs standard is a billing/training-tier, not a reasoning gate.
 
 
 def reasoning_options(model: str | None = None) -> list[dict]:
-    m = (model or DEFAULT_MODEL or "").lower()
-    if any(h in m for h in _NON_REASONING_HINTS):
-        return []
+    del model
     return [
-        base.reasoning_option(
-            "low", "Low", "fast and much cheaper — good for edits and chores"),
-        base.reasoning_option(
-            "high", "High", "slower, for planning and hard problems"),
+        base.reasoning_option("minimal", "Minimal", "shortest reasoning pass"),
+        base.reasoning_option("low", "Low", "light reasoning — faster, cheaper"),
+        base.reasoning_option("medium", "Medium", "moderate depth"),
+        base.reasoning_option("high", "High", "deep reasoning"),
+        base.reasoning_option("xhigh", "Extra high", "maximum reasoning depth"),
     ]
 
 
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
-    """Stream a chat completion. Yields TextChunks / ToolUseChunks / DoneChunk."""
     model = req.model or DEFAULT_MODEL
     headers = {
         "Content-Type": "application/json",
@@ -141,12 +142,10 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     tools = tools_to_openai(req.tools)
     if tools:
         body["tools"] = tools
-    # Only send temperature when this model takes no reasoning_effort
-    # (non-reasoning family) — reasoning models often reject it.
-    if req.temperature is not None and not reasoning_options(model):
-        body["temperature"] = req.temperature
+    # Muse Spark is tuned at temperature 1.0 and is a reasoning model —
+    # don't send temperature (docs: leave unset; none isn't supported).
     if req.max_tokens:
-        body["max_tokens"] = req.max_tokens
+        body["max_completion_tokens"] = req.max_tokens
     effort = base.coerce_effort(
         req.reasoning_effort, reasoning_options(model))
     if effort:
@@ -162,7 +161,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
                     yield chunk
     except aiohttp.ClientConnectionError as e:
         raise base.ProviderError(
-            "Could not reach api.x.ai",
+            "Could not reach api.meta.ai",
             code="network", retryable=True, cause=e,
         ) from e
     except TimeoutError as e:
@@ -173,7 +172,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
 
 
 async def list_models() -> list[str]:
-    """GET /v1/models (OpenAI-compatible). Cached daily by model_cache."""
+    """GET /v1/models. Cached daily by model_cache."""
     if not has_key():
         return []
     headers = {"Authorization": f"Bearer {_api_key()}"}
@@ -189,20 +188,27 @@ async def list_models() -> list[str]:
     items = body.get("data") if isinstance(body, dict) else None
     if not isinstance(items, list):
         return []
-    # Keep grok chat/coding models; drop image/video generators
-    # (grok-imagine-*) which aren't chat-completion models.
-    drop = ("imagine", "image", "video")
-    out = [it["id"] for it in items
-           if isinstance(it, dict) and isinstance(it.get("id"), str)
-           and it["id"].lower().startswith("grok")
-           and not any(d in it["id"].lower() for d in drop)]
-    out.sort(key=lambda m: (len(m), m))
+    out = [
+        it["id"] for it in items
+        if isinstance(it, dict) and isinstance(it.get("id"), str)
+        and it["id"].lower().startswith("muse-")
+    ]
+    # Newest-looking first (1.2 before 1.1); contributor last so the
+    # standard tier is the obvious pick.
+    def _rank(mid: str) -> tuple:
+        low = mid.lower()
+        contrib = 1 if "contributor" in low else 0
+        return (contrib, -len(low), low)
+    out.sort(key=_rank)
     return out
 
 
 async def validate_key(*, workspace: str | None = None) -> bool:
     del workspace
-    req = base.ChatRequest(messages=[{"role": "user", "content": "ping"}], max_tokens=1)
+    req = base.ChatRequest(
+        messages=[{"role": "user", "content": "ping"}],
+        max_tokens=1,
+    )
     async for _ in chat_stream(req):
         return True
     return True

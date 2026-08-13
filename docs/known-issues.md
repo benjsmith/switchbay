@@ -4,6 +4,10 @@ An honest, short list of what's rough or deferred in this release. None
 are data-loss or security issues — each is cosmetic, has a workaround,
 or is an explicit scope decision.
 
+Provider implementation state (first-class vs usable vs preview,
+including Muse Code) lives in **[`providers.md`](providers.md)**. This
+page only keeps the one-line workarounds.
+
 ## Rough edges (with workarounds)
 
 | Area | Issue | Workaround |
@@ -11,7 +15,8 @@ or is an explicit scope decision.
 | Graph | A page deleted on disk can linger in the graph until the next rebuild. | Run `/rescan` (slash command or button) to force a cold rebuild. |
 | Plots | Plot specs live in `.workbench/plots/`, not as `wiki/plots/<slug>.md` pages. | They work as-is; promoting them to CE-native pages is a post-v1 design call. |
 | Packs | With many pack tabs open the tab strip scrolls; there's no overflow dropdown yet. | Scroll the strip horizontally. |
-| Codex provider | Codex's tool permissions are workspace-wide — it has no per-call approval card (the upstream CLI lacks a PreToolUse hook). | Use Claude Code or Grok Build, which do surface per-tool approval cards. |
+| Codex provider | No per-call rail card (upstream has no PreToolUse). MCP works. | Claude Code or Grok Build for rail cards. Details: [`providers.md`](providers.md). |
+| Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |
 
 ## Platform support
 

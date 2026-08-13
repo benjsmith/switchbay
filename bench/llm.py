@@ -3,7 +3,7 @@ auth, model defaults, and error handling so the bench doesn't reimplement
 four vendor APIs. One-shot (non-streaming to the caller): accumulates the
 provider's stream to a string.
 
-Subscription CLIs (claude-code, openai-codex, grok-build) are preferred
+Subscription CLIs (claude-code, openai-codex, grok-build, muse-code) are preferred
 over BYOK HTTP providers for the same model family: the bench must not
 burn API credits when the user has an active Code/Codex/Grok subscription.
 """
@@ -36,6 +36,7 @@ SUBSCRIPTION_CLI = frozenset({
     "claude-code",
     "openai-codex",
     "grok-build",
+    "muse-code",
 })
 
 # Prefer subscription id when a BYOK alias is requested (or vice-versa for
@@ -43,6 +44,7 @@ SUBSCRIPTION_CLI = frozenset({
 BYOK_TO_SUBSCRIPTION = {
     "anthropic": "claude-code",
     "openai": "openai-codex",
+    "meta": "muse-code",
 }
 SUBSCRIPTION_TO_BYOK = {v: k for k, v in BYOK_TO_SUBSCRIPTION.items()}
 

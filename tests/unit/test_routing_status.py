@@ -22,10 +22,11 @@ def test_cli_providers_can_execute():
     assert llmgateway.can_execute("claude-code")
     assert llmgateway.can_execute("grok-build")
     assert llmgateway.can_execute("openai-codex")
+    assert llmgateway.can_execute("muse-code")
 
 
 def test_http_and_local_providers_cannot_execute():
-    for pid in ("anthropic", "openai", "gemini", "xai", "llamacpp", "ollama"):
+    for pid in ("anthropic", "openai", "gemini", "xai", "meta", "llamacpp", "ollama"):
         assert not llmgateway.can_execute(pid), pid
 
 

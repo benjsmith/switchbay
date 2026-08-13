@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from . import (
     anthropic, claude_code, gemini, github_copilot, grok_build, llamacpp,
-    mlx, ollama, openai, openai_codex, xai,
+    meta, mlx, muse_code, ollama, openai, openai_codex, xai,
 )
 from .base import (
     ChatRequest, ChunkEvent, DoneChunk, ProviderError, ReasoningChunk,
@@ -31,11 +31,13 @@ PROVIDERS = {
     # Subscriptions (Grok Build 2nd, after Claude) …
     claude_code.ID: claude_code,
     grok_build.ID: grok_build,
+    muse_code.ID: muse_code,
     openai_codex.ID: openai_codex,
     github_copilot.ID: github_copilot,
     # … then BYOK APIs (xAI Grok 2nd, after Anthropic) …
     anthropic.ID: anthropic,
     xai.ID: xai,
+    meta.ID: meta,
     openai.ID: openai,
     gemini.ID: gemini,
     # … then local. MLX leads on Apple silicon (native unified-memory

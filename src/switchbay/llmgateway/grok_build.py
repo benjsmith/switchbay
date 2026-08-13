@@ -19,8 +19,8 @@ Validated against a live `grok` 0.2.93 install (2026-07-10):
   · `--rules` APPENDS to grok's own system prompt (Claude Code's
     --append-system-prompt); `--system-prompt-override` would replace
     it, which we don't want. `-p/--single` prints and exits.
-  · CLI default model is `grok-4.5` (grok-build-0.1 is API-only, not a
-    CLI model). We do NOT pass `--always-approve`.
+  · CLI default model is `grok-4.6` as of grok 1.0.3 (grok-build-0.1 is
+    API-only, not a CLI model). We do NOT pass `--always-approve`.
 
 MCP tool bridge (done, validated live): `_ensure_mcp` registers
 switchbay's MCP server in `<workspace>/.grok/config.toml` (project
@@ -95,6 +95,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -108,7 +109,7 @@ log = logging.getLogger("switchbay.llm.grok_build")
 ID = "grok-build"
 LABEL = "Grok Build"
 BINARY = "grok"
-DEFAULT_MODEL = "grok-4.5"
+DEFAULT_MODEL = "grok-4.6"
 
 PROVIDER = {
     "id": ID,
@@ -121,8 +122,10 @@ PROVIDER = {
         "bash`) and sign in with your SuperGrok / X Premium+ subscription "
         "(`grok` → /login). Needs the `grok` binary on PATH."
     ),
-    # CLI models (from `grok models`); grok-build-0.1 is API-only.
+    # Seed only — list_models() reads `grok models` / ~/.grok/models_cache.json
+    # so the picker tracks the installed CLI. grok-build-0.1 is API-only.
     "model_suggestions": [
+        "grok-4.6",
         "grok-4.5",
         "grok-composer-2.5-fast",
     ],
@@ -139,9 +142,111 @@ PROVIDER = {
 }
 
 
+def grok_binary() -> str | None:
+    """Resolve the `grok` CLI.
+
+    launchd/systemd agents often have a slim PATH that still includes
+    ``~/.local/bin`` but not ``~/.grok/bin`` (the installer's primary
+    drop). Probe both plus PATH.
+    """
+    found = shutil.which(BINARY)
+    if found:
+        return found
+    home = Path.home()
+    for cand in (
+        home / ".grok" / "bin" / BINARY,
+        home / ".local" / "bin" / BINARY,
+    ):
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return None
+
+
 def has_key() -> bool:
-    """Subscription provider: "has key" = the binary is on PATH."""
-    return shutil.which(BINARY) is not None
+    """Subscription provider: "has key" = the binary is installed."""
+    return grok_binary() is not None
+
+
+_DEFAULT_MODEL_RE = re.compile(r"^Default model:\s+(\S+)", re.I)
+_BULLET_MODEL_RE = re.compile(r"^\s*[\*\-•]\s+(\S+)")
+
+
+def parse_models_cli(text: str) -> list[str]:
+    """Parse `grok models` human output. Default first, then the rest."""
+    default: str | None = None
+    found: list[str] = []
+    in_list = False
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        dm = _DEFAULT_MODEL_RE.match(line)
+        if dm:
+            default = dm.group(1)
+            continue
+        if line.lower().startswith("available models"):
+            in_list = True
+            continue
+        if not in_list:
+            continue
+        bm = _BULLET_MODEL_RE.match(raw)
+        if bm:
+            mid = bm.group(1)
+            if mid not in found:
+                found.append(mid)
+            continue
+        # Next prose section ends the list.
+        if line[0].isalnum():
+            in_list = False
+    if default and default not in found:
+        found.insert(0, default)
+    elif default and found and found[0] != default:
+        found = [default] + [m for m in found if m != default]
+    return found
+
+
+def models_from_cache(path: Path | None = None) -> list[str]:
+    """Read ~/.grok/models_cache.json (same list the CLI refreshes)."""
+    p = path or (Path.home() / ".grok" / "models_cache.json")
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    models = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(models, dict):
+        return []
+    out: list[str] = []
+    for mid, rec in models.items():
+        if not isinstance(mid, str) or not mid:
+            continue
+        info = rec.get("info") if isinstance(rec, dict) else None
+        if isinstance(info, dict) and info.get("hidden"):
+            continue
+        out.append(mid)
+    return out
+
+
+async def list_models() -> list[str]:
+    """Live CLI catalogue — `grok models`, then the CLI's own cache.
+
+    The xAI HTTP provider lists api.x.ai models; this lists what the
+    *subscription CLI* will actually accept via ``--model``.
+    """
+    binary = grok_binary()
+    if binary:
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                binary, "models",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _err = await asyncio.wait_for(proc.communicate(), timeout=8.0)
+            parsed = parse_models_cli(stdout.decode("utf-8", errors="replace"))
+            if parsed:
+                return parsed
+        except Exception:  # noqa: BLE001
+            log.warning("grok models failed — falling back to cache", exc_info=True)
+    return models_from_cache()
 
 
 def _content_to_text(content: object) -> str:
@@ -224,7 +329,7 @@ async def _ensure_mcp(workspace: Path) -> None:
                 return
     except OSError:
         pass
-    argv = ["grok", "mcp", "add", "switchbay", spec["command"]]
+    argv = [grok_binary() or "grok", "mcp", "add", "switchbay", spec["command"]]
     for k, v in spec["env"].items():
         argv += ["-e", f"{k}={v}"]
     argv += ["-s", "project", "--"] + list(spec["args"])
@@ -245,7 +350,7 @@ async def _ensure_mcp(workspace: Path) -> None:
         for s in mcpstore.enabled_servers():
             if s["transport"] != "stdio" or not s.get("command") or s["name"] == "switchbay":
                 continue
-            uargv = ["grok", "mcp", "add", s["name"], s["command"]]
+            uargv = [grok_binary() or "grok", "mcp", "add", s["name"], s["command"]]
             for k, v in (s.get("env") or {}).items():
                 uargv += ["-e", f"{k}={v}"]
             uargv += ["-s", "project", "--"] + list(s.get("args") or [])
@@ -376,21 +481,35 @@ def _verify_workspace(raw: str | None) -> Path:
 # `xai` — the flag is meaningless on the others.
 
 _NON_REASONING_HINTS = ("non-reasoning", "composer")
+_XHIGH_SINCE = (4, 6)  # grok-4.6 CLI menu advertises xhigh; 4.5 does not.
+
+
+def _model_version(model: str) -> tuple[int, int] | None:
+    m = re.search(r"grok-(\d+)(?:\.(\d+))?", model)
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2) or 0)
 
 
 def reasoning_options(model: str | None = None) -> list[dict]:
     m = (model or DEFAULT_MODEL or "").lower()
     if any(h in m for h in _NON_REASONING_HINTS):
         return []
-    return [
+    opts = [
         base.reasoning_option("low", "Low", "fast and much cheaper"),
         base.reasoning_option("medium", "Medium", "balanced"),
         base.reasoning_option("high", "High", "for planning and hard problems"),
     ]
+    ver = _model_version(m)
+    if ver is not None and ver >= _XHIGH_SINCE:
+        opts.append(base.reasoning_option(
+            "xhigh", "Extra high", "highest effort — grok-4.6+"))
+    return opts
 
 
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
-    if not has_key():
+    binary = grok_binary()
+    if not binary:
         raise base.ProviderError(
             "`grok` not found on PATH. Install Grok Build: "
             "`curl -fsSL https://x.ai/cli/install.sh | bash`.",
@@ -403,7 +522,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     prompt = (_content_to_text(req.messages[-1].get("content", ""))
               if req.session_id and req.messages else _flatten_messages(req.messages))
 
-    argv = [BINARY, "-p", prompt, "--output-format", "streaming-json",
+    argv = [binary, "-p", prompt, "--output-format", "streaming-json",
             "--cwd", str(workspace),
             # Project-scoped MCP (`.grok/config.toml`) is gated on folder
             # trust. Without --trust, Grok leaves switchbay's MCP server
