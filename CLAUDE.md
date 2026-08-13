@@ -4,6 +4,8 @@ Switch Bay is a local single-user workbench over knowledge bases: one
 Python daemon (`src/switchbay/`) + a browser frontend (`frontend/`),
 talking over a WebSocket. Start with the **README** for the run-dev
 workflow and architecture, and skim `docs/concepts-and-data-flow.md`.
+Provider implementation state (first-class vs preview) is
+`docs/providers.md` — don't treat every picker row as equivalent.
 
 Don't run `python` / `pip` / `npm` directly — use `make` for Python and
 `pnpm --dir frontend` for JS.
