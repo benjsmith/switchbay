@@ -373,6 +373,7 @@ export default function ZenChatBox({
             focusedThread={focusedThread}
             onSwitchThread={onSwitchThread}
             onNewThread={onNewThread}
+            dropDown={docked}
           />
           <span className="sy-spacer" />
           <button
@@ -428,6 +429,7 @@ export default function ZenChatBox({
               focusedThread={focusedThread}
               onSwitchThread={onSwitchThread}
               onNewThread={onNewThread}
+              dropDown={docked}
             />
             <span className="sy-spacer" />
             {turns.length > 0 && (
@@ -732,11 +734,13 @@ function ResponseItem({ entry: e }: { entry: RailEntry }) {
 /** Thread switcher as a drop-UP (the box floats at the bottom).
  *  Same data as the Power ThreadBar, trimmed: rows + new chat/shell. */
 function ThreadDropUp({
-  focusedThread, onSwitchThread, onNewThread,
+  focusedThread, onSwitchThread, onNewThread, dropDown = false,
 }: {
   focusedThread: string | null;
   onSwitchThread: (threadId: string, kind: string) => void;
   onNewThread: (kind?: "structured-agent" | "interactive-pty") => void;
+  /** Docked pane: open below the button so the menu isn't clipped. */
+  dropDown?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [threads, setThreads] = useState<ThreadRow[]>([]);
@@ -805,10 +809,13 @@ function ThreadDropUp({
           {focused?.kind === "interactive-pty" ? ">_" : "◈"}
         </span>
         <span className="sy-zen-threads-label">{label}</span>
-        <span className="sy-thread-caret">▴</span>
+        <span className="sy-thread-caret">{dropDown ? "▾" : "▴"}</span>
       </button>
       {open && (
-        <div className="sy-zen-threads-menu" role="listbox">
+        <div
+          className={"sy-zen-threads-menu" + (dropDown ? " sy-zen-threads-menu--down" : "")}
+          role="listbox"
+        >
           <div className="sy-zen-threads-new">
             <button
               type="button"

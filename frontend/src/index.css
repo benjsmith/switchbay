@@ -7411,8 +7411,8 @@ body {
 .sy-zen .sy-graph-count {
   bottom: var(--sy-minimap-bottom, 12px);
 }
-/* Brand sits right of the graph's own ↻/✂ corner buttons. */
-.sy-zen-chrome--brand { top: 8px; left: 96px; pointer-events: none; gap: 8px; }
+/* Brand sits right of the graph's ↻/✂/+ corner buttons. */
+.sy-zen-chrome--brand { top: 16px; left: 124px; pointer-events: none; gap: 8px; }
 .sy-zen-brand {
   font-weight: 600;
   letter-spacing: 0.02em;
@@ -7429,10 +7429,13 @@ body {
  * floating chrome clusters). */
 .sy-ws-wrap--zen {
   position: absolute;
-  top: 8px;
-  left: 96px;
+  /* After ↻ (16) + ✂ (52) + + (88, 28px) + 8px gap. */
+  top: 16px;
+  left: 124px;
+  height: 28px;
   z-index: 40;
   display: inline-flex;
+  align-items: center;
 }
 .sy-zen-brand-btn {
   position: static;   /* the wrap owns placement; the button just flows */
@@ -7440,6 +7443,10 @@ body {
   cursor: pointer;
   font: inherit;
   gap: 8px;
+  height: 28px;
+  padding-top: 0;
+  padding-bottom: 0;
+  box-sizing: border-box;
 }
 .sy-zen-brand-btn--open { opacity: 1; }
 .sy-zen-brand-btn .chev { color: var(--text-faint); font-size: 10px; }
@@ -7731,6 +7738,12 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+/* Docked Chat sits at the top of the pane — drop the menu down so
+ * overflow:hidden on the surface doesn't clip it. */
+.sy-zen-threads-menu--down {
+  top: calc(100% + 8px);
+  bottom: auto;
 }
 .sy-zen-threads-new {
   display: flex;
