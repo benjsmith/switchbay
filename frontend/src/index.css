@@ -7496,6 +7496,10 @@ body {
   border: none;
   background: var(--bg);
   backdrop-filter: none;
+  /* Same right inset as .sy-zen-surf-head so ⇱ float / the
+   * response half stay clear of the pasteboard/help/settings cluster. */
+  padding-right: 150px;
+  box-sizing: border-box;
 }
 .sy-zen-chatbox--docked .sy-zen-chat-response { border-radius: 0; }
 

@@ -377,29 +377,31 @@ export default function ZenChatBox({
             dropDown={docked}
           />
           <span className="sy-spacer" />
-          <button
-            type="button"
-            className="sy-zen-chat-btn"
-            onClick={() => {
-              // Ruling: promotion auto-collapses the box to the pill;
-              // reopening it shows the normal chat view (the pane owns
-              // the terminal until ⇲ returns it).
-              onPromotePty();
-              setCollapsed(true);
-            }}
-            title="Promote this terminal to the right pane at full height (the box collapses to a pill)"
-          >
-            ⇱ pane
-          </button>
           {!docked && (
-            <button
-              type="button"
-              className="sy-zen-chat-btn"
-              onClick={() => setCollapsed(true)}
-              title="Collapse to a pill"
-            >
-              ▾
-            </button>
+            <>
+              <button
+                type="button"
+                className="sy-zen-chat-btn"
+                onClick={() => {
+                  // Ruling: promotion auto-collapses the box to the pill;
+                  // reopening it shows the normal chat view (the pane owns
+                  // the terminal until ⇲ returns it).
+                  onPromotePty();
+                  setCollapsed(true);
+                }}
+                title="Promote this terminal to the right pane at full height (the box collapses to a pill)"
+              >
+                ⇱ pane
+              </button>
+              <button
+                type="button"
+                className="sy-zen-chat-btn"
+                onClick={() => setCollapsed(true)}
+                title="Collapse to a pill"
+              >
+                ▾
+              </button>
+            </>
           )}
           {modeToggle}
         </div>
