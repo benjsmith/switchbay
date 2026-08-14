@@ -7378,7 +7378,9 @@ body {
 /* ── Floating chrome ── */
 .sy-zen-chrome {
   position: absolute;
-  z-index: 40;
+  /* Above the docked Chat surface (z-index 50) so the hover glow
+   * paints over the reply column instead of under it. */
+  z-index: 60;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -7487,6 +7489,7 @@ body {
 /* Docked: fill the right pane instead of floating over the graph. */
 .sy-zen-chatbox--docked {
   position: relative;
+  z-index: auto;
   left: auto;
   transform: none;
   bottom: auto;
