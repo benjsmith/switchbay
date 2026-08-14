@@ -7723,9 +7723,6 @@ body {
   min-width: 0;
 }
 .sy-zen-threads-menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
   min-width: 270px;
   max-height: 40vh;
   overflow-y: auto;
@@ -7733,17 +7730,16 @@ body {
   border: 1px solid var(--line);
   border-radius: 10px;
   padding: 6px;
-  z-index: 70;
   box-shadow: 0 8px 30px rgba(0, 0, 0, 0.35);
   display: flex;
   flex-direction: column;
   gap: 2px;
 }
-/* Docked Chat sits at the top of the pane — drop the menu down so
- * overflow:hidden on the surface doesn't clip it. */
-.sy-zen-threads-menu--down {
-  top: calc(100% + 8px);
-  bottom: auto;
+/* Portaled to document.body so the floating box's backdrop-filter
+ * (and the docked pane's overflow) cannot clip +chat/+shell. */
+.sy-zen-threads-menu--portal {
+  position: fixed;
+  z-index: 80;
 }
 .sy-zen-threads-new {
   display: flex;

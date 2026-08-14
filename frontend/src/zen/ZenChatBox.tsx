@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { RailEntry } from "../rail/Rail";
 import {
   DecisionRow, PermissionRow, ProposalRow, ProviderRetryRow, MicroEditFeedbackRow,
@@ -745,6 +746,18 @@ function ThreadDropUp({
   const [open, setOpen] = useState(false);
   const [threads, setThreads] = useState<ThreadRow[]>([]);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top?: number; bottom?: number; left: number } | null>(null);
+
+  const placeMenu = () => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - 278));
+    setMenuPos(dropDown
+      ? { top: r.bottom + 8, left }
+      : { bottom: window.innerHeight - r.top + 8, left });
+  };
 
   const load = async () => {
     try {
@@ -775,10 +788,20 @@ function ThreadDropUp({
       window.removeEventListener("sy:threads-changed", onChanged);
     };
   }, []);
+  useLayoutEffect(() => {
+    if (!open) return;
+    placeMenu();
+    window.addEventListener("resize", placeMenu);
+    return () => window.removeEventListener("resize", placeMenu);
+    // placeMenu reads dropDown + wrapRef; re-run when those change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, dropDown]);
   useEffect(() => {
     if (!open) return;
     const onDoc = (ev: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(ev.target as Node)) setOpen(false);
+      const t = ev.target as Node;
+      if (wrapRef.current?.contains(t) || menuRef.current?.contains(t)) return;
+      setOpen(false);
     };
     const onKey = (ev: KeyboardEvent) => { if (ev.key === "Escape") setOpen(false); };
     window.addEventListener("mousedown", onDoc);
@@ -811,10 +834,16 @@ function ThreadDropUp({
         <span className="sy-zen-threads-label">{label}</span>
         <span className="sy-thread-caret">{dropDown ? "▾" : "▴"}</span>
       </button>
-      {open && (
+      {open && createPortal(
         <div
-          className={"sy-zen-threads-menu" + (dropDown ? " sy-zen-threads-menu--down" : "")}
+          ref={menuRef}
+          className="sy-zen-threads-menu sy-zen-threads-menu--portal"
           role="listbox"
+          style={{
+            left: menuPos?.left ?? 0,
+            top: menuPos?.top,
+            bottom: menuPos?.bottom,
+          }}
         >
           <div className="sy-zen-threads-new">
             <button
@@ -873,7 +902,8 @@ function ThreadDropUp({
               )}
             </button>
           ))}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
