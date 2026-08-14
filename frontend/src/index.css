@@ -7129,6 +7129,11 @@ body {
   min-width: 0;
   height: 100%;
   overflow: hidden;
+  /* Gutter for the floating pasteboard/help/settings cluster
+   * (positioned on .sy-zen, top-right) so Chat / Sheet / Browser
+   * never paint underneath those buttons. */
+  padding-right: 168px;
+  box-sizing: border-box;
 }
 
 /* Divider: full-range draggable; the handle is its own fixed-width
@@ -7179,7 +7184,7 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 150px 5px 12px; /* right gap clears the floating chrome */
+  padding: 7px 12px 5px 12px;
 }
 .sy-zen-surf-pickwrap {
   position: relative;
@@ -7496,10 +7501,6 @@ body {
   border: none;
   background: var(--bg);
   backdrop-filter: none;
-  /* Same right inset as .sy-zen-surf-head so ⇱ float / the
-   * response half stay clear of the pasteboard/help/settings cluster. */
-  padding-right: 150px;
-  box-sizing: border-box;
 }
 .sy-zen-chatbox--docked .sy-zen-chat-response { border-radius: 0; }
 
