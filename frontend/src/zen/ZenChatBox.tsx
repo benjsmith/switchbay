@@ -136,25 +136,6 @@ export default function ZenChatBox({
     return () => { root.style.setProperty("--sy-minimap-bottom", "12px"); };
   }, [docked, collapsed, boxH]);
 
-  const modeToggle = docked ? (
-    <button
-      type="button"
-      className="sy-zen-chat-btn"
-      onClick={() => onFloat?.()}
-      title="Float this chat on the bottom of the window"
-    >
-      ⇱ float
-    </button>
-  ) : (
-    <button
-      type="button"
-      className="sy-zen-chat-btn"
-      onClick={() => onDock?.()}
-      title="Dock this chat as a right-pane tab"
-    >
-      ⇲ tab
-    </button>
-  );
   const resizeHandle = (
     <div
       className="sy-zen-box-handle"
@@ -334,6 +315,35 @@ export default function ZenChatBox({
   const isPty = focusedThreadKind === "interactive-pty" && !!focusedThread;
   const running = activeRunIds.size > 0;
 
+  const placeBtn = docked ? (
+    <button
+      type="button"
+      className="sy-zen-chat-btn"
+      onClick={() => onFloat?.()}
+      title="Float this thread at the bottom of the window"
+    >
+      ⇱ float
+    </button>
+  ) : (
+    <button
+      type="button"
+      className="sy-zen-chat-btn"
+      onClick={() => {
+        if (isPty) {
+          onPromotePty();
+          setCollapsed(true);
+        } else {
+          onDock?.();
+        }
+      }}
+      title={isPty
+        ? "Open this shell as a tab (full height on the right)"
+        : "Open this chat as a tab (right pane)"}
+    >
+      ⇲ tab
+    </button>
+  );
+
   // ── Collapsed pill ─────────────────────────────────────────────
   if (collapsed && !docked) {
     return (
@@ -347,7 +357,7 @@ export default function ZenChatBox({
         title="Open the chat box (or just start typing)"
       >
         <span className="sy-zen-pill-glyph">{isPty ? ">_" : "◈"}</span>
-        {isPty ? (ptyPromoted ? "terminal in pane" : "shell") : "chat"}
+        {isPty ? (ptyPromoted ? "terminal in tab" : "shell") : "chat"}
         {running && <span className="sy-zen-pill-dot" title="runs active" />}
         {artifactPending && (
           <span
@@ -378,32 +388,16 @@ export default function ZenChatBox({
           />
           <span className="sy-spacer" />
           {!docked && (
-            <>
-              <button
-                type="button"
-                className="sy-zen-chat-btn"
-                onClick={() => {
-                  // Ruling: promotion auto-collapses the box to the pill;
-                  // reopening it shows the normal chat view (the pane owns
-                  // the terminal until ⇲ returns it).
-                  onPromotePty();
-                  setCollapsed(true);
-                }}
-                title="Promote this terminal to the right pane at full height (the box collapses to a pill)"
-              >
-                ⇱ pane
-              </button>
-              <button
-                type="button"
-                className="sy-zen-chat-btn"
-                onClick={() => setCollapsed(true)}
-                title="Collapse to a pill"
-              >
-                ▾
-              </button>
-            </>
+            <button
+              type="button"
+              className="sy-zen-chat-btn"
+              onClick={() => setCollapsed(true)}
+              title="Collapse to a pill"
+            >
+              ▾
+            </button>
           )}
-          {modeToggle}
+          {placeBtn}
         </div>
         <div className="sy-zen-chat-ptyhost">
           <PtyThreadSurface
@@ -482,7 +476,7 @@ export default function ZenChatBox({
                 ▾
               </button>
             )}
-            {modeToggle}
+            {placeBtn}
           </div>
           <div className="sy-zen-chat-usermsg">
             {turn?.user ? (
@@ -565,7 +559,7 @@ export default function ZenChatBox({
               <button
                 type="button"
                 className="sy-zen-chat-btn sy-zen-composer-btn"
-                title="Start a new shell thread — the terminal takes the box (⇱ promotes it to the pane)"
+                title="Start a new shell thread — the terminal takes the box (⇲ tab opens it full height)"
                 aria-label="New shell thread"
                 onClick={() => onNewThread("interactive-pty")}
               >
@@ -860,7 +854,7 @@ function ThreadDropUp({
               type="button"
               className="sy-zen-chat-btn"
               onClick={() => { setOpen(false); onNewThread("interactive-pty"); }}
-              title="Start a new shell thread (the terminal takes the box; ⇱ promotes it to the pane)"
+              title="Start a new shell thread (the terminal takes the box; ⇲ tab opens it full height)"
             >
               + shell
             </button>

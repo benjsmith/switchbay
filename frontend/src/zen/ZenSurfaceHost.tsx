@@ -103,7 +103,7 @@ export default function ZenSurfaceHost({
           surface="tab"
           onPopIn={onReturnPty}
           popInLabel={{
-            label: "⇲ chat box",
+            label: "⇱ float",
             title: "Return this terminal to the floating chat box (thread and session keep running)",
           }}
         />
@@ -204,7 +204,7 @@ export default function ZenSurfaceHost({
           )}
         </div>
         {promotedPty && (
-          <span className="sy-zen-surf-ptynote">terminal promoted — ⇲ returns it to the chat box</span>
+          <span className="sy-zen-surf-ptynote">shell tab — ⇱ float returns it to the chat box</span>
         )}
         <span className="sy-spacer" />
         {runningCount > 0 && (
