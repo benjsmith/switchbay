@@ -1,10 +1,10 @@
 /**
- * Size-gated Knowledge Atlas mount for the Graph tab.
+ * Knowledge Atlas mount for the Graph tab.
  *
- * Classic remains the default. Wikis above 360 pages get a chooser;
- * the preference is stored in localStorage. Theme comes from Switchbay
- * CSS (`--type-*` + `documentElement.dataset.theme`); selection stays
- * on the existing `#page=<id>` hash so App.tsx still owns the layer.
+ * Classic remains the default. The chooser is always available so a
+ * mid-size wiki can still opt in (CE hid it below 360 pages). Preference
+ * lives in localStorage. Theme comes from Switchbay CSS (`--type-*` +
+ * `documentElement.dataset.theme`); selection stays on `#page=<id>`.
  */
 
 import type { GraphData } from "./types";
@@ -62,10 +62,9 @@ function queryChoice(): ViewerMode | null {
   }
 }
 
-export function atlasEnabled(data: GraphData): boolean {
+export function atlasEnabled(_data: GraphData): boolean {
   const explicit = queryChoice();
   if (explicit) return explicit === "atlas";
-  if (!atlasEligible(data)) return false;
   try {
     return localStorage.getItem(STORAGE_KEY) === "atlas";
   } catch {
@@ -239,10 +238,11 @@ export function mountAtlas(data: GraphData): boolean {
   return true;
 }
 
-export function initAtlasChoice(data: GraphData, activeMode: ViewerMode): void {
+export function initAtlasChoice(_data: GraphData, activeMode: ViewerMode): void {
   const button = document.getElementById("viewer-mode");
   const state = document.getElementById("viewer-mode-state");
-  if (!button || !state || !atlasEligible(data)) return;
+  const atlasApi = (window as unknown as { KnowledgeAtlas?: AtlasGlobal }).KnowledgeAtlas;
+  if (!button || !state || !atlasApi) return;
 
   state.textContent = activeMode;
   button.title = activeMode === "atlas"

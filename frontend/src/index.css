@@ -2929,13 +2929,13 @@ body {
 }
 .sy-curation-replay--fading .sy-curation-replay-label { opacity: 0; }
 
-/* Bottom-right node/edge counter, shared between the replay
- * overlay and the real graph. Quiet grey, tabular numerals so
- * the digits don't jitter as they tick. */
+/* Node/edge counter, shared between the replay overlay and the
+ * real graph. Sits to the left of the Classic/Atlas minimap
+ * (190px + 12px inset + 12px gap) so the two never stack. */
 .sy-graph-count {
   position: absolute;
   bottom: 12px;
-  right: 16px;
+  right: 214px;
   font-size: 11px;
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;
