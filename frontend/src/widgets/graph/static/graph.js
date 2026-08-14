@@ -182,7 +182,8 @@ window.Graph = (function () {
     canvas.setAttribute('aria-label', 'Classic graph overview map; click or drag to move the main view');
     canvas.title = 'Whole-wiki overview — click or drag to navigate';
     canvas.style.cssText = [
-      'position:absolute', 'right:12px', 'bottom:12px', 'width:190px', 'height:128px',
+      'position:absolute', 'right:12px', 'bottom:var(--sy-minimap-bottom, 12px)',
+      'width:190px', 'height:128px',
       'z-index:4', 'border:1px solid rgba(127,127,127,.42)', 'border-radius:8px',
       'box-shadow:0 3px 14px rgba(0,0,0,.24)', 'cursor:crosshair', 'touch-action:none',
     ].join(';');

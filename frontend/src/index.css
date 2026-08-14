@@ -7255,7 +7255,13 @@ body {
   display: flex;
   flex-direction: column;
 }
-.sy-zen-surf-body > * { flex: 1 1 auto; min-height: 0; }
+.sy-zen-surf-body > * {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
 .sy-zen-surf-body .sy-rail-pty { height: 100%; }
 
 /* ── Zen Browser surface ───────────────────────────────────────────
@@ -7277,6 +7283,11 @@ body {
   flex-direction: column;
   overflow: hidden;
 }
+.sy-zen-browse-col > .sy-fb {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
 .sy-zen-browse-col + .sy-zen-browse-col {
   border-left: 1px solid var(--line);
 }
@@ -7293,6 +7304,20 @@ body {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+.sy-zen-browse-pages #sidebar,
+.sy-zen-browse-pages .sy-side-pages-mount {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.sy-zen-browse-pages #sidebar-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
 }
 /* Match the head height of the two browsers that bring their own. */
 .sy-zen-browse-col--wiki > .sy-fb-head {
@@ -7364,8 +7389,28 @@ body {
   box-shadow: 0 0 14px color-mix(in srgb, var(--accent) 16%, transparent);
 }
 .sy-zen-chrome--top { top: 6px; right: 10px; }
-/* Raised above the graph's own labels/types legend chips. */
-.sy-zen-chrome--bottom { bottom: 44px; left: 10px; }
+/* Sits under the stacked view/labels/types buttons. */
+.sy-zen-chrome--bottom { bottom: 10px; left: 10px; }
+/* Types on top, then labels, then view — popover opens upward. */
+.sy-zen .graph-controls {
+  flex-direction: column-reverse;
+  align-items: stretch;
+  gap: 6px;
+  bottom: 52px;
+  left: 10px;
+}
+.sy-zen .label-types-panel {
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+}
+.sy-zen .atlas-minimap,
+.sy-zen .classic-minimap {
+  bottom: var(--sy-minimap-bottom, 12px) !important;
+}
+.sy-zen .sy-graph-count {
+  bottom: var(--sy-minimap-bottom, 12px);
+}
 /* Brand sits right of the graph's own ↻/✂ corner buttons. */
 .sy-zen-chrome--brand { top: 8px; left: 96px; pointer-events: none; gap: 8px; }
 .sy-zen-brand {
@@ -7427,6 +7472,25 @@ body {
    * radii instead. */
 }
 .sy-zen-chat-response { border-radius: 0 16px 16px 0; }
+
+/* Docked: fill the right pane instead of floating over the graph. */
+.sy-zen-chatbox--docked {
+  position: relative;
+  left: auto;
+  transform: none;
+  bottom: auto;
+  width: 100%;
+  max-width: none;
+  height: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+  border-radius: 0;
+  box-shadow: none;
+  border: none;
+  background: var(--bg);
+  backdrop-filter: none;
+}
+.sy-zen-chatbox--docked .sy-zen-chat-response { border-radius: 0; }
 
 /* Drag-to-resize handle at the top edge of the floating box (both chat
  * and pty). Double-click resets to the default height (JS). */

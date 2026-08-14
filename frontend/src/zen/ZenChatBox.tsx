@@ -57,6 +57,10 @@ type Props = {
   hasMoreHistory: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
+  /** Right-pane Chat surface instead of the floating bottom box. */
+  docked?: boolean;
+  onDock?: () => void;
+  onFloat?: () => void;
 };
 
 type Turn = {
@@ -80,6 +84,7 @@ export default function ZenChatBox({
   artifactPending, artifactLabel, onJumpArtifact,
   ptyPromoted, onPromotePty,
   hasMoreHistory, loadingOlder, onLoadOlder,
+  docked = false, onDock, onFloat,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [input, setInput] = useState("");
@@ -119,6 +124,36 @@ export default function ZenChatBox({
     setBoxH(DEFAULT_BOX_H);
     window.setTimeout(() => window.dispatchEvent(new Event("resize")), 0);
   };
+
+  // Lift the Classic/Atlas minimap above the floating box. Collapsed
+  // (pill) and docked (right pane) leave it in the bottom-right.
+  useEffect(() => {
+    const root = document.querySelector(".sy-zen") as HTMLElement | null;
+    if (!root) return;
+    const bottom = !docked && !collapsed ? boxH + 30 : 12;
+    root.style.setProperty("--sy-minimap-bottom", `${bottom}px`);
+    return () => { root.style.setProperty("--sy-minimap-bottom", "12px"); };
+  }, [docked, collapsed, boxH]);
+
+  const modeToggle = docked ? (
+    <button
+      type="button"
+      className="sy-zen-chat-btn"
+      onClick={() => onFloat?.()}
+      title="Float this chat on the bottom of the window"
+    >
+      ⇱ float
+    </button>
+  ) : (
+    <button
+      type="button"
+      className="sy-zen-chat-btn"
+      onClick={() => onDock?.()}
+      title="Dock this chat as a right-pane tab"
+    >
+      ⇲ tab
+    </button>
+  );
   const resizeHandle = (
     <div
       className="sy-zen-box-handle"
@@ -299,7 +334,7 @@ export default function ZenChatBox({
   const running = activeRunIds.size > 0;
 
   // ── Collapsed pill ─────────────────────────────────────────────
-  if (collapsed) {
+  if (collapsed && !docked) {
     return (
       <button
         type="button"
@@ -326,8 +361,13 @@ export default function ZenChatBox({
   // ── PTY mode: terminal takes the full box width, fixed height ──
   if (isPty && !ptyPromoted) {
     return (
-      <div className="sy-zen-chatbox sy-zen-chatbox--pty" ref={boxRef} style={{ height: boxH }} data-tour="zen-chat">
-        {resizeHandle}
+      <div
+        className={"sy-zen-chatbox sy-zen-chatbox--pty" + (docked ? " sy-zen-chatbox--docked" : "")}
+        ref={boxRef}
+        style={docked ? undefined : { height: boxH }}
+        data-tour="zen-chat"
+      >
+        {!docked && resizeHandle}
         <div className="sy-zen-chat-toolrow">
           <ThreadDropUp
             focusedThread={focusedThread}
@@ -349,14 +389,17 @@ export default function ZenChatBox({
           >
             ⇱ pane
           </button>
-          <button
-            type="button"
-            className="sy-zen-chat-btn"
-            onClick={() => setCollapsed(true)}
-            title="Collapse to a pill"
-          >
-            ▾
-          </button>
+          {!docked && (
+            <button
+              type="button"
+              className="sy-zen-chat-btn"
+              onClick={() => setCollapsed(true)}
+              title="Collapse to a pill"
+            >
+              ▾
+            </button>
+          )}
+          {modeToggle}
         </div>
         <div className="sy-zen-chat-ptyhost">
           <PtyThreadSurface
@@ -371,8 +414,13 @@ export default function ZenChatBox({
 
   // ── Chat view: lockstep halves ─────────────────────────────────
   return (
-    <div className="sy-zen-chatbox" ref={boxRef} style={{ height: boxH }} data-tour="zen-chat">
-      {resizeHandle}
+    <div
+      className={"sy-zen-chatbox" + (docked ? " sy-zen-chatbox--docked" : "")}
+      ref={boxRef}
+      style={docked ? undefined : { height: boxH }}
+      data-tour="zen-chat"
+    >
+      {!docked && resizeHandle}
       <div className="sy-zen-chat-halves">
         <div className="sy-zen-chat-left">
           <div className="sy-zen-chat-toolrow">
@@ -419,14 +467,17 @@ export default function ZenChatBox({
                 </button>
               </span>
             )}
-            <button
-              type="button"
-              className="sy-zen-chat-btn"
-              onClick={() => setCollapsed(true)}
-              title="Collapse to a pill (typing or a response reopens it)"
-            >
-              ▾
-            </button>
+            {!docked && (
+              <button
+                type="button"
+                className="sy-zen-chat-btn"
+                onClick={() => setCollapsed(true)}
+                title="Collapse to a pill (typing or a response reopens it)"
+              >
+                ▾
+              </button>
+            )}
+            {modeToggle}
           </div>
           <div className="sy-zen-chat-usermsg">
             {turn?.user ? (

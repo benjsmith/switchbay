@@ -35,7 +35,16 @@ export default class TabErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.error) {
       return (
-        <div key={this.state.resetTick} style={{ height: "100%", width: "100%" }}>
+        <div
+          key={this.state.resetTick}
+          style={{
+            height: "100%",
+            width: "100%",
+            minHeight: 0,
+            display: "flex",
+            flexDirection: "column",
+          }}
+        >
           {this.props.children}
         </div>
       );

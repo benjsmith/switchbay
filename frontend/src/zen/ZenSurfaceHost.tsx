@@ -1,4 +1,4 @@
-import { Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Selection, TabSpec } from "../ws";
 import type { GraphData } from "../widgets/graph/types";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
@@ -50,12 +50,14 @@ type Props = {
    *  full-height terminal until returned to the chat box. */
   promotedPty: string | null;
   onReturnPty: () => void;
+  /** Docked zen chat — rendered when the Chat synthetic surface is active. */
+  chatSurface?: ReactNode;
 };
 
 export default function ZenSurfaceHost({
   tabs, surface, setSurface, artifact, onJumpArtifact,
   graphData, graphError, filesVersion, termWs, runningCount,
-  promotedPty, onReturnPty,
+  promotedPty, onReturnPty, chatSurface,
 }: Props) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -108,6 +110,7 @@ export default function ZenSurfaceHost({
       );
     }
     if (activeSynthetic === "agents") return <AgentDashboardTab />;
+    if (activeSynthetic === "chat") return <>{chatSurface}</>;
     if (activeSynthetic === "browser") {
       return (
         <ZenBrowserTab

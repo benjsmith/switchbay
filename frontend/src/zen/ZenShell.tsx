@@ -132,6 +132,41 @@ export default function ZenShell({
     handler: () => setSurface("agents"),
   }), [setSurface]);
 
+  const chatDocked = surface === "chat";
+  const prevSurfaceRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (surface !== "chat") prevSurfaceRef.current = surface;
+  }, [surface]);
+  const dockChat = useCallback(() => setSurface("chat"), [setSurface]);
+  const floatChat = useCallback(() => {
+    const prev = prevSurfaceRef.current;
+    setSurface(prev && prev !== "chat" ? prev : "browser");
+  }, [setSurface]);
+
+  const chatBox = (
+    <ZenChatBox
+      entries={entries}
+      onSubmit={onSubmit}
+      focusedThread={focusedThread}
+      focusedThreadKind={focusedThreadKind}
+      onSwitchThread={onSwitchThread}
+      onNewThread={onNewThread}
+      termWs={termWs}
+      activeRunIds={activeRunIds}
+      artifactPending={artifact !== null}
+      artifactLabel={artifact?.label ?? null}
+      onJumpArtifact={onJumpArtifact}
+      ptyPromoted={ptyPromoted}
+      onPromotePty={() => setPtyPromoted(true)}
+      hasMoreHistory={hasMoreHistory}
+      loadingOlder={loadingOlder}
+      onLoadOlder={onLoadOlder}
+      docked={chatDocked}
+      onDock={dockChat}
+      onFloat={floatChat}
+    />
+  );
+
   const runningCount = activeRuns.filter(
     (r) =>
       r.provider !== "pty"
@@ -187,6 +222,7 @@ export default function ZenShell({
               : null
           }
           onReturnPty={() => setPtyPromoted(false)}
+          chatSurface={chatDocked ? chatBox : null}
         />
       </div>
 
@@ -213,24 +249,7 @@ export default function ZenShell({
         <ModeToggle />
       </div>
 
-      <ZenChatBox
-        entries={entries}
-        onSubmit={onSubmit}
-        focusedThread={focusedThread}
-        focusedThreadKind={focusedThreadKind}
-        onSwitchThread={onSwitchThread}
-        onNewThread={onNewThread}
-        termWs={termWs}
-        activeRunIds={activeRunIds}
-        artifactPending={artifact !== null}
-        artifactLabel={artifact?.label ?? null}
-        onJumpArtifact={onJumpArtifact}
-        ptyPromoted={ptyPromoted}
-        onPromotePty={() => setPtyPromoted(true)}
-        hasMoreHistory={hasMoreHistory}
-        loadingOlder={loadingOlder}
-        onLoadOlder={onLoadOlder}
-      />
+      {!chatDocked && chatBox}
     </div>
   );
 }

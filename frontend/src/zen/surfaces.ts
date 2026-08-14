@@ -9,7 +9,7 @@
  * legal without a matching tab.
  */
 
-export type ZenSyntheticSurface = "agents" | "browser";
+export type ZenSyntheticSurface = "agents" | "browser" | "chat";
 
 /** Dropdown + cycle order: these trail the real tabs. */
 export const ZEN_SYNTHETIC: readonly {
@@ -18,6 +18,7 @@ export const ZEN_SYNTHETIC: readonly {
   /** Shown in the dropdown's right-hand kind column. */
   kind: string;
 }[] = [
+  { id: "chat", title: "Chat", kind: "rail" },
   { id: "browser", title: "Browser", kind: "files · wiki · sources" },
   { id: "agents", title: "Agents", kind: "dashboard" },
 ];
