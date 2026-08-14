@@ -22,3 +22,4 @@ import "./static/subgraph.js";
 import "./static/modal.js";
 import "./static/edit.js";
 import "./static/graph.js";
+import "./static/vendor/knowledge-atlas.js";

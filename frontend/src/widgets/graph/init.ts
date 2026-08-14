@@ -10,10 +10,14 @@
  * GraphTab.tsx so it can use the React context.
  */
 
+import { atlasEnabled, destroyAtlas, initAtlasChoice, mountAtlas, type ViewerMode } from "./atlas";
 import { template } from "./template";
 import type { GraphData } from "./types";
 
-export function mountGraph(container: HTMLElement, data: GraphData): void {
+export type GraphMount = { mode: ViewerMode };
+
+export function mountGraph(container: HTMLElement, data: GraphData): GraphMount {
+  destroyAtlas();
   container.classList.add("ce-graph-root");
   container.innerHTML = template;
 
@@ -28,7 +32,14 @@ export function mountGraph(container: HTMLElement, data: GraphData): void {
 
   window.Subgraph.init(data);
   window.Modal.init(data);
-  window.Graph.init(data);
+  let mode: ViewerMode = "classic";
+  if (atlasEnabled(data) && mountAtlas(data)) {
+    mode = "atlas";
+  } else {
+    window.Graph.init(data);
+  }
+  document.body.dataset.viewer = mode;
+  initAtlasChoice(data, mode);
 
   // Edit module wires the modal padlock + textarea editor. The refetch
   // callback re-pulls the rebuilt data.json (cebridge updates its
@@ -47,4 +58,5 @@ export function mountGraph(container: HTMLElement, data: GraphData): void {
       }
     });
   }
+  return { mode };
 }

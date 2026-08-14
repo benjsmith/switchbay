@@ -30,6 +30,7 @@
 window.Graph = (function () {
   let g = null;
   let svg = null;
+  let zoomSurface = null;
   let nodes = null;
   let edges = null;
   let simulation = null;
@@ -51,6 +52,7 @@ window.Graph = (function () {
   let _isDragging = false;            // suppress hover-focus changes mid-drag
   let _isZooming = false;             // hide labels during wheel/pinch; skip opacity
   let _zoomSettleTimer = null;        // debounce restore after last zoom event
+  let classicMinimap = null;
   const ZOOM_SETTLE_MS = 120;
   // ── Split mode (D4) ── review-before-split: node clicks toggle
   // membership instead of navigating; ctrl/cmd-drag rubber-bands
@@ -72,6 +74,7 @@ window.Graph = (function () {
     fact:         'fact',         facts:    'fact',
     figure:       'figure',       figures:  'figure',
     table:        'table',        tables:   'table',
+    'extracted-table': 'table',   'summary-table': 'table',
     source:       'source',       sources:  'source',
     note:         'note',         notes:    'note',
     todo:         'todo',         'todo-list': 'todo',
@@ -166,6 +169,196 @@ window.Graph = (function () {
     return palette[type] || palette.default || '#7a7a7a';
   }
 
+  /* A line-free, density-adaptive overview of the same canonical force
+   * field shown by Classic. The base node field is cached; camera moves
+   * repaint only the viewport box, while live physics marks the cache
+   * dirty at most once per animation frame. */
+  function createClassicMinimap(container, palette) {
+    const canvas = document.createElement('canvas');
+    const base = document.createElement('canvas');
+    canvas.className = 'atlas-minimap classic-minimap';
+    canvas.tabIndex = 0;
+    canvas.setAttribute('role', 'application');
+    canvas.setAttribute('aria-label', 'Classic graph overview map; click or drag to move the main view');
+    canvas.title = 'Whole-wiki overview — click or drag to navigate';
+    canvas.style.cssText = [
+      'position:absolute', 'right:12px', 'bottom:12px', 'width:190px', 'height:128px',
+      'z-index:4', 'border:1px solid rgba(127,127,127,.42)', 'border-radius:8px',
+      'box-shadow:0 3px 14px rgba(0,0,0,.24)', 'cursor:crosshair', 'touch-action:none',
+    ].join(';');
+    container.appendChild(canvas);
+
+    let map = null;
+    let frame = 0;
+    let layoutDirty = true;
+    let cacheKey = '';
+
+    function colours() {
+      const light = document.documentElement.dataset.theme === 'light';
+      return light
+        ? { bg: '#fafafa', accent: '#2f6fed' }
+        : { bg: '#101014', accent: '#7aa2ff' };
+    }
+
+    function hash(value) {
+      let h = 2166136261;
+      for (let i = 0; i < value.length; i++) {
+        h ^= value.charCodeAt(i);
+        h = Math.imul(h, 16777619);
+      }
+      return h >>> 0;
+    }
+
+    function rebuild(cssW, cssH, dpr, theme) {
+      const points = (nodes || []).filter(d => Number.isFinite(d.x) && Number.isFinite(d.y));
+      if (points.length < 2) { map = null; return; }
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const d of points) {
+        minX = Math.min(minX, d.x); minY = Math.min(minY, d.y);
+        maxX = Math.max(maxX, d.x); maxY = Math.max(maxY, d.y);
+      }
+      const spanX = Math.max(1, maxX - minX);
+      const spanY = Math.max(1, maxY - minY);
+      const pad = 7;
+      const scale = Math.min((cssW - pad * 2) / spanX, (cssH - pad * 2) / spanY);
+      minX -= ((cssW - pad * 2) / scale - spanX) / 2;
+      minY -= ((cssH - pad * 2) / scale - spanY) / 2;
+      map = { minX, minY, scale, pad };
+
+      base.width = Math.round(cssW * dpr);
+      base.height = Math.round(cssH * dpr);
+      const ctx = base.getContext('2d');
+      if (!ctx) return;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.fillStyle = theme.bg;
+      ctx.globalAlpha = 0.94;
+      ctx.fillRect(0, 0, cssW, cssH);
+      const area = Math.max(1, (cssW - pad * 2) * (cssH - pad * 2));
+      const maxMarks = Math.max(1500, Math.round(area * 0.45));
+      const stride = Math.max(1, Math.ceil(points.length / maxMarks));
+      const radius = Math.max(0.28, Math.min(2.2, Math.sqrt(area / points.length) * 0.18));
+      const density = points.length / area;
+      const alpha = Math.max(0.18, Math.min(0.86, 1.4 / Math.sqrt(Math.max(1, density))));
+      for (const d of points) {
+        if (stride > 1 && hash(d.id) % stride !== 0) continue;
+        ctx.fillStyle = colourFor(d.type, palette);
+        ctx.globalAlpha = alpha;
+        ctx.beginPath();
+        ctx.arc(pad + (d.x - minX) * scale, pad + (d.y - minY) * scale, radius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function draw() {
+      frame = 0;
+      if (!svg || !nodes || nodes.length < 2) { canvas.hidden = true; return; }
+      canvas.hidden = false;
+      const graphRect = svg.node().getBoundingClientRect();
+      const compact = Math.min(graphRect.width, graphRect.height) <= 520;
+      const cssW = compact ? 126 : 190;
+      const cssH = compact ? 88 : 128;
+      canvas.style.width = cssW + 'px';
+      canvas.style.height = cssH + 'px';
+      const dpr = window.devicePixelRatio || 1;
+      const pixelW = Math.round(cssW * dpr);
+      const pixelH = Math.round(cssH * dpr);
+      if (canvas.width !== pixelW) canvas.width = pixelW;
+      if (canvas.height !== pixelH) canvas.height = pixelH;
+      const theme = colours();
+      const nextKey = pixelW + 'x' + pixelH + '|' + theme.bg;
+      if (layoutDirty || nextKey !== cacheKey) {
+        rebuild(cssW, cssH, dpr, theme);
+        layoutDirty = false;
+        cacheKey = nextKey;
+      }
+      const ctx = canvas.getContext('2d');
+      if (!ctx || !map) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, pixelW, pixelH);
+      ctx.drawImage(base, 0, 0);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const k = Math.max(0.001, zoomTransform.k);
+      const worldCx = -zoomTransform.x / k;
+      const worldCy = -zoomTransform.y / k;
+      const halfW = graphRect.width / (2 * k);
+      const halfH = graphRect.height / (2 * k);
+      const x = map.pad + (worldCx - halfW - map.minX) * map.scale;
+      const y = map.pad + (worldCy - halfH - map.minY) * map.scale;
+      const w = halfW * 2 * map.scale;
+      const h = halfH * 2 * map.scale;
+      ctx.fillStyle = theme.accent;
+      ctx.globalAlpha = 0.08;
+      ctx.fillRect(x, y, w, h);
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 1.5;
+      ctx.globalAlpha = 0.95;
+      ctx.strokeRect(x, y, w, h);
+      ctx.globalAlpha = 1;
+      canvas.dataset.cameraX = String(zoomTransform.x);
+      canvas.dataset.cameraY = String(zoomTransform.y);
+      canvas.dataset.cameraScale = String(k);
+    }
+
+    function schedule(dirty) {
+      if (dirty) layoutDirty = true;
+      if (!frame) frame = requestAnimationFrame(draw);
+    }
+
+    function navigate(ev) {
+      if (!map || !zoomBehavior || !svg) return;
+      const rect = canvas.getBoundingClientRect();
+      const worldX = (ev.clientX - rect.left - map.pad) / map.scale + map.minX;
+      const worldY = (ev.clientY - rect.top - map.pad) / map.scale + map.minY;
+      const k = Math.max(0.15, zoomTransform.k);
+      svg.call(zoomBehavior.transform, d3.zoomIdentity.translate(-worldX * k, -worldY * k).scale(k));
+    }
+    function zoomOverview(ev) {
+      if (!zoomBehavior || !svg) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      const units = ev.deltaMode === 1 ? 0.05 : (ev.deltaMode ? 1 : 0.002);
+      const delta = -ev.deltaY * units * (ev.ctrlKey ? 10 : 1);
+      const oldK = Math.max(0.001, zoomTransform.k);
+      const nextK = Math.max(0.15, Math.min(4, oldK * Math.pow(2, delta)));
+      if (nextK === oldK) return;
+      const worldCx = -zoomTransform.x / oldK;
+      const worldCy = -zoomTransform.y / oldK;
+      svg.call(zoomBehavior.transform,
+        d3.zoomIdentity.translate(-worldCx * nextK, -worldCy * nextK).scale(nextK));
+    }
+    canvas.addEventListener('pointerdown', ev => {
+      ev.preventDefault(); ev.stopPropagation();
+      canvas.setPointerCapture(ev.pointerId);
+      navigate(ev);
+    });
+    canvas.addEventListener('pointermove', ev => {
+      if (canvas.hasPointerCapture(ev.pointerId)) navigate(ev);
+    });
+    canvas.addEventListener('pointerup', ev => {
+      if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+    });
+    canvas.addEventListener('pointercancel', ev => {
+      if (canvas.hasPointerCapture(ev.pointerId)) canvas.releasePointerCapture(ev.pointerId);
+    });
+    canvas.addEventListener('wheel', zoomOverview, { passive: false });
+    const themeObserver = new MutationObserver(() => schedule(true));
+    themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
+    schedule(true);
+    return {
+      schedule,
+      destroy() {
+        if (frame) cancelAnimationFrame(frame);
+        themeObserver.disconnect();
+        canvas.remove();
+      },
+    };
+  }
+
+  function scheduleMinimap(layoutChanged) {
+    if (classicMinimap) classicMinimap.schedule(layoutChanged);
+  }
+
   function init(data) {
     // ── Re-mount hygiene ──
     // This IIFE's module state survives a workspace switch (GraphTab
@@ -177,6 +370,8 @@ window.Graph = (function () {
     // top"; (2) the previous simulation keeps ticking in the
     // background, double-rendering and stealing frames. Reset both.
     if (simulation) { simulation.on('tick', null); simulation.on('end', null); simulation.stop(); }
+    if (classicMinimap) classicMinimap.destroy();
+    classicMinimap = null;
     nodeById.clear();
     neighbours.clear();
     focusId = null;
@@ -206,6 +401,12 @@ window.Graph = (function () {
 
     const container = document.querySelector('#graph');
     svg = d3.select(container).append('svg');
+    // Transparent full-viewport hit target so wheel/pinch zoom and pan
+    // work over nodes, edges, and empty space after compositing changes.
+    zoomSurface = svg.append('rect')
+      .attr('class', 'zoom-surface')
+      .attr('fill', 'transparent')
+      .attr('pointer-events', 'all');
     g = svg.append('g').attr('class', 'viewport');
     initSplitInteractions();
 
@@ -407,6 +608,7 @@ window.Graph = (function () {
       .on('zoom', (ev) => {
         zoomTransform = ev.transform;
         g.attr('transform', ev.transform);
+        scheduleMinimap(false);
         // Labels stay hidden; no opacity / collision work mid-gesture.
       })
       .on('end', () => {
@@ -431,6 +633,7 @@ window.Graph = (function () {
         }, ZOOM_SETTLE_MS);
       });
     svg.call(zoomBehavior);
+    classicMinimap = createClassicMinimap(container, palette);
 
     svg.on('click', () => {
       if (focusOrigin === 'hover') setFocus(null);
@@ -591,6 +794,7 @@ window.Graph = (function () {
       .attr('x2', d => d.target.x)
       .attr('y2', d => d.target.y);
     nodeSel.attr('transform', d => `translate(${d.x},${d.y})`);
+    scheduleMinimap(true);
 
     // Labels are the costly layer (per-node transforms + an opacity
     // pass). While the layout is visibly moving OR a zoom gesture is
@@ -627,9 +831,17 @@ window.Graph = (function () {
     if (!svg) return;
     const r = svg.node().getBoundingClientRect();
     svg.attr('viewBox', [-r.width / 2, -r.height / 2, r.width, r.height]);
+    if (zoomSurface) {
+      zoomSurface
+        .attr('x', -r.width / 2)
+        .attr('y', -r.height / 2)
+        .attr('width', r.width)
+        .attr('height', r.height);
+    }
     if (simulation) simulation.alpha(0.3).restart();
     scheduleAutoRecompute();
     applyLabelOpacity();
+    scheduleMinimap(true);
   }
 
   /* setFocus / clear: idempotent. Pass null to clear.

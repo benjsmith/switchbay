@@ -28,6 +28,9 @@ obligation arises as we do not modify their files.
 - **Graph / wiki-view** (`frontend/src/widgets/graph/static/*.js`) is a
   fork of **curiosity-engine**'s wiki-view, used under the **MIT License**
   (Copyright (c) 2026, curiosity-engine authors). Full MIT text below.
+- **Knowledge Atlas** (`frontend/src/widgets/graph/static/vendor/knowledge-atlas.js`)
+  is the first-party IIFE from curiosity-engine's `packages/knowledge-atlas`,
+  same MIT license.
 - **`createUniver`** in `frontend/src/widgets/sheet/SheetTab.tsx` is a
   ~15-line reimplementation of the same function from **@univerjs/presets**
   (**Apache-2.0**, Copyright (c) DreamNum Inc.), inlined so Switch Bay

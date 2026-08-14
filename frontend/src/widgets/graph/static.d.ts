@@ -6,6 +6,7 @@ declare module "./static/sidebar.js";
 declare module "./static/modal.js";
 declare module "./static/subgraph.js";
 declare module "./static/edit.js";
+declare module "./static/vendor/knowledge-atlas.js";
 
 declare global {
   interface Window {

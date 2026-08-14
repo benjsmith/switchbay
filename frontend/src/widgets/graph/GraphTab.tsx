@@ -83,6 +83,8 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   // container DOM and calls each module's `init(data)` afresh.
   const mountedDataRef = useRef<GraphData | null>(null);
   const [mounted, setMounted] = useState(false);
+  const [viewerMode, setViewerMode] = useState<"classic" | "atlas">("classic");
+  const [viewerGen, setViewerGen] = useState(0);
   const { selection, setSelection } = useSelection();
   const { switchToKind, tabs } = useTabs();
   const hasEditor = useMemo(() => tabs.some((t) => t.kind === "markdown"), [tabs]);
@@ -150,6 +152,15 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     }
   };
 
+  useEffect(() => {
+    const onViewer = () => {
+      mountedDataRef.current = null;
+      setViewerGen((n) => n + 1);
+    };
+    window.addEventListener("sy:graph-viewer-change", onViewer);
+    return () => window.removeEventListener("sy:graph-viewer-change", onViewer);
+  }, []);
+
   // Mount / re-mount CE viewer when data arrives or changes
   // (e.g. workspace switch). Modal-close → clear selection
   // (wired here so the callback can capture setSelection).
@@ -157,7 +168,13 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     if (!data || !containerRef.current) return;
     if (mountedDataRef.current === data) return;
     mountedDataRef.current = data;
-    mountGraph(containerRef.current, data);
+    const mountedView = mountGraph(containerRef.current, data);
+    setViewerMode(mountedView.mode);
+    if (mountedView.mode === "atlas") {
+      setSplitSel(null);
+      setSplitName("");
+      setSplitError(null);
+    }
     if (window.Modal && window.Modal.setOnClose) {
       window.Modal.setOnClose(() => {
         try { window.Graph.clearFocus(); } catch { /* ignore */ }
@@ -165,7 +182,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
       });
     }
     setMounted(true);
-  }, [data, setSelection]);
+  }, [data, setSelection, viewerGen]);
 
   // Drive CE modules from the selection layer.
   useEffect(() => {
@@ -237,7 +254,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
       >
         ↻
       </button>
-      <button
+      {viewerMode === "classic" && <button
         type="button"
         className={"sy-graph-split-btn" + (splitActive ? " sy-graph-split-btn--on" : "")}
         onClick={() => (splitActive ? exitSplit() : enterSplit())}
@@ -247,7 +264,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
         aria-label="Split workspace mode"
       >
         ✂
-      </button>
+      </button>}
       {showAddFile && (
         <>
           <button
@@ -269,7 +286,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
         </>
       )}
       <div ref={containerRef} className="sy-graph-mount" />
-      {splitActive && (
+      {viewerMode === "classic" && splitActive && (
         <div className="sy-split-bar">
           <span className="sy-split-bar-count">
             {splitSel!.filter((s) => s.policy === "move").length} move ·{" "}

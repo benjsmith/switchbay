@@ -10,6 +10,9 @@ export const template = /* html */ `
 <main id="graph-pane">
   <div id="graph"></div>
   <div class="graph-controls">
+    <button id="viewer-mode" class="ctrl-btn hidden" title="Switch graph viewer" aria-label="Switch graph viewer">
+      <span class="ctrl-label">view:</span><span id="viewer-mode-state">classic</span>
+    </button>
     <button id="label-mode" class="ctrl-btn" title="Label visibility" aria-label="Label visibility">
       <span class="ctrl-label">labels:</span><span id="label-mode-state">auto</span>
     </button>
