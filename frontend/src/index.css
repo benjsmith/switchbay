@@ -7129,11 +7129,6 @@ body {
   min-width: 0;
   height: 100%;
   overflow: hidden;
-  /* Gutter for the floating pasteboard/help/settings cluster
-   * (positioned on .sy-zen, top-right) so Chat / Sheet / Browser
-   * never paint underneath those buttons. */
-  padding-right: 168px;
-  box-sizing: border-box;
 }
 
 /* Divider: full-range draggable; the handle is its own fixed-width
@@ -7184,7 +7179,11 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 7px 12px 5px 12px;
+  /* Tall enough that the floating top-right chrome (top: 6px)
+   * sits entirely in this band, not over the surface body. */
+  padding: 10px 150px 10px 12px;
+  min-height: 44px;
+  box-sizing: border-box;
 }
 .sy-zen-surf-pickwrap {
   position: relative;
