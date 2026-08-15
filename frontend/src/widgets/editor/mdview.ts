@@ -21,22 +21,84 @@ const FM_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 const PROP_LINE_RE = /^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/;
 const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
 
-export type Frontmatter = Record<string, string>;
+export type FrontmatterValue = string | string[];
+export type Frontmatter = Record<string, FrontmatterValue>;
+
+function unquote(v: string): string {
+  const t = v.trim();
+  if (
+    (t.startsWith('"') && t.endsWith('"') && t.length >= 2)
+    || (t.startsWith("'") && t.endsWith("'") && t.length >= 2)
+  ) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+/** Split a YAML flow list `[a, b]` — quotes may contain commas. */
+function parseFlowList(raw: string): string[] {
+  const inner = raw.trim().slice(1, -1);
+  const out: string[] = [];
+  let cur = "";
+  let q: '"' | "'" | null = null;
+  for (const c of inner) {
+    if (q) {
+      if (c === q) q = null;
+      else cur += c;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      q = c;
+      continue;
+    }
+    if (c === ",") {
+      const item = unquote(cur);
+      if (item) out.push(item);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  const last = unquote(cur);
+  if (last) out.push(last);
+  return out;
+}
 
 export function parseFrontmatter(raw: string): { properties: Frontmatter; body: string } {
   const m = raw.match(FM_RE);
   if (!m) return { properties: {}, body: raw };
   const properties: Frontmatter = {};
-  for (const line of m[1].split(/\r?\n/)) {
-    const km = line.match(PROP_LINE_RE);
+  const lines = m[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const km = lines[i].match(PROP_LINE_RE);
     if (!km) continue;
-    let v = km[2].trim();
-    // Strip surrounding quotes for the simple case; multiline / list
-    // values stay raw and will display verbatim.
-    if ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'"))) {
-      v = v.slice(1, -1);
+    const key = km[1];
+    const rest = km[2].trim();
+    if (rest.startsWith("[") && rest.endsWith("]")) {
+      properties[key] = parseFlowList(rest);
+      continue;
     }
-    properties[km[1]] = v;
+    if (rest === "") {
+      const items: string[] = [];
+      let j = i + 1;
+      while (j < lines.length) {
+        const line = lines[j]!;
+        if (/^\s*$/.test(line)) {
+          j++;
+          continue;
+        }
+        const li = line.match(/^\s+-\s+(.*)$/);
+        if (!li) break;
+        items.push(unquote(li[1]!));
+        j++;
+      }
+      if (items.length > 0) {
+        properties[key] = items;
+        i = j - 1;
+        continue;
+      }
+    }
+    properties[key] = unquote(rest);
   }
   return { properties, body: m[2] };
 }

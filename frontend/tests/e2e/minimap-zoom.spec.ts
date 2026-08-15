@@ -22,9 +22,18 @@ async function wheelOnMap(page: Page, map: Locator): Promise<void> {
   await page.waitForTimeout(80);
 }
 
+async function dismissDocModal(page: Page): Promise<void> {
+  const modal = page.locator("#modal[aria-hidden='false']");
+  if (await modal.isVisible().catch(() => false)) {
+    await page.keyboard.press("Escape");
+    await expect(modal).toBeHidden({ timeout: 5_000 });
+  }
+}
+
 async function switchViewer(page: Page, mode: "atlas" | "classic"): Promise<void> {
   const btn = page.locator("#viewer-mode");
   await expect(btn).toBeVisible();
+  await dismissDocModal(page);
   const state = page.locator("#viewer-mode-state");
   for (let i = 0; i < 2; i++) {
     if (((await state.textContent()) || "").trim() === mode) return;

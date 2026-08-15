@@ -1516,6 +1516,7 @@ export default function App() {
       if (!target || !g) return;
       const tl = target.split("#")[0].toLowerCase().replace(/\.md$/, "");
       const stem = tl.split("/").pop() ?? tl;
+      const bareTitle = (t: string) => t.replace(/^\[[^\]]+\]\s+/, "").toLowerCase();
       const nodes = g.nodes ?? [];
       const hit =
         nodes.find((n) => n.id.toLowerCase() === tl)
@@ -1523,7 +1524,8 @@ export default function App() {
           const nid = n.id.toLowerCase();
           return nid === stem || nid.endsWith(`/${stem}`);
         })
-        ?? nodes.find((n) => (n.title ?? "").toLowerCase() === tl);
+        ?? nodes.find((n) => (n.title ?? "").toLowerCase() === tl)
+        ?? nodes.find((n) => bareTitle(n.title ?? "") === tl || bareTitle(n.title ?? "") === stem);
       if (!hit) return;
       const page = g.pages[hit.id];
       setSelection({ kind: "page", id: hit.id, path: page?.path ?? hit.id });

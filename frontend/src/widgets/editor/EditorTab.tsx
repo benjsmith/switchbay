@@ -4,6 +4,7 @@ import { sanitizeHtml } from "../../lib/sanitizeHtml";
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
 import { expandWikilinks, parseFrontmatter } from "./mdview";
+import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "./previewLists";
 import MiniGraph from "./MiniGraph";
 import type { GraphData } from "../graph/types";
 import {
@@ -360,7 +361,7 @@ export default function EditorTab() {
   const dirty = draft !== original;
   const isSaving = state.kind === "saving";
   const propRows = Object.entries(properties);
-  const title = properties.title ?? path;
+  const title = typeof properties.title === "string" ? properties.title : path;
 
   return (
     <div className="sy-editor">
@@ -574,7 +575,7 @@ export default function EditorTab() {
                 }
               >
                 <h1 className="sy-mdview-title">{title}</h1>
-                {properties.extracted_from && (
+                {typeof properties.extracted_from === "string" && properties.extracted_from && (
                   <ProvenanceChip source={properties.extracted_from} pageHtml={previewHtml} />
                 )}
                 {propRows.length > 0 && (
@@ -585,7 +586,13 @@ export default function EditorTab() {
                         {propRows.map(([k, v]) => (
                           <tr key={k}>
                             <td className="prop-key">{k}</td>
-                            <td className="prop-val">{v}</td>
+                            <td className="prop-val">
+                              {isCollapsibleList(k, v)
+                                ? <CollapsibleSources items={v.map(String)} />
+                                : Array.isArray(v)
+                                  ? v.map((item, i) => <div key={i}>{item}</div>)
+                                  : v}
+                            </td>
                           </tr>
                         ))}
                       </tbody>
@@ -602,6 +609,24 @@ export default function EditorTab() {
         )}
       </div>
     </div>
+  );
+}
+
+function CollapsibleSources({ items }: { items: string[] }) {
+  const [open, setOpen] = useState(readSourcesOpen);
+  return (
+    <details
+      className="sy-prop-list"
+      open={open}
+      onToggle={(ev) => {
+        const next = ev.currentTarget.open;
+        setOpen(next);
+        writeSourcesOpen(next);
+      }}
+    >
+      <summary>{items.length} sources</summary>
+      {items.map((item, i) => <div key={i}>{item}</div>)}
+    </details>
   );
 }
 

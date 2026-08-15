@@ -22,10 +22,19 @@ const TYPE_KEYS = [
 export type ViewerMode = "classic" | "atlas";
 
 type AtlasHandle = {
-  engine: { focus(id: string, origin?: string): void };
+  engine: {
+    focus(id: string, origin?: string): void;
+    getState(): { focusId?: string };
+  };
   setLabels(mode: "auto" | "on" | "off", types?: readonly string[] | null): void;
   setPhysics(physics: Record<string, number>): void;
   destroy(): void;
+};
+
+type AtlasEvent = {
+  kind: string;
+  id?: string;
+  origin?: "user" | "system" | "history";
 };
 
 type AtlasGlobal = {
@@ -35,6 +44,7 @@ type AtlasGlobal = {
       data: GraphData;
       config?: { layout?: string; budget?: { maxEdges?: number } };
       onOpenItem?: (id: string) => void;
+      onEvent?: (event: AtlasEvent) => void;
     },
   ): AtlasHandle;
 };
@@ -193,11 +203,62 @@ function wireAtlasControls(handle: AtlasHandle): void {
   paintLabels();
 }
 
+let atlasOnSelect: ((id: string) => void) | null = null;
+let atlasClickUnbind: (() => void) | null = null;
+
+function openAtlasPage(id: string): void {
+  if (!id) return;
+  atlasOnSelect?.(id);
+  window.dispatchEvent(new CustomEvent("sy:open-wiki-page", { detail: { target: id } }));
+  const next = `#page=${encodeURIComponent(id)}`;
+  if (window.location.hash !== next) window.location.hash = next;
+}
+
+/** Snapshot hover id on pointerdown (Atlas clears it before click) and
+ *  open that page on a non-drag pointerup. Covers clicks that do not
+ *  change Atlas focus (already-focused node, full-graph hybrid). */
+function bindAtlasNodeClick(container: HTMLElement): () => void {
+  let press: { x: number; y: number; id: string | null } | null = null;
+  const mainCanvas = () =>
+    container.querySelector<HTMLCanvasElement>("canvas:not(.atlas-minimap)");
+  const onDown = (ev: PointerEvent) => {
+    const t = ev.target;
+    if (!(t instanceof Element) || t.closest(".atlas-minimap")) {
+      press = null;
+      return;
+    }
+    press = {
+      x: ev.clientX,
+      y: ev.clientY,
+      id: mainCanvas()?.dataset.hoverId || null,
+    };
+  };
+  const onUp = (ev: PointerEvent) => {
+    if (!press) return;
+    const dragged = Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 6;
+    const id = press.id;
+    press = null;
+    if (dragged || !id) return;
+    openAtlasPage(id);
+  };
+  container.addEventListener("pointerdown", onDown, true);
+  container.addEventListener("pointerup", onUp, true);
+  return () => {
+    container.removeEventListener("pointerdown", onDown, true);
+    container.removeEventListener("pointerup", onUp, true);
+  };
+}
+
 function installGraphFacade(handle: AtlasHandle): void {
   if (!classicGraph) classicGraph = window.Graph;
   window.Graph = {
     init: classicGraph.init,
-    focus: (pageId: string) => { handle.engine.focus(pageId, "system"); },
+    focus: (pageId: string) => {
+      // Selection sync calls this with origin "system". Skip a no-op
+      // rebuild when the click already focused this node.
+      if (handle.engine.getState().focusId === pageId) return;
+      handle.engine.focus(pageId, "system");
+    },
     clearFocus: () => { /* atlas focus is the current node; idle has no-op */ },
     splitEnter: () => { /* Atlas has no rubber-band split surface */ },
     splitExit: () => {},
@@ -209,6 +270,11 @@ export function destroyAtlas(): void {
     atlasMinimapWheel();
     atlasMinimapWheel = null;
   }
+  if (atlasClickUnbind) {
+    atlasClickUnbind();
+    atlasClickUnbind = null;
+  }
+  atlasOnSelect = null;
   if (atlasHandle) {
     try { atlasHandle.destroy(); } catch { /* already torn down */ }
     atlasHandle = null;
@@ -216,12 +282,16 @@ export function destroyAtlas(): void {
   if (classicGraph) window.Graph = classicGraph;
 }
 
-export function mountAtlas(data: GraphData): boolean {
+export function mountAtlas(
+  data: GraphData,
+  opts?: { onSelectPage?: (id: string) => void },
+): boolean {
   const api = (window as unknown as { KnowledgeAtlas?: AtlasGlobal }).KnowledgeAtlas;
   const container = document.getElementById("graph");
   if (!api || !container) return false;
 
   destroyAtlas();
+  atlasOnSelect = opts?.onSelectPage ?? null;
   container.innerHTML = "";
   const themed: GraphData = {
     ...data,
@@ -233,12 +303,18 @@ export function mountAtlas(data: GraphData): boolean {
       layout: "hybrid",
       budget: { maxEdges: Math.max(900, (data.edges || []).length) },
     },
-    onOpenItem: (id) => {
-      window.location.hash = `#page=${encodeURIComponent(id)}`;
+    onOpenItem: openAtlasPage,
+    onEvent: (event) => {
+      // Classic writes `#page=` on a single click. Atlas only did that
+      // on open (double-click), so Zen never switched the Editor.
+      if (event.kind === "focus-changed" && event.origin === "user" && event.id) {
+        openAtlasPage(event.id);
+      }
     },
   });
   atlasHandle = handle;
   atlasMinimapWheel = bindAtlasMinimapWheel(container);
+  atlasClickUnbind = bindAtlasNodeClick(container);
   wireAtlasControls(handle);
   installGraphFacade(handle);
   return true;

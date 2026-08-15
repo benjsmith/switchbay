@@ -10,6 +10,7 @@
  * closes; ESC also closes.
  */
 import { sanitizeHtml } from "../../../lib/sanitizeHtml";
+import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "../../editor/previewLists";
 
 window.Modal = (function () {
   let pages = {};
@@ -389,10 +390,13 @@ window.Modal = (function () {
       rows.push(propRow(k, v, 'list'));
     }
     propsEl.innerHTML = rows.join('');
+    propsEl.querySelectorAll("details.sy-prop-list").forEach((el) => {
+      el.addEventListener("toggle", () => writeSourcesOpen(el.open));
+    });
   }
 
   function propRow(key, value, iconKind) {
-    const v = formatValue(value);
+    const v = formatValue(value, key);
     const icon = renderIcon(iconKind);
     return `<tr>
       <td class="prop-key">${icon}<span>${escapeHtml(key)}</span></td>
@@ -412,8 +416,13 @@ window.Modal = (function () {
     return `<span class="prop-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="3" y1="5" x2="13" y2="5"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="11" x2="13" y2="11"/></svg></span>`;
   }
 
-  function formatValue(v) {
+  function formatValue(v, key) {
     if (v == null) return '<span style="color:var(--text-faint)">—</span>';
+    if (isCollapsibleList(key, v)) {
+      const open = readSourcesOpen() ? " open" : "";
+      const items = v.map((item) => `<div>${escapeHtml(String(item))}</div>`).join("");
+      return `<details class="sy-prop-list"${open}><summary>${v.length} sources</summary>${items}</details>`;
+    }
     if (Array.isArray(v)) {
       return v.map(item => `<div>${escapeHtml(String(item))}</div>`).join('');
     }

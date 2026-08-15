@@ -88,6 +88,18 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   const { selection, setSelection } = useSelection();
   const { switchToKind, tabs } = useTabs();
   const hasEditor = useMemo(() => tabs.some((t) => t.kind === "markdown"), [tabs]);
+  const selectPageRef = useRef<(id: string) => void>(() => {});
+  selectPageRef.current = (id: string) => {
+    const page = data?.pages[id];
+    const node = data?.nodes.find((n) => n.id === id);
+    if (!page && !node) return;
+    setSelection({
+      kind: "page",
+      id: page?.id ?? node!.id,
+      path: page?.path ?? node!.path,
+    });
+    if (suppressDocModal) switchToKind("markdown");
+  };
 
   // ── Split mode (D4): one review surface for both gestures ──────
   // null = off; otherwise the live selection with per-node policy.
@@ -168,7 +180,9 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     if (!data || !containerRef.current) return;
     if (mountedDataRef.current === data) return;
     mountedDataRef.current = data;
-    const mountedView = mountGraph(containerRef.current, data);
+    const mountedView = mountGraph(containerRef.current, data, {
+      onSelectPage: (id) => selectPageRef.current(id),
+    });
     setViewerMode(mountedView.mode);
     if (mountedView.mode === "atlas") {
       setSplitSel(null);

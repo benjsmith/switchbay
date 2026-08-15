@@ -16,7 +16,11 @@ import type { GraphData } from "./types";
 
 export type GraphMount = { mode: ViewerMode };
 
-export function mountGraph(container: HTMLElement, data: GraphData): GraphMount {
+export function mountGraph(
+  container: HTMLElement,
+  data: GraphData,
+  opts?: { onSelectPage?: (id: string) => void },
+): GraphMount {
   destroyAtlas();
   container.classList.add("ce-graph-root");
   container.innerHTML = template;
@@ -33,7 +37,7 @@ export function mountGraph(container: HTMLElement, data: GraphData): GraphMount 
   window.Subgraph.init(data);
   window.Modal.init(data);
   let mode: ViewerMode = "classic";
-  if (atlasEnabled(data) && mountAtlas(data)) {
+  if (atlasEnabled(data) && mountAtlas(data, { onSelectPage: opts?.onSelectPage })) {
     mode = "atlas";
   } else {
     window.Graph.init(data);

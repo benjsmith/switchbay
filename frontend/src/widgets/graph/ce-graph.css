@@ -197,6 +197,31 @@
   word-break: break-word;
 }
 
+/* Long sources (and similar) lists — collapsed by default so they
+ * don't drown the preview. Shared by Editor + Graph modal. */
+.sy-prop-list { margin: 0; }
+.sy-prop-list > summary {
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 12px;
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  user-select: none;
+}
+.sy-prop-list > summary::-webkit-details-marker { display: none; }
+.sy-prop-list > summary::before {
+  content: "▸";
+  font-size: 10px;
+  color: var(--text-faint);
+  line-height: 1;
+}
+.sy-prop-list[open] > summary::before { content: "▾"; }
+.sy-prop-list > summary:hover { color: var(--text); }
+.sy-prop-list > div { margin-top: 3px; }
+.sy-prop-list > summary + div { margin-top: 6px; }
+
 /* CE's body/html/* resets are handled by switchbay/index.css; dropping
  * them here so the forked viewer's CSS does not fight the shell layout.
  * `body[data-sidebar=...]` and `body[data-modal=...]` rules are kept —
