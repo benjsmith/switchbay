@@ -41,6 +41,7 @@ type AtlasGlobal = {
 
 let atlasHandle: AtlasHandle | null = null;
 let classicGraph: Window["Graph"] | null = null;
+let atlasMinimapWheel: (() => void) | null = null;
 
 export function pageCount(data: GraphData): number {
   if (data.pages && typeof data.pages === "object") {
@@ -204,6 +205,10 @@ function installGraphFacade(handle: AtlasHandle): void {
 }
 
 export function destroyAtlas(): void {
+  if (atlasMinimapWheel) {
+    atlasMinimapWheel();
+    atlasMinimapWheel = null;
+  }
   if (atlasHandle) {
     try { atlasHandle.destroy(); } catch { /* already torn down */ }
     atlasHandle = null;
@@ -233,9 +238,46 @@ export function mountAtlas(data: GraphData): boolean {
     },
   });
   atlasHandle = handle;
+  atlasMinimapWheel = bindAtlasMinimapWheel(container);
   wireAtlasControls(handle);
   installGraphFacade(handle);
   return true;
+}
+
+/**
+ * Classic's overview map is part of the plotting area: wheel-while-
+ * hovering must zoom the main view, not die on the map canvas. Atlas
+ * vendors a sibling canvas with no wheel handler, so the event never
+ * reaches the main canvas. Forward it there, anchored at the viewport
+ * centre — same "keep looking here, change scale" contract as Classic,
+ * and independent of where Zen has parked the map (float / tab / pill).
+ */
+function bindAtlasMinimapWheel(container: HTMLElement): () => void {
+  const onWheel = (ev: WheelEvent) => {
+    const overMap = ev.target instanceof Element && ev.target.closest(".atlas-minimap");
+    if (!overMap) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    const main = container.querySelector<HTMLCanvasElement>("canvas:not(.atlas-minimap)");
+    if (!main) return;
+    const rect = main.getBoundingClientRect();
+    main.dispatchEvent(new WheelEvent("wheel", {
+      deltaX: ev.deltaX,
+      deltaY: ev.deltaY,
+      deltaZ: ev.deltaZ,
+      deltaMode: ev.deltaMode,
+      clientX: rect.left + rect.width / 2,
+      clientY: rect.top + rect.height / 2,
+      ctrlKey: ev.ctrlKey,
+      metaKey: ev.metaKey,
+      altKey: ev.altKey,
+      shiftKey: ev.shiftKey,
+      bubbles: false,
+      cancelable: true,
+    }));
+  };
+  container.addEventListener("wheel", onWheel, { capture: true, passive: false });
+  return () => container.removeEventListener("wheel", onWheel, true);
 }
 
 export function initAtlasChoice(_data: GraphData, activeMode: ViewerMode): void {

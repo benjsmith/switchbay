@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { minimapBottomOffset } from "./minimapAnchor";
 import type { RailEntry } from "../rail/Rail";
 import {
   DecisionRow, PermissionRow, ProposalRow, ProviderRetryRow, MicroEditFeedbackRow,
@@ -126,14 +127,44 @@ export default function ZenChatBox({
     window.setTimeout(() => window.dispatchEvent(new Event("resize")), 0);
   };
 
-  // Lift the Classic/Atlas minimap above the floating box. Collapsed
-  // (pill) and docked (right pane) leave it in the bottom-right.
-  useEffect(() => {
+  // Lift the Classic/Atlas overview map when the floating box or
+  // collapsed pill would cover its corner. Docked chat is in the
+  // right pane and never intersects. Measure live rects so a
+  // resize, tab/float flip, or pill collapse all re-park the map.
+  useLayoutEffect(() => {
     const root = document.querySelector(".sy-zen") as HTMLElement | null;
     if (!root) return;
-    const bottom = !docked && !collapsed ? boxH + 30 : 12;
-    root.style.setProperty("--sy-minimap-bottom", `${bottom}px`);
-    return () => { root.style.setProperty("--sy-minimap-bottom", "12px"); };
+    const apply = () => {
+      if (docked) {
+        root.style.setProperty("--sy-minimap-bottom", "12px");
+        return;
+      }
+      const graph = root.querySelector(".sy-zen-left") as HTMLElement | null;
+      const overlay = (boxRef.current ?? root.querySelector(".sy-zen-pill")) as HTMLElement | null;
+      if (!graph || !overlay) {
+        root.style.setProperty("--sy-minimap-bottom", "12px");
+        return;
+      }
+      const bottom = minimapBottomOffset(
+        graph.getBoundingClientRect(),
+        overlay.getBoundingClientRect(),
+      );
+      root.style.setProperty("--sy-minimap-bottom", `${bottom}px`);
+    };
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(root);
+    const graph = root.querySelector(".sy-zen-left");
+    if (graph) ro.observe(graph);
+    if (boxRef.current) ro.observe(boxRef.current);
+    const pill = root.querySelector(".sy-zen-pill");
+    if (pill) ro.observe(pill);
+    window.addEventListener("resize", apply);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", apply);
+      root.style.setProperty("--sy-minimap-bottom", "12px");
+    };
   }, [docked, collapsed, boxH]);
 
   const resizeHandle = (

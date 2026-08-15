@@ -7413,6 +7413,9 @@ body {
 .sy-zen .atlas-minimap,
 .sy-zen .classic-minimap {
   bottom: var(--sy-minimap-bottom, 12px) !important;
+  /* Above the graph canvas and count; still inside the left pane, so
+   * overlap with the floating chat is avoided by the lift, not z-index. */
+  z-index: 8 !important;
 }
 .sy-zen .sy-graph-count {
   bottom: var(--sy-minimap-bottom, 12px);
