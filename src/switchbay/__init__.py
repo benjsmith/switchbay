@@ -1,6 +1,6 @@
 """switchbay — local single-user workbench over knowledge bases."""
 
-__version__ = "0.9.6"
+__version__ = "0.9.7"
 
 # Use the OS certificate store for HTTPS (corporate TLS proxies, custom
 # CAs). Must run before any aiohttp ClientSession creates an SSL context
