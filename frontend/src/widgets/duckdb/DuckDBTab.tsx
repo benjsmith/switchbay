@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type * as duckdb from "@duckdb/duckdb-wasm";
-import { getDB } from "./duckdb-init";
+import { getDB, registerWorkspaceFile, rewriteRawPathsInSql } from "./duckdb-init";
 import { dataKind, seed, type WorkspaceStats } from "./seed";
 import { useSelection } from "../../selection/SelectionContext";
 import { useEscToClose } from "../../lib/useEscToClose";
 import { useTabs } from "../../center/TabsContext";
 import { ackUiCommand, takeSql } from "../../lib/pendingUiCommands";
+import { jsonSafe, jsonSafeStringify } from "../../lib/jsonSafe";
 
 type Starter = { label: string; sql: string };
 
@@ -86,6 +87,7 @@ export default function DuckDBTab() {
   const [currentDb, setCurrentDb] = useState<string | null>(null);
   const connRef = useRef<duckdb.AsyncDuckDBConnection | null>(null);
   const dbRef = useRef<duckdb.AsyncDuckDB | null>(null);
+  const workspaceRef = useRef<string | null>(null);
   const { setSelection } = useSelection();
   const { switchToKind, tabs } = useTabs();
   const hasSheetTab = tabs.some((t) => t.kind === "univer");
@@ -104,6 +106,15 @@ export default function DuckDBTab() {
       }
     })();
     return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    void fetch("/api/health")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((h: { workspace?: string } | null) => {
+        if (h?.workspace) workspaceRef.current = h.workspace;
+      })
+      .catch(() => { /* rewrite still handles /api/fs/raw + relative */ });
   }, []);
 
   useEffect(() => {
@@ -228,17 +239,23 @@ export default function DuckDBTab() {
       return;
     }
     try {
-      const res = await c.query(query);
+      let rewritten = query;
+      try {
+        const db = dbRef.current ?? (await getDB()).db;
+        rewritten = await rewriteRawPathsInSql(db, query, workspaceRef.current);
+      } catch (regErr) {
+        const message = (regErr as Error).message;
+        setRun({ kind: "error", message });
+        finishSqlAck(false, { error: message });
+        return;
+      }
+      const res = await c.query(rewritten);
       const cols = res.schema.fields.map((f) => f.name);
       const arr = res.toArray();
       const truncated = arr.length > ROW_CAP;
       const sliced = truncated ? arr.slice(0, ROW_CAP) : arr;
       const rows: unknown[][] = sliced.map((r) =>
-        cols.map((c) => {
-          const v = (r as Record<string, unknown>)[c];
-          if (v && typeof v === "object" && "valueOf" in v) return v.valueOf();
-          return v;
-        }),
+        cols.map((c) => jsonSafe((r as Record<string, unknown>)[c])),
       );
       const ms = Math.round(performance.now() - t0);
       setRun({ kind: "ok", cols, rows, ms, truncated });
@@ -281,15 +298,16 @@ export default function DuckDBTab() {
         preview: run.rows.slice(0, 12).map((r) =>
           (Array.isArray(r) ? r : []).slice(0, 8).map((c) => {
             if (c == null) return null;
-            const s = String(c);
-            return s.length > 80 ? s.slice(0, 79) + "…" : c;
+            const safe = jsonSafe(c);
+            const s = String(safe);
+            return s.length > 80 ? s.slice(0, 79) + "…" : safe;
           }),
         ),
       };
     } else if (run.kind === "error") {
       payload.result = { error: run.message };
     }
-    const serialised = JSON.stringify(payload);
+    const serialised = jsonSafeStringify(payload);
     if (serialised === lastFocusSerialRef.current) return;
     lastFocusSerialRef.current = serialised;
     void fetch("/api/ui/focus", {
@@ -364,7 +382,7 @@ export default function DuckDBTab() {
               </div>
             ) : (
               <DataList
-                files={stats.data.slice(0, 8)}
+                files={stats.data}
                 conn={connRef.current}
                 db={dbRef.current}
                 onPick={setQuery}
@@ -456,9 +474,10 @@ export default function DuckDBTab() {
                 const header: (string | number | null)[] = run.cols.slice();
                 const body: (string | number | null)[][] = run.rows.map((r) =>
                   r.map((v) => {
-                    if (v === null || v === undefined) return null;
-                    if (typeof v === "number" || typeof v === "boolean") return Number(v);
-                    const s = String(v);
+                    const safe = jsonSafe(v);
+                    if (safe === null || safe === undefined) return null;
+                    if (typeof safe === "number" || typeof safe === "boolean") return Number(safe);
+                    const s = String(safe);
                     return /^-?\d+(?:\.\d+)?$/.test(s) ? Number(s) : s;
                   }),
                 );
@@ -633,11 +652,11 @@ function ResultsTable({ run }: { run: RunState }) {
 function formatCell(v: unknown): string {
   if (v === null || v === undefined) return "";
   if (v instanceof Date) return v.toISOString().replace("T", " ").slice(0, 19);
-  if (typeof v === "bigint") return v.toString();
-  if (typeof v === "object") {
-    try { return JSON.stringify(v); } catch { return String(v); }
+  const safe = jsonSafe(v);
+  if (typeof safe === "object") {
+    try { return jsonSafeStringify(safe); } catch { return String(safe); }
   }
-  return String(v);
+  return String(safe);
 }
 
 /** Render the Data card: each row shows a data file with its size and
@@ -688,15 +707,27 @@ function DataList({
 }) {
   const [probes, setProbes] = useState<Map<string, Probe>>(new Map());
   const [busy, setBusy] = useState<string | null>(null);
+  const shown = files.slice(0, 8);
+  const pathsKey = shown.map((f) => f.path).join("\0");
+  const probedRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!conn) return;
     let cancelled = false;
-    setProbes(new Map(files.map((f) => [f.path, { kind: "loading" } as Probe])));
     (async () => {
-      for (const f of files) {
+      for (const f of shown) {
         if (cancelled) return;
-        const probe = await runProbe(conn, f.path, f.ext);
+        if (probedRef.current.has(f.path)) continue;
+        probedRef.current.add(f.path);
+        setProbes((cur) => {
+          if (cur.get(f.path)?.kind === "rows" || cur.get(f.path)?.kind === "tables") {
+            return cur;
+          }
+          const next = new Map(cur);
+          next.set(f.path, { kind: "loading" });
+          return next;
+        });
+        const probe = await runProbe(conn, db, f.path, f.ext);
         if (cancelled) return;
         setProbes((cur) => {
           const next = new Map(cur);
@@ -706,14 +737,26 @@ function DataList({
       }
     })();
     return () => { cancelled = true; };
-  }, [files, conn]);
+    // pathsKey captures shown paths; don't reset on parent re-render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pathsKey, conn, db]);
 
   const onClick = async (path: string, ext: string) => {
     const k = dataKind(ext);
     if (k === "csv" || k === "parquet" || k === "json") {
-      const sql = starterSqlFor(path, ext);
       onSetCurrentDb(null);
-      if (sql) onPick(sql);
+      if (!db) {
+        const sql = starterSqlFor(path, ext);
+        if (sql) onPick(sql);
+        return;
+      }
+      try {
+        const vfs = await registerWorkspaceFile(db, path);
+        const sql = starterSqlForVfs(vfs, ext);
+        if (sql) onPick(sql);
+      } catch (e) {
+        onPick(`-- failed to load ${path}\n-- ${(e as Error).message}`);
+      }
       return;
     }
     if (k === "sqlite") {
@@ -764,7 +807,7 @@ function DataList({
 
   return (
     <ul className="sy-duckdb-data">
-      {files.map((f) => {
+      {shown.map((f) => {
         const p = probes.get(f.path);
         const name = f.path.split("/").pop() ?? f.path;
         const isBusy = busy === f.path;
@@ -910,44 +953,43 @@ function formatProbe(p: Probe | undefined): string {
   return "?";
 }
 
-function starterSqlFor(path: string, ext: string): string | null {
-  const url = `/api/fs/raw?path=${encodeURIComponent(path)}`;
-  switch (dataKind(ext)) {
-    case "csv":
-      return `SELECT * FROM read_csv_auto('${url}') LIMIT 100;`;
-    case "parquet":
-      return `SELECT * FROM read_parquet('${url}') LIMIT 100;`;
-    case "json":
-      return `SELECT * FROM read_json_auto('${url}') LIMIT 100;`;
-    case "sqlite":
-    case "duckdb":
-      // Click handler in DataList does the actual ATTACH dance.
-      return null;
-  }
+function readFnForKind(kind: ReturnType<typeof dataKind>): string | null {
+  if (kind === "csv") return "read_csv_auto";
+  if (kind === "parquet") return "read_parquet";
+  if (kind === "json") return "read_json_auto";
   return null;
+}
+
+function starterSqlFor(path: string, ext: string): string | null {
+  const fn = readFnForKind(dataKind(ext));
+  if (!fn) return null;
+  const url = `/api/fs/raw?path=${encodeURIComponent(path)}`;
+  return `SELECT * FROM ${fn}('${url}') LIMIT 100;`;
+}
+
+function starterSqlForVfs(vfs: string, ext: string): string | null {
+  const fn = readFnForKind(dataKind(ext));
+  if (!fn) return null;
+  return `SELECT * FROM ${fn}('${vfs.replace(/'/g, "''")}') LIMIT 100;`;
 }
 
 async function runProbe(
   conn: duckdb.AsyncDuckDBConnection,
+  db: duckdb.AsyncDuckDB | null,
   path: string,
   ext: string,
 ): Promise<Probe> {
-  const url = `/api/fs/raw?path=${encodeURIComponent(path)}`;
-  const escaped = url.replace(/'/g, "''");
   const kind = dataKind(ext);
-  let sql: string | null = null;
-  if (kind === "csv") {
-    sql = `SELECT COUNT(*)::BIGINT AS n FROM read_csv_auto('${escaped}')`;
-  } else if (kind === "parquet") {
-    sql = `SELECT COUNT(*)::BIGINT AS n FROM read_parquet('${escaped}')`;
-  } else if (kind === "json") {
-    sql = `SELECT COUNT(*)::BIGINT AS n FROM read_json_auto('${escaped}')`;
-  } else {
+  const fn = readFnForKind(kind);
+  if (!fn) {
     // sqlite / duckdb files: schema discovery happens on click via
     // attachDbFile. Show a hint until the user opts in.
     return { kind: "err", msg: "click to attach" };
   }
+  if (!db) return { kind: "err", msg: "db not ready" };
   try {
+    const vfs = await registerWorkspaceFile(db, path);
+    const sql = `SELECT COUNT(*)::BIGINT AS n FROM ${fn}('${vfs.replace(/'/g, "''")}')`;
     const res = await conn.query(sql);
     const arr = res.toArray();
     const v = arr[0] as Record<string, unknown> | undefined;

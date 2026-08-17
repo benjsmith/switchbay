@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { useSelection } from "../../selection/SelectionContext";
 import PlotAdjustDialog from "./PlotAdjustDialog";
 import { ackUiCommand, takePlotShow } from "../../lib/pendingUiCommands";
+import { prepareSpecForEmbed, tileSizeFor } from "./prepareSpec";
 
 /**
  * Vega-Lite plot tab — tiled gallery.
@@ -83,7 +84,7 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
 
   return {
     background: "transparent",
-    padding: { top: 16, right: 16, bottom: 16, left: 16 },
+    padding: { top: 16, right: 20, bottom: 16, left: 24 },
     // `fit` (both axes) pairs with the spec-level
     // `width/height: "container"` defaults injected at render
     // time — chart fills both card dimensions instead of just
@@ -98,8 +99,10 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
       labelFontSize: 11,
       titleFontSize: 12,
       titleFontWeight: 500,
-      titlePadding: 10,
+      titlePadding: 12,
+      titleLimit: 260,
       labelPadding: 4,
+      labelLimit: 96,
       domain: false,            // skip the axis line
       tickColor: tick,
       tickSize: 4,
@@ -118,9 +121,21 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
       titleFontSize: 12,
       titleFontWeight: 500,
       symbolSize: 80,
-      symbolStrokeWidth: 0,
+      symbolStrokeWidth: 1.5,
+      symbolOpacity: 1,
       orient: "right",
       padding: 12,
+      offset: 8,
+    },
+    header: {
+      labelColor: textStrong,
+      titleColor: textMuted,
+      labelFont: fontStack,
+      titleFont: fontStack,
+      labelFontSize: 12,
+      labelFontWeight: 600,
+      labelPadding: 6,
+      labelLimit: 420,
     },
     title: {
       color: textStrong,
@@ -132,10 +147,9 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
       anchor: "start",
       offset: 12,
       // Per-line truncation guard. Wrapping is handled
-      // up-stream by wrapTitleText() which splits long string
-      // titles into an array vega draws line-by-line; this
-      // limit only kicks in for pathologically long single
-      // unbreakable tokens.
+      // up-stream by prepareSpecForEmbed() which splits long
+      // string titles into a line array; this limit only
+      // kicks in for pathologically long unbreakable tokens.
       limit: 600,
       lineHeight: 18,
     },
@@ -163,89 +177,6 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
     },
   };
 }
-
-/** Vega draws title.text as a single line and truncates with
- *  ellipsis when title.limit kicks in. There's no native
- *  auto-wrap for strings — but if title.text is an ARRAY of
- *  strings, each element renders on its own line. So we
- *  pre-split long string titles at word boundaries into a few
- *  visually balanced lines. Anything already an array, an
- *  object, or short enough to fit on one line passes through
- *  unchanged.
- *
- *  `maxCharsPerLine` is calibrated against the 14px chart
- *  title font at the typical card width (~400-420px). Wider
- *  tiles get more room via the multiplier so titles on
- *  large/full tiles stay on one or two lines instead of three. */
-function wrapTitleText(title: unknown, tileCols: number): unknown {
-  const maxCharsPerLine = 38 + Math.max(0, tileCols - 1) * 24;
-  const split = (text: string): string[] => {
-    if (text.length <= maxCharsPerLine) return [text];
-    const words = text.split(/\s+/);
-    const lines: string[] = [];
-    let cur = "";
-    for (const w of words) {
-      const trial = cur ? cur + " " + w : w;
-      if (trial.length > maxCharsPerLine && cur) {
-        lines.push(cur);
-        cur = w;
-      } else {
-        cur = trial;
-      }
-    }
-    if (cur) lines.push(cur);
-    return lines;
-  };
-  if (typeof title === "string") {
-    const lines = split(title);
-    return lines.length > 1 ? lines : title;
-  }
-  if (title && typeof title === "object" && !Array.isArray(title)) {
-    const obj = title as { text?: unknown };
-    if (typeof obj.text === "string") {
-      const lines = split(obj.text);
-      if (lines.length > 1) return { ...obj, text: lines };
-    }
-  }
-  return title;
-}
-
-
-/** Tile sizing hint pulled from `spec.usermeta.tile`. Lets the
- *  agent or user declare "this plot needs more room" so dense
- *  visualisations don't get squeezed into a 420px column.
- *
- *  Supported keys:
- *    { cols: 1|2|3|4, rows: 1|2|3 }
- *  Or shortcuts:
- *    { size: "wide" | "tall" | "large" | "auto" }
- *
- *  Anything missing or invalid falls back to 1x1 (a normal cell).
- */
-type TileSize = { cols: number; rows: number };
-function tileSizeFor(spec: Record<string, unknown>): TileSize {
-  const usermeta = (spec as { usermeta?: unknown }).usermeta;
-  if (!usermeta || typeof usermeta !== "object") return { cols: 1, rows: 1 };
-  const tile = (usermeta as { tile?: unknown }).tile;
-  if (!tile || typeof tile !== "object") return { cols: 1, rows: 1 };
-  const t = tile as { cols?: unknown; rows?: unknown; size?: unknown };
-  // Shortcut presets — convenient for agents to express intent
-  // without hand-picking row/col counts.
-  if (typeof t.size === "string") {
-    switch (t.size) {
-      case "wide":   return { cols: 2, rows: 1 };
-      case "tall":   return { cols: 1, rows: 2 };
-      case "large":  return { cols: 2, rows: 2 };
-      case "full":   return { cols: 4, rows: 1 };
-    }
-  }
-  const cols = typeof t.cols === "number" && t.cols >= 1 && t.cols <= 4
-    ? Math.round(t.cols) : 1;
-  const rows = typeof t.rows === "number" && t.rows >= 1 && t.rows <= 3
-    ? Math.round(t.rows) : 1;
-  return { cols, rows };
-}
-
 
 /** Pull a one-line caption out of a Vega-Lite spec, if the
  *  author supplied one. CE-authored plots include a `description`
@@ -323,28 +254,7 @@ function PlotCard(props: PlotCardProps) {
         if (embedRef.current?.finalize) {
           try { embedRef.current.finalize(); } catch { /* ignore */ }
         }
-        // Inject width/height defaults so specs that omit them
-        // fill the card cleanly. Most agent-authored specs don't
-        // declare these — vega's default 200px width left the
-        // chart cramped next to the legend / axis titles.
-        // `width: container` makes vega measure the parent on
-        // every render; `height: container` does the same for
-        // taller tile sizes.
-        const specWithSize: Record<string, unknown> = { ...plot.spec };
-        if (specWithSize.width === undefined) {
-          specWithSize.width = "container";
-        }
-        if (specWithSize.height === undefined) {
-          specWithSize.height = "container";
-        }
-        // Wrap long titles into a multi-line array so they
-        // don't get ellipsis-truncated at the chart edge. Tile
-        // span widens the budget so titles on larger tiles
-        // don't unnecessarily wrap.
-        if (specWithSize.title !== undefined) {
-          const ts = tileSizeFor(plot.spec);
-          specWithSize.title = wrapTitleText(specWithSize.title, ts.cols);
-        }
+        const specWithSize = prepareSpecForEmbed(plot.spec);
         const result = await embed(hostRef.current, specWithSize, {
           actions: false,
           config: buildSwitchbayVegaConfig(),
@@ -422,7 +332,7 @@ function PlotCard(props: PlotCardProps) {
         e.stopPropagation();
         setMenu({ x: e.clientX, y: e.clientY });
       }}
-      title="Double-click to edit; right-click for actions"
+      aria-label={`${plot.name}. Double-click to edit, right-click for actions`}
     >
       <header className="sy-plot-card-head">
         <span className="sy-plot-card-title" title={plot.name}>{plot.name}</span>
@@ -724,16 +634,7 @@ export default function VegaTab() {
       "position:absolute; left:-10000px; top:0; width:800px; height:500px;";
     document.body.appendChild(host);
     try {
-      // Same width/height injection as the on-screen path so the
-      // saved PNG fills the 800x500 frame instead of using vega's
-      // 200px default.
-      const specWithSize: Record<string, unknown> = { ...spec };
-      if (specWithSize.width === undefined) specWithSize.width = "container";
-      if (specWithSize.height === undefined) specWithSize.height = "container";
-      if (specWithSize.title !== undefined) {
-        const ts = tileSizeFor(spec);
-        specWithSize.title = wrapTitleText(specWithSize.title, ts.cols);
-      }
+      const specWithSize = prepareSpecForEmbed(spec);
       const result = await embed(host, specWithSize, {
         actions: false,
         config: buildSwitchbayVegaConfig(),

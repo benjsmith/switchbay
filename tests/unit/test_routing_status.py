@@ -128,3 +128,17 @@ def test_micro_edit_model_is_an_override(monkeypatch, ws):
     assert micro and micro[0]["model"] == "grok-composer-2.5-fast"
     # micro-edits don't get CE's destructive shell scope → no weak warning.
     assert r["warnings"] == []
+
+
+def test_sanitize_ladder_keeps_optional_effort():
+    raw = {
+        "hard": {"provider": "grok-build", "model": "grok-4.6", "effort": "xhigh"},
+        "normal": {"provider": "grok-build", "model": "grok-4.6", "effort": ""},
+        "trivial": {"provider": "grok-build"},  # incomplete
+    }
+    out = modestore.sanitize_ladder(raw)
+    assert out["hard"] == {
+        "provider": "grok-build", "model": "grok-4.6", "effort": "xhigh",
+    }
+    assert out["normal"] == {"provider": "grok-build", "model": "grok-4.6"}
+    assert "trivial" not in out

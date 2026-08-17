@@ -19,6 +19,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutTimeout
 from pathlib import Path
 from typing import Any
 
@@ -569,6 +570,13 @@ def is_installed(cid: str) -> bool:
     cfg = localllm.load_config()
     if cfg and cid.startswith("ornith"):
         return True
+    if cid.startswith("mlx:"):
+        repo = cid.split(":", 1)[-1]
+        if any(
+            str(c.get("repo") or "").lower() == repo
+            for c in scan_cached_mlx()
+        ):
+            return True
     if cid.startswith("ollama-"):
         tag = (catalog_by_id(cid) or {}).get("ollama_tag")
         if tag:
@@ -576,9 +584,198 @@ def is_installed(cid: str) -> bool:
     return False
 
 
+def _hf_hub_caches() -> list[Path]:
+    """Every Hugging Face hub cache we can see on this Mac.
+
+    Switch Bay's own default is ~/.cache/huggingface/hub. Other Mac
+    apps often keep a private copy under
+    ~/Library/Containers/<bundle>/Data/Library/Caches/huggingface/hub.
+    mlx_lm.server can load a local snapshot path, so detecting those
+    copies means we never ask the user to download the same weights twice.
+    """
+    out: list[Path] = []
+    seen: set[str] = set()
+
+    def add(p: Path) -> None:
+        # Do not Path.resolve() — that follows automount/iCloud
+        # aliases and can stall the daemon at boot.
+        try:
+            p = p.expanduser()
+            if not p.is_dir():
+                return
+            key = os.path.normpath(str(p))
+        except OSError:
+            return
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(p)
+
+    raw = os.environ.get("HUGGINGFACE_HUB_CACHE") or os.environ.get("HF_HOME")
+    if raw:
+        p = Path(raw).expanduser()
+        add(p if p.name == "hub" else p / "hub")
+    home = Path.home()
+    add(home / ".cache" / "huggingface" / "hub")
+    add(home / "Library" / "Caches" / "huggingface" / "hub")
+    # Other Mac apps keep private HF hubs under Containers/.
+    # Bound the walk — a single stuck sandbox dir must not hang boot.
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            fut = pool.submit(_container_hubs, home / "Library" / "Containers")
+            extra = fut.result(timeout=1.5)
+    except (OSError, FutTimeout):
+        extra = []
+    except Exception:  # noqa: BLE001
+        extra = []
+    for p in extra:
+        add(p)
+    return out
+
+
+def _container_hubs(containers: Path) -> list[Path]:
+    if not containers.is_dir():
+        return []
+    found: list[Path] = []
+    try:
+        with os.scandir(containers) as it:
+            for ent in it:
+                try:
+                    if not ent.is_dir(follow_symlinks=False):
+                        continue
+                except OSError:
+                    continue
+                hub = (
+                    Path(ent.path) / "Data" / "Library"
+                    / "Caches" / "huggingface" / "hub"
+                )
+                try:
+                    if hub.is_dir():
+                        found.append(hub)
+                except OSError:
+                    continue
+    except OSError:
+        return found
+    return found
+
+
+def _mlx_snapshot(model_dir: Path) -> Path | None:
+    """Best complete snapshot (config + weights) under a HF model dir."""
+    snaps = model_dir / "snapshots"
+    if not snaps.is_dir():
+        return None
+    ordered: list[Path] = []
+    refs = model_dir / "refs" / "main"
+    if refs.is_file():
+        try:
+            sha = refs.read_text(encoding="utf-8").strip()
+            if sha:
+                ordered.append(snaps / sha)
+        except OSError:
+            pass
+    try:
+        ordered.extend(p for p in snaps.iterdir() if p.is_dir() and p not in ordered)
+    except OSError:
+        return None
+    for snap in ordered:
+        try:
+            if not snap.is_dir() or not (snap / "config.json").is_file():
+                continue
+            if any(snap.glob("*.safetensors")) or any(snap.glob("*.npz")):
+                return snap
+        except OSError:
+            continue
+    return None
+
+
+def _pretty_mlx_label(repo: str) -> str:
+    name = repo.rsplit("/", 1)[-1]
+    name = re.sub(r"(?i)-?mlx-?", " ", name)
+    name = re.sub(r"(?i)-?4bit", "\0FOURBIT\0", name)
+    name = re.sub(r"(?i)-?8bit", "\0EIGHTBIT\0", name)
+    name = re.sub(r"[-_]+", " ", name)
+    name = name.replace("\0FOURBIT\0", " (4-bit)").replace("\0EIGHTBIT\0", " (8-bit)")
+    return re.sub(r"\s+", " ", name).strip() or repo
+
+
+def _cache_source_label(cache: Path) -> str:
+    parts = {p.lower() for p in cache.parts}
+    if "containers" in parts:
+        return "app-cache"
+    return "hf-cache"
+
+
+def scan_cached_mlx() -> list[dict[str, Any]]:
+    """MLX weights already on disk in any Hugging Face hub cache.
+
+    Includes Switch Bay's default cache and sandboxed copies other Mac
+    apps keep. `local_path` is the snapshot directory mlx_lm.server can
+    load with `--model <dir>` so we never re-fetch.
+    """
+    skip = ("bge-", "minilm", "e5-", "gte-", "embed", "clip-")
+    by_id: dict[str, dict[str, Any]] = {}
+    for cache in _hf_hub_caches():
+        try:
+            dirs = list(cache.iterdir())
+        except OSError:
+            continue
+        for d in dirs:
+            if not d.name.startswith("models--"):
+                continue
+            parts = d.name[len("models--"):].split("--")
+            if len(parts) < 2:
+                continue
+            repo = "/".join(parts)
+            low = repo.lower()
+            if any(s in low for s in skip):
+                continue
+            snap = _mlx_snapshot(d)
+            if snap is None:
+                continue
+            if "mlx" not in low and "4bit" not in low and "8bit" not in low:
+                try:
+                    blob = (snap / "config.json").read_text(encoding="utf-8").lower()
+                except OSError:
+                    continue
+                if "mlx" not in blob and "quantization" not in blob:
+                    continue
+            cid = "mlx:" + low
+            quant = (
+                "4bit" if "4bit" in low else
+                "8bit" if "8bit" in low else
+                "bf16"
+            )
+            rec = {
+                "id": cid,
+                "label": _pretty_mlx_label(repo),
+                "backend": "mlx",
+                "repo": repo,
+                "quant": quant,
+                "local_path": str(snap),
+                "source": _cache_source_label(cache),
+            }
+            # Prefer a snapshot we already recorded only if this one
+            # is from our own cache (shorter path / no sandbox).
+            prev = by_id.get(cid)
+            if prev and prev.get("source") == "hf-cache":
+                continue
+            by_id[cid] = rec
+    return list(by_id.values())
+
+
 def list_installed() -> list[dict[str, Any]]:
     reg = load_registry()
     out = list((reg.get("installed") or {}).values())
+    seen = {str(x.get("id") or "") for x in out}
+    seen |= {str(x.get("repo") or "").lower() for x in out}
+    for cached in scan_cached_mlx():
+        cid = str(cached.get("id") or "")
+        repo = str(cached.get("repo") or "").lower()
+        if cid in seen or repo in seen:
+            continue
+        out.append(cached)
+        seen.add(cid)
+        seen.add(repo)
     # Ollama pulls not in registry
     for entry in CATALOG:
         if entry.get("backend") != "ollama":
@@ -1261,7 +1458,12 @@ def activate(cid: str) -> dict[str, Any]:
     inst = (reg.get("installed") or {}).get(cid)
     entry = catalog_by_id(cid) or {}
     if not inst and not entry:
-        return {"ok": False, "error": f"unknown model id {cid!r}"}
+        cached = next(
+            (c for c in scan_cached_mlx() if c.get("id") == cid), None)
+        if cached:
+            entry = cached
+        else:
+            return {"ok": False, "error": f"unknown model id {cid!r}"}
     meta = dict(inst or {})
     backend = str(meta.get("backend") or entry.get("backend") or "llamacpp")
     reg["active"] = cid
@@ -1284,6 +1486,9 @@ def activate(cid: str) -> dict[str, Any]:
         if not repo:
             return {"ok": False, "error": f"no MLX repo recorded for {cid!r}",
                     "id": cid}
+        local_path = meta.get("local_path") or entry.get("local_path")
+        if local_path and not Path(str(local_path)).is_dir():
+            local_path = None
         port = int(meta.get("port") or allocate_mlx_port(reg))
         alias = str(meta.get("alias") or cid.split(":", 1)[-1].replace("/", "_")[:24])
         cfg = {
@@ -1291,6 +1496,7 @@ def activate(cid: str) -> dict[str, Any]:
             "model_label": meta.get("label") or str(repo).rsplit("/", 1)[-1],
             "quant": meta.get("quant"),
             "repo": repo,
+            "local_path": str(local_path) if local_path else None,
             "backend": "mlx",
             "ctx": int(meta.get("ctx") or 32768),
             "port": port,
@@ -1300,12 +1506,23 @@ def activate(cid: str) -> dict[str, Any]:
         }
         localllm.save_config(cfg)
         inst2 = dict(load_registry().get("installed") or {})
-        if cid in inst2:
-            reg2 = load_registry()
-            inst2[cid] = {**inst2[cid], "port": port, "alias": alias}
-            reg2["installed"] = inst2
-            reg2["active"] = cid
-            save_registry(reg2)
+        prev = inst2.get(cid) or {}
+        inst2[cid] = {
+            **prev,
+            "id": cid,
+            "label": cfg["model_label"],
+            "backend": "mlx",
+            "repo": repo,
+            "local_path": cfg.get("local_path"),
+            "quant": cfg.get("quant"),
+            "ctx": cfg["ctx"],
+            "port": port,
+            "alias": alias,
+        }
+        reg2 = load_registry()
+        reg2["installed"] = inst2
+        reg2["active"] = cid
+        save_registry(reg2)
         return {
             "ok": True, "id": cid, "backend": "mlx", "active": cid,
             "cfg": cfg, "port": port,

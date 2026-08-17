@@ -46,6 +46,48 @@ def test_models_from_cache_missing(tmp_path: Path):
     assert grok_build.models_from_cache(tmp_path / "nope.json") == []
 
 
+def test_parse_tool_call_accepts_grok_acp_fields():
+    parsed = grok_build.parse_tool_call({
+        "type": "tool_call",
+        "toolCallId": "call_1",
+        "title": "Read",
+        "toolName": "read_file",
+        "rawInput": {"path": "src/main.rs"},
+    })
+    assert parsed == ("call_1", "read_file", {"path": "src/main.rs"})
+
+
+def test_parse_tool_call_skips_update_and_empty_name():
+    assert grok_build.parse_tool_call({
+        "type": "tool_call_update", "toolCallId": "call_1",
+    }) is None
+    assert grok_build.parse_tool_call({"type": "tool_call"}) is None
+    assert grok_build.parse_tool_call({
+        "type": "tool_use", "id": "x", "name": "Bash",
+        "input": {"command": "ls"},
+    }) == ("x", "Bash", {"command": "ls"})
+
+
+def test_hard_deny_rules_use_supported_prefixes():
+    for rule in grok_build.HARD_DENY_RULES:
+        prefix = rule.split("(", 1)[0]
+        assert prefix in grok_build.DENY_PREFIXES, rule
+    argv = grok_build.deny_argv()
+    assert "NotebookEdit(*)" not in argv
+    assert argv.count("--deny") == len(grok_build.HARD_DENY_RULES)
+    assert "Bash(mdfind*)" in argv
+
+
+def test_deny_argv_skips_unknown_prefixes():
+    argv = grok_build.deny_argv([
+        "NotebookEdit(*)",
+        "Shell(*)",
+        "Bash(mdfind*)",
+        "Write(*)",
+    ])
+    assert argv == ["--deny", "Bash(mdfind*)", "--deny", "Write(*)"]
+
+
 def test_static_suggestions_include_46():
     assert "grok-4.6" in grok_build.PROVIDER["model_suggestions"]
     assert grok_build.DEFAULT_MODEL == "grok-4.6"

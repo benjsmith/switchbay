@@ -32,7 +32,7 @@ import type { GraphData } from "./widgets/graph/types";
 import { primeAnalysis } from "./widgets/sketch/deckRuns";
 import Walkthrough, { maybeAutoStartWalkthrough } from "./walkthrough/Walkthrough";
 import {
-  stashFormula, stashSheetSelect, stashSql, stashSketchShow, stashPlotShow,
+  stashFormula, stashSheetSelect, stashSheetValues, stashSql, stashSketchShow, stashPlotShow,
 } from "./lib/pendingUiCommands";
 import { notifyHtmlDeckOpen } from "./widgets/htmldeck/htmlDeckOpen";
 import { notifyReportDocOpen } from "./widgets/library/reportDocOpen";
@@ -846,9 +846,9 @@ export default function App() {
       } else if (msg.type === "files_changed") {
         setFilesVersion((v) => v + 1);
       } else if (msg.type === "artifact") {
-        // Agent produced/updated a surface. Never auto-switch the
-        // pane (charter Zen ruling) — pend it for the pulse badge /
-        // palette entry / response arrow, all one-click jumps.
+        // Pend a pulse badge (Zen) AND switch to the surface the
+        // agent just wrote — sheet/plot requests used to finish
+        // silently while the user was still on Table.
         if (uiModeRef.current === "zen") {
           setZenArtifact({
             kind: msg.kind,
@@ -856,6 +856,8 @@ export default function App() {
             selection: msg.selection ?? null,
           });
         }
+        if (msg.selection) setSelection(msg.selection);
+        switchToKindRef.current?.(msg.kind);
       } else if (msg.type === "workspace.merged" || msg.type === "workspace.split") {
         // D2/D4 completion ruling: toast with an Open button, never
         // an auto-switch. Long TTL — the build ran for minutes and
@@ -1146,6 +1148,30 @@ export default function App() {
           switchToKindRef.current?.("univer");
           window.setTimeout(() => {
             window.dispatchEvent(new CustomEvent("sy:formula-run", {
+              detail,
+            }));
+          }, 50);
+        }
+      } else if (msg.type === "sheet.values") {
+        const m = msg as {
+          values?: unknown;
+          origin?: unknown;
+          command_id?: unknown;
+        };
+        const values = Array.isArray(m.values) ? m.values : [];
+        const origin = String(m.origin ?? "agent");
+        const commandId =
+          m.command_id != null && String(m.command_id) ? String(m.command_id) : undefined;
+        if (values.length) {
+          const detail = {
+            values: values as (string | number | boolean | null)[][],
+            origin,
+            command_id: commandId,
+          };
+          stashSheetValues(detail);
+          switchToKindRef.current?.("univer");
+          window.setTimeout(() => {
+            window.dispatchEvent(new CustomEvent("sy:sheet-values", {
               detail,
             }));
           }, 50);

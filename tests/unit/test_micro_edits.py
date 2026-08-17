@@ -64,6 +64,10 @@ def test_micro_model_decoupled_from_ce_ladder(tmp_path: Path):
     # Set a workspace-scoped fast model at the trivial tier.
     micro_edits.set_micro_model("workspace", tmp_path, "trivial", "grok-build", "grok-4.5")
     assert micro_edits.micro_model_for_rung(tmp_path, "trivial") == ("grok-build", "grok-4.5")
+    assert micro_edits.micro_effort(tmp_path, None) is None
+    micro_edits.set_micro_model(
+        "workspace", tmp_path, "trivial", "grok-build", "grok-4.5", "low")
+    assert micro_edits.micro_effort(tmp_path, None) == "low"
     # A different tier stays unset (→ picker).
     assert micro_edits.micro_model_for_rung(tmp_path, "hard") == (None, None)
     # Clear → back to following the picker.

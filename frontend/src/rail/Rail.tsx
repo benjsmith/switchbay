@@ -8,6 +8,7 @@ import PtyThreadSurface, { type TerminalWsApi } from "./PtyThreadSurface";
 import VoiceButton from "./VoiceButton";
 import ReasoningPicker from "./ReasoningPicker";
 import { registerChord } from "../keys";
+import { useComposerDraft } from "../lib/composerDraft";
 
 type VerbInfo = { name: string; aliases: string[]; description: string };
 
@@ -457,7 +458,7 @@ export default function Rail({
   focusedThread, focusedThreadKind, onSwitchThread, onNewThread,
   termWs, poppedOutTab, onPopOutTerminal, onPopInTerminalTab, onJumpToTab,
 }: Props) {
-  const [input, setInput] = useState("");
+  const [input, setInput] = useComposerDraft();
   // Run-lane focus: when set, that run's blocks highlight and others
   // dim. expandedBlocks tracks which collapsed (done) run segments the
   // user has manually opened (keyed by the block's first item id).
@@ -958,7 +959,7 @@ export default function Rail({
                   {!e.result && (
                     <span className="sy-rail-running-dot" title="In flight" />
                   )}
-                  <span className="sy-rail-tool-name">{e.name}</span>
+                  <span className="sy-rail-tool-name">{e.name || "tool"}</span>
                   <span className="sy-rail-tool-input">{summariseInput(e.input)}</span>
                   {e.result ? (
                     <span

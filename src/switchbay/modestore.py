@@ -23,13 +23,17 @@ Ordinary rail chat always uses the picker, never the ladder. Micro-edits
 have their OWN fast-model setting (`micro_edits.models`), also decoupled
 from this ladder. See `routing_status` for how these surface in the UI.
 
-The optional `model_ladder` field maps difficulty → `{provider, model}`:
+The optional `model_ladder` field maps difficulty → `{provider, model, effort?}`:
 
     "model_ladder": {
-        "trivial": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001"},
+        "trivial": {"provider": "anthropic", "model": "claude-haiku-4-5-20251001", "effort": "low"},
         "normal":  {"provider": "anthropic", "model": "claude-sonnet-4-6"},
-        "hard":    {"provider": "anthropic", "model": "claude-opus-4-7"}
+        "hard":    {"provider": "anthropic", "model": "claude-opus-4-7", "effort": "high"}
     }
+
+`effort` is optional. Same model + lower effort is a valid cheaper
+rung (no need to pick a weaker model). Unset effort inherits the
+picker / pair default via `routing_status.effort_for`.
 
 Each rung names its own provider so a ladder can MIX providers — e.g.
 trivial → a small local Ollama model for cheapness, normal → a hosted
@@ -111,7 +115,8 @@ def load(workspace: Path) -> dict[str, Any]:
 
 def sanitize_ladder(raw) -> dict[str, dict[str, str]]:
     """Drop anything that isn't a `{provider, model}` rung keyed by a
-    known difficulty. Shared by the workspace and GLOBAL ladders."""
+    known difficulty. Optional `effort` is kept when non-empty.
+    Shared by the workspace and GLOBAL ladders."""
     if not isinstance(raw, dict):
         return {}
     out: dict[str, dict[str, str]] = {}
@@ -123,7 +128,11 @@ def sanitize_ladder(raw) -> dict[str, dict[str, str]]:
         model = str(rung.get("model") or "").strip()
         if not provider or not model:
             continue
-        out[diff] = {"provider": provider, "model": model}
+        row = {"provider": provider, "model": model}
+        effort = str(rung.get("effort") or "").strip()
+        if effort:
+            row["effort"] = effort
+        out[diff] = row
     return out
 
 
@@ -198,3 +207,14 @@ def resolve_for_difficulty(
     if rung is None:
         return None, None
     return rung["provider"], rung["model"]
+
+
+def rung_effort(workspace: Path, difficulty: str | None) -> str | None:
+    """Pinned reasoning effort on a ladder rung, or None to inherit."""
+    ladder = effective_ladder(workspace)
+    key = difficulty if difficulty in DIFFICULTIES else "normal"
+    rung = ladder.get(key)
+    if not rung:
+        return None
+    effort = str(rung.get("effort") or "").strip()
+    return effort or None

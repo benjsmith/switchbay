@@ -11,6 +11,7 @@ import {
 import PtyThreadSurface, { type TerminalWsApi } from "../rail/PtyThreadSurface";
 import VoiceButton from "../rail/VoiceButton";
 import ReasoningPicker from "../rail/ReasoningPicker";
+import { useComposerDraft } from "../lib/composerDraft";
 
 // One persisted, drag-resizable height for BOTH the chat and the pty
 // view — so the box no longer jumps between a content-sized chat and a
@@ -89,7 +90,7 @@ export default function ZenChatBox({
   docked = false, onDock, onFloat,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
-  const [input, setInput] = useState("");
+  const [input, setInput] = useComposerDraft();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const responseRef = useRef<HTMLDivElement>(null);
   // Attach-a-file: same upload → `[attached: <path>]` prefix contract

@@ -473,11 +473,18 @@ def server_args(binp: str, cfg: dict[str, Any]) -> list[str]:
     HF repo id and manages its own weight cache — no `-m <file>`).
     """
     if cfg.get("backend") == "mlx":
+        # Prefer a local snapshot (HF cache) so first start does not
+        # hit the network. mlx_lm.server --model accepts a dir.
+        model = (
+            cfg.get("local_path")
+            or cfg.get("repo")
+            or cfg.get("model")
+        )
         return [
             binp,
             "--host", "127.0.0.1",
             "--port", str(cfg.get("port") or PORT),
-            "--model", str(cfg.get("repo") or cfg.get("model")),
+            "--model", str(model),
         ]
     return [
         binp,

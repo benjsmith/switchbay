@@ -885,11 +885,17 @@ function TranscriptEvent({ ev }: { ev: RunEvent }) {
     );
   }
   if (ev.kind === "tool_use") {
+    const name = (ev.actor || "").trim();
+    const summary = (ev.summary || "").trim();
+    // Grok used to emit nameless tool_call events; don't render empty TOOL ().
+    if (!name && (!summary || summary === "()")) return null;
     return (
       <div className={cls}>
         <span className="sy-agents-tx-tag sy-agents-tx-tag--tool">tool</span>
-        <code>{ev.actor ?? "?"}</code>
-        <span className="sy-agents-tx-summary">{ev.summary}</span>
+        <code>{name || "tool"}</code>
+        {summary && summary !== "()" && (
+          <span className="sy-agents-tx-summary">{summary}</span>
+        )}
       </div>
     );
   }

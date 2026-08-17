@@ -288,17 +288,39 @@ def micro_model_for_rung(
     return None, None
 
 
+def micro_effort(workspace: Path, thread_id: str | None) -> str | None:
+    """Pinned effort on the resolved micro-edit model row, or None."""
+    rung = effective_rung(workspace, thread_id)
+    for src in (_ws_micro(workspace), _global_micro()):
+        row = _micro_models(src).get(rung)
+        if not isinstance(row, dict):
+            continue
+        pid = str(row.get("provider") or "").strip()
+        model = str(row.get("model") or "").strip()
+        if pid and model:
+            ev = str(row.get("effort") or "").strip()
+            return ev or None
+    return None
+
+
 def set_micro_model(
     scope: Scope, workspace: Path, rung: Rung,
     provider: str | None, model: str | None,
+    effort: str | None = None,
 ) -> None:
     """Persist (or clear, when provider is falsy) the micro-edit model
-    for `rung` at the given scope."""
+    for `rung` at the given scope. Optional `effort` is stored on the
+    same row so micro-edits can think less than the rail on the same
+    model."""
     def _apply(me: dict[str, Any]) -> dict[str, Any]:
         me = dict(me)
         models = dict(_micro_models(me))
         if provider and provider.strip():
-            models[rung] = {"provider": provider.strip(), "model": (model or "").strip()}
+            row = {"provider": provider.strip(), "model": (model or "").strip()}
+            ev = (effort or "").strip()
+            if ev:
+                row["effort"] = ev
+            models[rung] = row
         else:
             models.pop(rung, None)
         if models:

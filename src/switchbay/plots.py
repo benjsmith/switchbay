@@ -35,6 +35,65 @@ from . import atomicio
 log = logging.getLogger("switchbay.plots")
 
 
+def _each_unit(spec: dict[str, Any], visit) -> None:
+    visit(spec)
+    for key in ("layer", "hconcat", "vconcat", "concat"):
+        arr = spec.get(key)
+        if isinstance(arr, list):
+            for child in arr:
+                if isinstance(child, dict):
+                    _each_unit(child, visit)
+    inner = spec.get("spec")
+    if isinstance(inner, dict):
+        _each_unit(inner, visit)
+
+
+def sanitize_plot_spec(spec: dict[str, Any]) -> dict[str, Any]:
+    """Fix two common agent-authored Vega-Lite foot-guns.
+
+    1. ``color.legend: null`` on any layer of a shared color scale
+       removes the *whole* category legend (countries vanish; only
+       a stroke-dash key remains).
+    2. Row-facet headers default to the left and collide with the
+       y-axis title when the facet values are long sentences.
+    """
+    colors: list[dict[str, Any]] = []
+
+    def collect(unit: dict[str, Any]) -> None:
+        enc = unit.get("encoding")
+        if not isinstance(enc, dict):
+            return
+        color = enc.get("color")
+        if isinstance(color, dict) and color.get("field"):
+            colors.append(color)
+
+    _each_unit(spec, collect)
+    hid = [c for c in colors if c.get("legend") is None and "legend" in c]
+    kept = [c for c in colors if c.get("legend") is not None or "legend" not in c]
+    if hid and kept:
+        for c in hid:
+            c.pop("legend", None)
+
+    def lift_headers(unit: dict[str, Any]) -> None:
+        facet = unit.get("facet")
+        if not isinstance(facet, dict):
+            return
+        row = facet.get("row")
+        if not isinstance(row, dict) or isinstance(row.get("header"), dict):
+            return
+        row["header"] = {
+            "labelOrient": "top",
+            "labelAnchor": "start",
+            "labelAlign": "left",
+            "labelPadding": 6,
+            "labelLimit": 420,
+            "title": None,
+        }
+
+    _each_unit(spec, lift_headers)
+    return spec
+
+
 def _dir(workspace: Path) -> Path:
     return workspace / ".workbench" / "plots"
 
@@ -117,6 +176,7 @@ def save_plot(
     Returns the saved record."""
     if not isinstance(spec, dict):
         raise ValueError("spec must be a JSON object")
+    spec = sanitize_plot_spec(spec)
     name = (name or "").strip() or "Untitled plot"
     d = _dir(workspace)
     d.mkdir(parents=True, exist_ok=True)

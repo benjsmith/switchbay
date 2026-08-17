@@ -126,7 +126,8 @@ async def plan(
         system=PLANNER_SYSTEM,
         max_tokens=2048,
         reasoning_effort=routing_status.effort_for(
-            getattr(provider, "ID", ""), model, "ladder"),
+            getattr(provider, "ID", ""), model, "ladder",
+            rung_effort=modestore.rung_effort(workspace, "hard")),
         workspace=str(workspace),
     )
     accumulated = ""
@@ -263,7 +264,9 @@ async def run_worker(
         system=WORKER_SYSTEM_PREFIX,
         max_tokens=4096,
         reasoning_effort=routing_status.effort_for(
-            getattr(provider, "ID", ""), model, "ladder"),
+            getattr(provider, "ID", ""), model, "ladder",
+            rung_effort=modestore.rung_effort(
+                workspace, str(task.get("difficulty") or "normal"))),
         workspace=str(workspace),
     )
 

@@ -877,11 +877,22 @@ body {
 .sy-settings-body code,
 .sy-settings-body pre,
 .sy-settings-body a,
-.sy-settings-body .sy-settings-input {
+.sy-settings-body input.sy-settings-input,
+.sy-settings-body textarea.sy-settings-input {
   overflow-wrap: anywhere;
   word-break: break-word;
   white-space: normal;
   max-width: 100%;
+}
+/* Native <select> must NOT wrap — overflow-wrap:anywhere on the
+ * shared input class was stacking "llama.cpp (local)" one letter
+ * per line in the ladder. */
+.sy-settings-body select.sy-settings-input {
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  overflow: hidden;
 }
 /* Single scroll area for providers + ladder + packs. Previously the
  * ladder and packs sections sat OUTSIDE the scroll container and
@@ -1119,10 +1130,18 @@ body {
   margin-top: 8px;
 }
 .sy-settings-ladder-row {
-  display: grid;
-  grid-template-columns: 118px minmax(0, 1fr) minmax(0, 1.2fr) auto;
-  gap: 10px;
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: 8px;
+}
+.sy-settings-ladder-row > select {
+  flex: 1 1 9.5rem;
+  min-width: 9.5rem;
+}
+.sy-settings-effort-placeholder {
+  display: block;
+  min-width: 0;
 }
 /* Role label stacks the role title over its dimming rung name. The
    min-width:0 + overflow guard stops a long role ("ORCHESTRATOR")
@@ -1188,8 +1207,7 @@ body {
  * select so neither fights for width (side-by-side either crushed
  * "Grok Build · …" to "G" or wrapped "(provider default)" mid-word). */
 .sy-settings-ladder-row--effort {
-  grid-template-columns: 118px minmax(0, 1fr);
-  align-items: start;
+  align-items: flex-start;
 }
 .sy-effort-select {
   grid-column: 2 / -1;
@@ -2491,7 +2509,12 @@ body {
   color: var(--text-faint);
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
+.sy-sheet-toolbar-status--warn { color: var(--type-fact, #edad08); }
 .sy-sheet-toolbar-btn {
   /* override tab-swap absolute positioning when used inline. */
   position: static;
@@ -2724,6 +2747,7 @@ body {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   transition: border-color 0.15s, box-shadow 0.15s;
   cursor: default;
 }
@@ -2790,20 +2814,26 @@ body {
   border-color: var(--type-fact);
 }
 .sy-plot-card-canvas {
-  /* Grow into the cell so wide / tall tiles (set via
-   * spec.usermeta.tile) actually use their extra space. Min
-   * height keeps small/empty cards from collapsing to nothing. */
-  flex: 1 1 auto;
+  /* Grow into leftover cell space. flex-basis 0 so a long
+   * caption below is never clipped by min-height greed. */
+  flex: 1 1 0;
   width: 100%;
-  min-height: 280px;
+  min-height: 180px;
   min-width: 0;
+  overflow: hidden;
 }
-.sy-plot-card-canvas .vega-embed { width: 100%; }
+.sy-plot-card-canvas .vega-embed,
+.sy-plot-card-canvas .vega-embed .marks {
+  width: 100%;
+  max-width: 100%;
+}
 .sy-plot-card-caption {
+  flex: 0 0 auto;
   margin: 8px 0 0 0;
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 .sy-plot-card-err {
   margin: 8px 0 0 0;

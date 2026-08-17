@@ -26,6 +26,13 @@ def _picker_is_xai():
 
 # ── the pair's own effort wins ──────────────────────────────────────
 
+def test_rung_effort_wins_over_the_pairs_stored_effort():
+    """Same model, cheaper think — the other way to weaken a rung."""
+    llm_config.set_reasoning_effort(*LADDER, "high")
+    assert routing_status.effort_for(*LADDER, "ladder", rung_effort="low") == "low"
+    assert routing_status.effort_for(*LADDER, "ladder") == "high"
+
+
 def test_lane_uses_the_effort_of_the_model_it_routed_to():
     """Setting an effort on a model covers every lane that routes there
     — that IS "inherit the ladder's setting" / "use the micro-edit

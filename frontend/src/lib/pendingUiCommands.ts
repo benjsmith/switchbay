@@ -23,6 +23,12 @@ export type PendingSql = {
   command_id?: string;
 };
 
+export type PendingSheetValues = {
+  values: (string | number | boolean | null)[][];
+  origin?: string;
+  command_id?: string;
+};
+
 export type PendingPlotShow = {
   id: string;
   name?: string;
@@ -39,6 +45,7 @@ export type PendingSketchShow = {
 type Pending = {
   formula: PendingFormula | null;
   sheetSelect: string | null;
+  sheetValues: PendingSheetValues | null;
   sql: PendingSql | null;
   sketchShow: PendingSketchShow | null;
   plotShow: PendingPlotShow | null;
@@ -47,6 +54,7 @@ type Pending = {
 const pending: Pending = {
   formula: null,
   sheetSelect: null,
+  sheetValues: null,
   sql: null,
   sketchShow: null,
   plotShow: null,
@@ -67,6 +75,15 @@ export function stashSheetSelect(range: string): void {
 export function takeSheetSelect(): string | null {
   const v = pending.sheetSelect;
   pending.sheetSelect = null;
+  return v;
+}
+
+export function stashSheetValues(detail: PendingSheetValues): void {
+  pending.sheetValues = detail;
+}
+export function takeSheetValues(): PendingSheetValues | null {
+  const v = pending.sheetValues;
+  pending.sheetValues = null;
   return v;
 }
 

@@ -111,6 +111,77 @@ LABEL = "Grok Build"
 BINARY = "grok"
 DEFAULT_MODEL = "grok-4.6"
 
+# CLI `--deny` aborts the process on an unknown prefix (config-file
+# load only warns). Grok 1.0.4 recognized names — docs
+# 22-permissions-and-safety.md "Tool Names":
+#   Bash, Read, Edit (and Write), Grep (and Glob), MCPTool,
+#   WebFetch, WebSearch.
+# NotebookEdit / NotebookRead / Shell used to be listed as aliases
+# and now hard-fail spawn ("unsupported tool prefix"). Never pass
+# those as `--deny`.
+DENY_PREFIXES = frozenset({
+    "Bash", "Read", "Edit", "Write", "Grep", "Glob",
+    "MCPTool", "WebFetch", "WebSearch", "*",
+})
+
+# Home / filesystem-wide scans that trip macOS TCC. The rail
+# (`permissions.hard_deny_reason`) refuses these too; blocking at
+# the CLI layer means grok never attempts the call. Notebook edits
+# are no longer a Grok permission prefix — the PreToolUse hook
+# still denies a NotebookEdit tool if a future CLI reintroduces it.
+HARD_DENY_RULES = (
+    "Bash(find /Users*)",
+    "Bash(find ~*)",
+    "Bash(find /*)",
+    "Bash(mdfind*)",
+    "Bash(locate /*)",
+)
+
+
+def deny_argv(rules: tuple[str, ...] | list[str] = HARD_DENY_RULES) -> list[str]:
+    """`--deny` flag pairs, skipping prefixes this grok CLI rejects."""
+    out: list[str] = []
+    for rule in rules:
+        prefix = rule.split("(", 1)[0]
+        if prefix not in DENY_PREFIXES:
+            log.warning(
+                "skipping grok --deny %s: unsupported prefix %s",
+                rule, prefix)
+            continue
+        out.extend(["--deny", rule])
+    return out
+
+
+def parse_tool_call(evt: dict) -> tuple[str, str, dict] | None:
+    """Map a grok streaming-json tool event to (id, name, input).
+
+    Grok 1.0.x `streaming-json` uses ACP field names (`toolCallId`,
+    `toolName`, `rawInput`) — not Claude's `id`/`name`/`input`.
+    Missing those used to emit empty TOOL () rows in the rail and
+    Agents panel. `tool_call_update` is progress, not a new call.
+    """
+    if not isinstance(evt, dict):
+        return None
+    etype = evt.get("type")
+    if etype not in ("tool_use", "tool_call"):
+        return None
+    name = (
+        evt.get("name") or evt.get("tool") or evt.get("toolName")
+        or evt.get("title") or ""
+    )
+    name = str(name).strip()
+    if not name:
+        return None
+    raw = evt.get("input") or evt.get("arguments") or evt.get("rawInput")
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {"value": raw}
+    tid = str(
+        evt.get("id") or evt.get("toolUseId") or evt.get("toolCallId") or ""
+    )
+    return tid, name, raw
+
 PROVIDER = {
     "id": ID,
     "label": LABEL,
@@ -583,32 +654,22 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         log.warning(
             "grok permission hook unavailable — falling back to "
             "propose-only tools for %s", workspace)
-        # Two layers, two naming schemes (Grok 0.2.x):
+        # Two layers, two naming schemes:
         #  · --disallowed-tools uses *internal* tool IDs and removes
         #    the tools entirely (docs: run_terminal_cmd, not Bash).
-        #  · --deny uses Claude-compat permission prefixes. Recognized
-        #    names: Bash, Read, Edit, Write, NotebookEdit, Grep, …
-        #    "Shell" is NOT recognized — `--deny Shell(*)` hard-fails
-        #    with "unknown tool prefix: Shell" and aborts the spawn.
+        #  · --deny uses Claude-compat permission prefixes. Unknown
+        #    prefixes (Shell, NotebookEdit, …) abort the spawn — see
+        #    DENY_PREFIXES / deny_argv().
         argv.extend([
             "--disallowed-tools", "run_terminal_cmd,search_replace",
-            "--deny", "Bash(*)",
-            "--deny", "Edit(*)",
-            "--deny", "Write(*)",
+            *deny_argv(("Bash(*)", "Edit(*)", "Write(*)")),
         ])
 
     # Hard denies stay unconditional. `permissions.hard_deny_reason`
     # refuses these server-side too, but blocking at the CLI layer
     # means grok never attempts the call that trips a macOS TCC
     # dialog ("… would like to access data from other apps").
-    argv.extend([
-        "--deny", "NotebookEdit(*)",
-        "--deny", "Bash(find /Users*)",
-        "--deny", "Bash(find ~*)",
-        "--deny", "Bash(find /*)",
-        "--deny", "Bash(mdfind*)",
-        "--deny", "Bash(locate /*)",
-    ])
+    argv.extend(deny_argv())
     if req.system:
         # `--rules` APPENDS to grok's own system prompt (its
         # --append-system-prompt equivalent); layers switchbay's rules
@@ -660,13 +721,11 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
                 if isinstance(d, str) and d:
                     yield base.ReasoningChunk(text=d)
             elif etype in ("tool_use", "tool_call"):
-                # Emitted once MCP/built-in tools are configured (grok mcp
-                # add). Shape not yet observed against a real tool run —
-                # map defensively; the daemon surfaces it as a tool row.
+                parsed = parse_tool_call(evt)
+                if parsed is None:
+                    continue
                 yield base.ToolUseChunk(
-                    id=str(evt.get("id") or evt.get("toolUseId") or ""),
-                    name=str(evt.get("name") or evt.get("tool") or ""),
-                    input=evt.get("input") or evt.get("arguments") or {})
+                    id=parsed[0], name=parsed[1], input=parsed[2])
             elif etype == "end":
                 stop_reason = evt.get("stopReason") or stop_reason
                 sid = evt.get("sessionId")

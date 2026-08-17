@@ -334,6 +334,15 @@ export type FormulaRun = {
 /** Agent `sheet_select` — move the Sheet tab selection to an A1 range. */
 export type SheetSelect = { type: "sheet.select"; range: string };
 
+/** Agent `sheet_set_values` — write a 2D grid onto a new/import sheet. */
+export type SheetValues = {
+  type: "sheet.values";
+  values: (string | number | boolean | null)[][];
+  origin?: string;
+  command_id?: string | null;
+  workspace?: string | null;
+};
+
 /** Agent plot_show / plot_update — switch to Plot and highlight a card. */
 export type PlotShow = {
   type: "plot.show";
@@ -570,6 +579,7 @@ export type ServerMessage =
   | SqlRun
   | FormulaRun
   | SheetSelect
+  | SheetValues
   | PlotShow
   | SketchShow
   | MicroEditFeedback

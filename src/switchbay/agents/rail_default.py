@@ -121,9 +121,10 @@ Switch Bay tools you may call:
     Pre-seeded tables available to the user there:
       files(path TEXT, size BIGINT, mtime TIMESTAMP, ext TEXT)
       pages(id TEXT, path TEXT, type TEXT, title TEXT, degree INT)
-    DuckDB SQL flavour. To read a CSV/parquet from the workspace use
-    read_csv_auto('/api/fs/raw?path=<rel>') /
-    read_parquet('/api/fs/raw?path=<rel>').
+    DuckDB-WASM. First call table_context() — it lists data_files.
+    Then table_run_sql with a RELATIVE path:
+      SELECT … FROM read_csv_auto('data/owid/life-expectancy.csv')
+    Never /api/fs/raw, never /Users/… host paths, never grep the CSV.
   · recall_rail(query, limit=10, kinds=[…])
     Pull older events from this workspace's rail log into context —
     chat turns, tool calls, file edits, exec/sql/slash commands,
@@ -171,12 +172,23 @@ Switch Bay tools you may call:
     plot_context() → edit the returned spec → plot_update(id, spec).
     Prefer plot_update over telling the user to edit JSON.
   · table_context() / table_run_sql(sql)
-    THE Table tab path — same as the user's `!sql` prefix. Put SQL
-    in the editor and run it. Prefer this over paste or only
-    managing starter pills.
-  · sheet_context() / sheet_select(range) / sheet_set_formula(…)
-    THE Sheet tab path — same as `!fn`. Context first, then write
-    formulas. Do NOT hunt the wiki/deck for the spreadsheet.
+    Table tab. table_context lists data_files. SQL uses relative
+    paths only (read_csv_auto('data/foo.csv')). One query, then
+    use the result — do not retry with absolute paths or grep.
+  · sheet_context() / sheet_select / sheet_set_formula /
+    sheet_set_values(values, origin)
+    Sheet tab. sheet_set_values ONCE for a data grid (same origin
+    overwrites). sheet_set_formula only for formulas.
+  · Recipe — "subset of a CSV on a sheet + a plot":
+    1. table_context()  → pick the file from data_files
+    2. table_run_sql    → filter in DuckDB (relative path)
+    3. sheet_set_values → one call, origin = short title
+    4. save_plot        → one call, inline the same rows
+    Stop. Do not invent extra sheets. If the user asked for
+    projections or extra series, put them in that one plot.
+    Color-by-category needs a visible color legend (do not set
+    legend:null on every layer). Short axis titles; row-facet
+    headers go on top (`header.labelOrient: "top"`).
   · sketch_context() / sketch_show(sketch_id|slide_index)
     THE Sketch/deck path for the visible slide. Context first,
     then author_slide(sketch_id=…) for small content edits.
@@ -299,6 +311,7 @@ ALLOWED_TOOLS = [
     "sheet_context",
     "sheet_select",
     "sheet_set_formula",
+    "sheet_set_values",
     "table_context",
     "table_run_sql",
     "plot_context",

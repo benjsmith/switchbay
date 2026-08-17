@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { getDB } from "../duckdb/duckdb-init";
+import { getDB, registerWorkspaceFile } from "../duckdb/duckdb-init";
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
 import {
@@ -12,7 +12,9 @@ import {
   ackUiCommand,
   takeFormula,
   takeSheetSelect,
+  takeSheetValues,
   type PendingFormula,
+  type PendingSheetValues,
 } from "../../lib/pendingUiCommands";
 
 /**
@@ -36,7 +38,10 @@ import {
 const HOST_ID = "sy-sheet-host";
 const AUTOSAVE_MS = 1500;
 const FOCUS_POLL_MS = 400;
-const CSV_ROW_CAP = 5000;
+/** Univer's default workbook is 1000×20; writes past that throw
+ *  "Range is out of bounds". CSV / query dumps are clipped to this. */
+const SHEET_ROW_CAP = 1000;
+const SHEET_COL_CAP = 20;
 const PREVIEW_ROWS = 30;
 const PREVIEW_COLS = 12;
 const CELL_CHARS = 80;
@@ -75,6 +80,8 @@ type UniverWorkbook = {
     name: string, rows: number, cols: number,
   ) => UniverSheet;
   setActiveSheet: (sheet: UniverSheet | string) => UniverSheet;
+  getSheetByName?: (name: string) => UniverSheet | null;
+  getSheets?: () => UniverSheet[];
 };
 
 type UniverHandle = {
@@ -252,6 +259,7 @@ export default function SheetTab() {
   const lastFocusSerialRef = useRef<string>("");
   const pendingFormulaRef = useRef<FormulaRunDetail | null>(null);
   const pendingSelectRef = useRef<string | null>(null);
+  const pendingValuesRef = useRef<PendingSheetValues | null>(null);
   const csvSelectionRef = useRef<string | null>(null);
   const [boot, setBoot] = useState<"loading" | "ready" | string>("loading");
   const [csvStatus, setCsvStatus] = useState<string | null>(null);
@@ -508,11 +516,23 @@ export default function SheetTab() {
         setCsvStatus(`select failed: ${(e as Error).message}`);
       }
     };
+    const onValues = (ev: Event) => {
+      const detail = (ev as CustomEvent<PendingSheetValues>).detail;
+      if (!detail?.values?.length) return;
+      const handle = handleRef.current;
+      if (!handle || boot !== "ready") {
+        pendingValuesRef.current = detail;
+        return;
+      }
+      void applySheetValues(handle, detail, setCsvStatus);
+    };
     window.addEventListener("sy:formula-run", onFormula);
     window.addEventListener("sy:sheet-select", onSelect);
+    window.addEventListener("sy:sheet-values", onValues);
     return () => {
       window.removeEventListener("sy:formula-run", onFormula);
       window.removeEventListener("sy:sheet-select", onSelect);
+      window.removeEventListener("sy:sheet-values", onValues);
     };
   }, [boot]);
 
@@ -530,6 +550,11 @@ export default function SheetTab() {
       try {
         applySheetSelect(wb.getActiveSheet(), sel);
       } catch { /* status already shown on next user action */ }
+    }
+    const values = pendingValuesRef.current || takeSheetValues();
+    pendingValuesRef.current = null;
+    if (values?.values?.length) {
+      void applySheetValues(handle, values, setCsvStatus);
     }
     const formula = pendingFormulaRef.current || takeFormula();
     pendingFormulaRef.current = null;
@@ -780,7 +805,17 @@ export default function SheetTab() {
             <span className="sy-sheet-toolbar-path" title={csvPath}>{csvPath}</span>
           </>
         )}
-        {csvStatus && <span className="sy-sheet-toolbar-status">{csvStatus}</span>}
+        {csvStatus && (
+          <span
+            className={
+              "sy-sheet-toolbar-status"
+              + (csvStatus.startsWith("showing first") ? " sy-sheet-toolbar-status--warn" : "")
+            }
+            title={csvStatus}
+          >
+            {csvStatus}
+          </span>
+        )}
         {plotStatus && <span className="sy-sheet-toolbar-status">{plotStatus}</span>}
         <span className="sy-spacer" />
         {activeWsSlug && (
@@ -975,56 +1010,120 @@ export default function SheetTab() {
   );
 }
 
+async function applySheetValues(
+  handle: UniverHandle,
+  detail: PendingSheetValues,
+  setStatus: (s: string | null) => void,
+): Promise<void> {
+  const ok = await loadValuesIntoActiveSheet(
+    handle, detail.values, detail.origin || "agent", setStatus,
+  );
+  if (detail.command_id) {
+    await ackUiCommand({
+      command_id: detail.command_id,
+      ok,
+      surface: "sheet",
+      applied: ok,
+      durable: ok,
+      label: ok ? (detail.origin || "values") : undefined,
+      error: ok ? undefined : "Sheet did not accept the grid",
+    });
+  }
+}
+
 async function loadValuesIntoActiveSheet(
   handle: UniverHandle | null,
-  values: (string | number | null)[][],
+  values: (string | number | boolean | null)[][],
   origin: string,
   setStatus: (s: string | null) => void,
 ) {
-  if (!handle || values.length === 0) return;
+  if (!handle || values.length === 0) return false;
   setStatus("loading…");
   try {
     const wb = handle.univerAPI.getActiveWorkbook();
-    if (!wb) { setStatus("no workbook"); return; }
+    if (!wb) { setStatus("no workbook"); return false; }
     const cols = Math.max(...values.map((r) => r.length));
     const padded = values.map((r) =>
       r.length === cols ? r : [...r, ...Array(cols - r.length).fill("")],
     );
-    // If the active sheet already has data, create a fresh sheet
-    // and write there so a second incoming table doesn't clobber
-    // the user's earlier work. The new sheet gets a name derived
-    // from the origin breadcrumb so the tab strip in Univer shows
-    // where it came from.
-    let ws = wb.getActiveSheet();
-    const used = ws.getLastRow() > 0 || ws.getLastColumn() > 0;
-    if (used) {
-      const sheetName = deriveSheetName(origin);
-      try {
-        const fresh = wb.create(sheetName, Math.max(padded.length, 100), Math.max(cols, 26));
-        wb.setActiveSheet(fresh);
-        ws = fresh;
-      } catch {
-        // Univer rejects duplicate names — append a uniquifier and
-        // retry once. If even that fails, fall through and overwrite
-        // (the older bug, but rare).
-        try {
-          const fresh = wb.create(
-            `${sheetName} ${Math.floor(Math.random() * 9000 + 1000)}`,
-            Math.max(padded.length, 100), Math.max(cols, 26),
-          );
-          wb.setActiveSheet(fresh);
-          ws = fresh;
-        } catch { /* fall through */ }
-      }
-    }
-    const range = ws.getRange(0, 0, padded.length, cols);
-    range.setValues(padded as unknown as unknown[][]);
-    setStatus(`loaded ${padded.length - 1} rows · ${cols} cols · from ${origin}`);
+    const { grid, status } = clipToSheet(padded, padded.length - 1, cols);
+    const ws = openImportSheet(wb, origin, grid.length, grid[0]?.length ?? 1);
+    const range = ws.getRange(0, 0, grid.length, grid[0]!.length);
+    range.setValues(grid as unknown as unknown[][]);
+    setStatus(`${status} · from ${origin}`);
+    return true;
   } catch (e) {
     setStatus(`error: ${(e as Error).message.slice(0, 100)}`);
+    return false;
   }
 }
 
+
+/** Clip a value grid to Univer's default workbook (1000×20) and
+ *  describe what was dropped so the toolbar can warn. `totalRows` /
+ *  `totalCols` are the full source size (may exceed `values`). */
+function clipToSheet(
+  values: unknown[][],
+  totalRows: number,
+  totalCols: number,
+): { grid: unknown[][]; status: string } {
+  const grid = values.slice(0, SHEET_ROW_CAP).map((r) => {
+    const row = (Array.isArray(r) ? r : []).slice(0, SHEET_COL_CAP);
+    while (row.length < Math.min(totalCols, SHEET_COL_CAP)) row.push("");
+    return row;
+  });
+  const shownData = Math.max(0, grid.length - 1);
+  const shownCols = grid[0]?.length ?? 0;
+  const rowTrunc = totalRows > shownData;
+  const colTrunc = totalCols > shownCols;
+  const rowsBit = rowTrunc
+    ? `first ${shownData.toLocaleString()} of ${totalRows.toLocaleString()} rows`
+    : `${shownData.toLocaleString()} rows`;
+  const colsBit = colTrunc
+    ? `first ${shownCols} of ${totalCols} cols`
+    : `${shownCols} cols`;
+  const hint = (rowTrunc || colTrunc)
+    ? " · ask the rail for a subset if you need a different slice"
+    : "";
+  const lead = (rowTrunc || colTrunc) ? "showing " : "loaded ";
+  return { grid, status: `${lead}${rowsBit} · ${colsBit}${hint}` };
+}
+
+/** New sheet sized to the write, so a 1000×20 dump doesn't overflow
+ *  the default workbook and doesn't clobber earlier edits. */
+function openImportSheet(
+  wb: UniverWorkbook,
+  origin: string,
+  rows: number,
+  cols: number,
+): UniverSheet {
+  const h = Math.max(rows, 1);
+  const w = Math.max(cols, 1);
+  const sheetName = deriveSheetName(origin);
+  const existing = wb.getSheetByName?.(sheetName)
+    ?? wb.getSheets?.().find((s) => s.getSheetName?.() === sheetName)
+    ?? null;
+  if (existing) {
+    wb.setActiveSheet(existing);
+    return existing;
+  }
+  try {
+    const fresh = wb.create(sheetName, h, w);
+    wb.setActiveSheet(fresh);
+    return fresh;
+  } catch {
+    try {
+      const fresh = wb.create(
+        `${sheetName} ${Math.floor(Math.random() * 9000 + 1000)}`,
+        h, w,
+      );
+      wb.setActiveSheet(fresh);
+      return fresh;
+    } catch {
+      return wb.getActiveSheet();
+    }
+  }
+}
 
 /** Derive a short, Univer-tab-friendly sheet name from an origin
  *  breadcrumb like `wiki/projects/foo.md#table-2` or
@@ -1045,11 +1144,20 @@ async function loadCsvIntoActiveSheet(
   if (!handle) return;
   setStatus("loading…");
   try {
-    const { conn } = await getDB();
-    const url = `/api/fs/raw?path=${encodeURIComponent(path)}`;
-    const escaped = url.replace(/'/g, "''");
+    const { db, conn } = await getDB();
+    const vfs = await registerWorkspaceFile(db, path);
+    const escaped = vfs.replace(/'/g, "''");
+    let totalRows = 0;
+    try {
+      const countRes = await conn.query(
+        `SELECT COUNT(*)::BIGINT AS n FROM read_csv_auto('${escaped}')`,
+      );
+      const raw = (countRes.toArray()[0] as Record<string, unknown> | undefined)?.n;
+      totalRows = typeof raw === "bigint" ? Number(raw) : Number(raw ?? 0);
+    } catch { /* COUNT may fail on messy CSVs; fall through */ }
+    const dataCap = SHEET_ROW_CAP - 1;
     const res = await conn.query(
-      `SELECT * FROM read_csv_auto('${escaped}') LIMIT ${CSV_ROW_CAP};`,
+      `SELECT * FROM read_csv_auto('${escaped}') LIMIT ${dataCap};`,
     );
     const cols = res.schema.fields.map((f) => f.name);
     const arrowRows = res.toArray();
@@ -1069,13 +1177,12 @@ async function loadCsvIntoActiveSheet(
     }
     const wb = handle.univerAPI.getActiveWorkbook();
     if (!wb) { setStatus("no workbook"); return; }
-    const ws = wb.getActiveSheet();
-    const range = ws.getRange(0, 0, values.length, cols.length);
-    range.setValues(values);
-    const truncated = arrowRows.length >= CSV_ROW_CAP;
-    setStatus(
-      `loaded ${arrowRows.length.toLocaleString()} rows · ${cols.length} cols${truncated ? ` (capped at ${CSV_ROW_CAP})` : ""}`,
-    );
+    const knownRows = Math.max(totalRows, arrowRows.length);
+    const { grid, status } = clipToSheet(values, knownRows, cols.length);
+    const ws = openImportSheet(wb, path, grid.length, grid[0]?.length ?? 1);
+    const range = ws.getRange(0, 0, grid.length, grid[0]!.length);
+    range.setValues(grid as unknown as unknown[][]);
+    setStatus(status);
   } catch (e) {
     setStatus(`error: ${(e as Error).message.slice(0, 100)}`);
   }

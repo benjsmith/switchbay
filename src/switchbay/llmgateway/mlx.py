@@ -40,8 +40,10 @@ PROVIDER = {
     "default_model": DEFAULT_MODEL,
     "auth_help": (
         "Apple-silicon local models — Settings → Local agent model → "
-        "MLX. Needs `mlx-lm` on PATH (`uv tool install mlx-lm`); paste "
-        "any mlx-community repo id, or pick one of the suggestions."
+        "MLX. Needs `mlx-lm` on PATH (`uv tool install mlx-lm`). "
+        "Weights already in a Hugging Face cache (including other apps "
+        "on this Mac) are detected automatically — Use this instead of "
+        "downloading."
     ),
     "model_suggestions": [],  # filled live from installed MLX models
     "capabilities": {

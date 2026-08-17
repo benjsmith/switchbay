@@ -446,7 +446,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
 // ── Model ladder panel ──────────────────────────────────────────────
 
 
-type Rung = { provider: string; model: string };
+type Rung = { provider: string; model: string; effort?: string };
 type LadderState = Partial<Record<"trivial" | "normal" | "hard", Rung>>;
 
 type Picker = { provider: string; provider_label: string; model: string };
@@ -504,11 +504,16 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
       if (next.provider !== undefined && next.provider !== prev.provider) {
         if (!next.provider.trim()) {
           merged.model = "";
+          merged.effort = "";
         } else if (next.model === undefined) {
           const p = props.providers.find((x) => x.id === next.provider);
           const opts = modelsForProvider(p);
           merged.model = opts[0] ?? p?.default_model ?? "";
+          merged.effort = "";
         }
+      }
+      if (next.model !== undefined && next.model !== prev.model && next.effort === undefined) {
+        merged.effort = "";
       }
       const out = { ...(cur ?? {}) };
       // Drop rungs the user blanks out so the saved JSON stays clean
@@ -557,14 +562,9 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
     <section className="sy-settings-ladder">
       <h3 className="sy-settings-h3">CE curation models</h3>
       <p className="sy-settings-blurb">
-        These models run <strong>curation</strong> (curate / ingest) and its
-        fan-out — nothing else. Ordinary rail chat always uses your{" "}
-        <strong>picker</strong> selection. Three roles: the{" "}
-        <strong>Orchestrator</strong> is the top-level curate agent (it{" "}
-        <em>follows the picker</em> by default — override it to run curation on
-        a different model than the rail, e.g. a background run);{" "}
-        <strong>Workers</strong> and <strong>Sub-tasks</strong> are the fan-out
-        rungs. Any rung left as “follows picker” runs on your selected model.
+        Curate / ingest only — rail chat stays on the picker. Override a
+        rung to pin a model; a cheaper rung can be a smaller model or a
+        lower effort on the same one.
       </p>
       <div className="sy-side-seg" role="tablist" aria-label="Ladder scope" style={{ marginBottom: 8 }}>
         <button
@@ -660,11 +660,17 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
                       <option key={m} value={m}>{m}</option>
                     ))}
                   </select>
+                  <RungEffortSelect
+                    provider={pid}
+                    model={modelValue}
+                    value={rung?.effort ?? ""}
+                    onChange={(effort) => update(diff, { effort })}
+                  />
                   <button
                     type="button"
                     className="sy-settings-mini-btn"
                     title="Clear this rung → follow the picker"
-                    onClick={() => update(diff, { provider: "", model: "" })}
+                    onClick={() => update(diff, { provider: "", model: "", effort: "" })}
                   >
                     ✕
                   </button>
@@ -704,7 +710,6 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
         </div>
       )}
       <MicroEditModelPanel open={props.open} providers={props.providers} picker={picker} />
-      <ReasoningPolicyPanel open={props.open} />
     </section>
   );
 }
@@ -718,6 +723,55 @@ function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
 // Mirrors the rail's corner control; same endpoints, same storage.
 
 type EffortOption = { id: string; label: string; hint?: string };
+
+/** Per-rung effort. Saved on the ladder row (not the global
+ *  provider+model store) so two rungs can share grok-4.6 and still
+ *  think at different depths. */
+function RungEffortSelect({
+  provider, model, value, onChange,
+}: {
+  provider: string; model: string; value: string;
+  onChange: (effort: string) => void;
+}) {
+  const [options, setOptions] = useState<EffortOption[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    if (!provider) { setOptions([]); return; }
+    void (async () => {
+      try {
+        const qs = new URLSearchParams({ provider, model: model || "" });
+        const r = await fetch(`/api/llm/reasoning-options?${qs}`);
+        if (!r.ok) { if (!cancelled) setOptions([]); return; }
+        const b = (await r.json()) as { options?: EffortOption[] };
+        if (!cancelled) setOptions(b.options ?? []);
+      } catch {
+        if (!cancelled) setOptions([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [provider, model]);
+
+  if (!provider || options.length === 0) {
+    return <span className="sy-settings-effort-placeholder" aria-hidden="true" />;
+  }
+  const known = options.some((o) => o.id === value);
+  return (
+    <select
+      className="sy-settings-input"
+      value={known ? value : ""}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label="reasoning effort"
+      title="How hard this rung thinks. Same model + lower effort is a cheaper rung."
+    >
+      <option value="">(inherit)</option>
+      {options.map((o) => (
+        <option key={o.id} value={o.id}>
+          {o.label}{o.hint ? ` — ${o.hint}` : ""}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function EffortSelect({
   provider, model, label = "Reasoning",
@@ -785,94 +839,6 @@ function EffortSelect({
 }
 
 
-// ── Per-lane reasoning policy ───────────────────────────────────────
-// Effort follows whichever provider+model a lane resolved to, so the
-// ladder rung's setting and the micro-edit setting are already honoured
-// without a parallel config tree. This is the FALLBACK: what a lane
-// does when the model it landed on carries no effort of its own.
-
-const LANE_LABELS: Record<string, { label: string; blurb: string }> = {
-  micro: {
-    label: "Micro-edits",
-    blurb: "short edit-shaped messages with a tab focused",
-  },
-  ladder: {
-    label: "Curation / routed",
-    blurb: "CE curate, fan-out workers, proposal review — follows the ladder rung",
-  },
-  background: {
-    label: "Background",
-    blurb: "thread titles, slugs, triage — never user-facing prose",
-  },
-};
-
-function ReasoningPolicyPanel({ open }: { open: boolean }) {
-  const [lanes, setLanes] = useState<Record<string, string>>({});
-  const [busy, setBusy] = useState("");
-
-  const load = () => {
-    void (async () => {
-      try {
-        const r = await fetch("/api/llm/reasoning-policy");
-        if (!r.ok) return;
-        const b = (await r.json()) as { lanes?: Record<string, string> };
-        setLanes(b.lanes ?? {});
-      } catch { /* older daemon — panel stays empty */ }
-    })();
-  };
-  useEffect(() => { if (open) load(); }, [open]);
-
-  const set = async (lane: string, policy: string) => {
-    setBusy(lane);
-    try {
-      const r = await fetch("/api/llm/reasoning-policy", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ lane, policy }),
-      });
-      if (r.ok) load();
-    } catch { /* transient */ } finally { setBusy(""); }
-  };
-
-  const rows = Object.keys(LANE_LABELS).filter((l) => l in lanes);
-  if (rows.length === 0) return null;
-
-  return (
-    <div className="sy-settings-microedit">
-      <h4 className="sy-settings-h4">Reasoning effort — fallbacks</h4>
-      <p className="sy-settings-blurb">
-        Effort follows whichever model each lane routes to, so setting a
-        model's effort covers every lane that uses it. These decide what
-        happens when that model has no effort of its own:{" "}
-        <strong>inherit</strong> borrows the rail picker's setting (so
-        background work tracks how hard you've asked for things to be
-        thought about), <strong>provider default</strong> sends nothing.
-      </p>
-      {rows.map((lane) => (
-        <div key={lane} className="sy-settings-ladder-row">
-          <span className="sy-settings-ladder-label">
-            <strong>{LANE_LABELS[lane]!.label}</strong>
-            <span style={{ display: "block", fontSize: 10.5, opacity: 0.75 }}>
-              {LANE_LABELS[lane]!.blurb}
-            </span>
-          </span>
-          <select
-            className="sy-settings-input"
-            value={lanes[lane] ?? "inherit"}
-            disabled={busy === lane}
-            onChange={(e) => void set(lane, e.target.value)}
-            aria-label={`${LANE_LABELS[lane]!.label} reasoning fallback`}
-          >
-            <option value="inherit">Inherit from picker</option>
-            <option value="default">Provider default</option>
-          </select>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-
 // ── Micro-edit fast-model ───────────────────────────────────────────
 // Decoupled from the CE ladder (2026-07-24): a single optional fast
 // model for tiny, edit-shaped rail messages (cell formulas, slide copy,
@@ -883,6 +849,7 @@ function MicroEditModelPanel(props: {
 }) {
   const [pid, setPid] = useState("");
   const [model, setModel] = useState("");
+  const [effort, setEffort] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -891,9 +858,12 @@ function MicroEditModelPanel(props: {
       try {
         const r = await fetch("/api/micro-edits/model");
         if (!r.ok) return;
-        const b = (await r.json()) as { global?: { provider?: string | null; model?: string | null } };
+        const b = (await r.json()) as {
+          global?: { provider?: string | null; model?: string | null; effort?: string | null };
+        };
         setPid(b.global?.provider ?? "");
         setModel(b.global?.model ?? "");
+        setEffort(b.global?.effort ?? "");
       } catch { /* leave empty */ }
     })();
   };
@@ -906,15 +876,18 @@ function MicroEditModelPanel(props: {
   const save = async (clear = false) => {
     setBusy(true); setMsg(null);
     try {
-      const body = clear ? { provider: "" } : { provider: pid, model };
+      const body = clear ? { provider: "" } : { provider: pid, model, effort };
       const r = await fetch("/api/micro-edits/model", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!r.ok) { setMsg("save failed"); return; }
-      const b = (await r.json()) as { global?: { provider?: string | null; model?: string | null } };
+      const b = (await r.json()) as {
+        global?: { provider?: string | null; model?: string | null; effort?: string | null };
+      };
       setPid(b.global?.provider ?? "");
       setModel(b.global?.model ?? "");
+      setEffort(b.global?.effort ?? "");
       window.dispatchEvent(new CustomEvent("sy-routing-changed"));
       setMsg(clear ? "cleared — micro-edits follow the picker" : "saved");
     } finally { setBusy(false); }
@@ -925,17 +898,17 @@ function MicroEditModelPanel(props: {
     <div className="sy-settings-microedit">
       <h4 className="sy-settings-h4">Micro-edits fast model</h4>
       <p className="sy-settings-blurb">
-        Tiny edit-shaped messages (a cell formula, a slide caption, a plot tweak
-        with a tab focused) can run on a faster/cheaper model.{" "}
+        Tiny edit-shaped messages (a cell formula, a slide caption) can
+        run on a cheaper model or a lower effort.{" "}
         {follows
           ? <>Currently <strong>follows the picker</strong>{props.picker ? ` (${props.picker.provider_label} · ${props.picker.model})` : ""}.</>
-          : <>Currently <strong>{pid} · {model || "(default)"}</strong>.</>}
+          : <>Currently <strong>{pid} · {model || "(default)"}</strong>{effort ? ` · ${effort}` : ""}.</>}
       </p>
       <div className="sy-settings-ladder-row">
         <span className="sy-settings-ladder-label"><strong>Fast model</strong></span>
         <select
           className="sy-settings-input" value={pid}
-          onChange={(e) => { setPid(e.target.value); setModel(""); }}
+          onChange={(e) => { setPid(e.target.value); setModel(""); setEffort(""); }}
           aria-label="micro-edit provider"
         >
           <option value="">(follows picker)</option>
@@ -943,19 +916,20 @@ function MicroEditModelPanel(props: {
         </select>
         <select
           className="sy-settings-input" value={model} disabled={!pid}
-          onChange={(e) => setModel(e.target.value)} aria-label="micro-edit model"
+          onChange={(e) => { setModel(e.target.value); setEffort(""); }}
+          aria-label="micro-edit model"
         >
           {!pid && <option value="">(pick provider first)</option>}
           {pid && modelChoices.length === 0 && <option value="">(no models)</option>}
           {pid && modelChoices.map((m) => <option key={m} value={m}>{m}</option>)}
         </select>
+        <RungEffortSelect
+          provider={pid}
+          model={model}
+          value={effort}
+          onChange={setEffort}
+        />
       </div>
-      {pid && model && (
-        <div className="sy-settings-ladder-row">
-          <span className="sy-settings-ladder-label" />
-          <EffortSelect provider={pid} model={model} label="Effort" />
-        </div>
-      )}
       <div className="sy-settings-ladder-actions">
         <button type="button" className="sy-confirm-btn" disabled={busy || !pid}
           onClick={() => void save(false)}>
@@ -2150,6 +2124,9 @@ type LocalInstalled = {
   alias?: string;
   file?: string;
   ollama_tag?: string;
+  repo?: string;
+  local_path?: string;
+  source?: string;
 };
 
 type LocalServer = {
@@ -2312,6 +2289,21 @@ function rankLocalSearchHits(
   return [...matches, ...alts];
 }
 
+function isCacheDiscovered(m: LocalInstalled): boolean {
+  const src = m.source || "";
+  return src === "app-cache" || src === "hf-cache" || src.endsWith("-cache");
+}
+
+function cacheSourceCaption(m: LocalInstalled): string {
+  const repo = m.repo || "";
+  if (m.source === "app-cache") {
+    return repo
+      ? `Already on disk (another app · ${repo})`
+      : "Already on disk (another app)";
+  }
+  return repo ? `Already on disk · ${repo}` : "Already on disk";
+}
+
 function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
   const [body, setBody] = useState<LocalLlmBody | null>(null);
   const [backend, setBackend] = useState<LocalBackendId>("llamacpp");
@@ -2350,10 +2342,37 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
+  const [backendReady, setBackendReady] = useState(false);
+
   useEffect(() => {
-    if (!open) return;
-    void load();
-  }, [open]);
+    if (!open) {
+      setBackendReady(false);
+      return;
+    }
+    void (async () => {
+      const b = await load();
+      if (!b || backendReady) return;
+      const fromCfg = b.config?.backend;
+      const fromActive = (b.installed || []).find((m) => m.id === b.active)?.backend;
+      const pick = fromCfg || fromActive;
+      const diskMlx = (b.installed || []).some(
+        (m) => m.backend === "mlx" && isCacheDiscovered(m),
+      );
+      // Surface weights already on disk even when the active local
+      // server is still llama.cpp.
+      if (diskMlx && pick !== "mlx") {
+        setBackend("mlx");
+      } else if (pick === "mlx" || pick === "llamacpp" || pick === "ollama") {
+        setBackend(pick);
+      }
+      setBackendReady(true);
+      if (diskMlx) {
+        window.requestAnimationFrame(() => {
+          sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        });
+      }
+    })();
+  }, [open, backendReady]);
 
   const installing = body?.install?.state === "running";
   useEffect(() => {
@@ -2388,6 +2407,9 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     const b = m.backend || "llamacpp";
     return b === backend;
   });
+  const mlxOnDisk = (body?.installed ?? []).filter(
+    (m) => m.backend === "mlx" && isCacheDiscovered(m),
+  );
 
   const runSearch = async () => {
     setBusy("search");
@@ -2633,14 +2655,20 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     {
       id: "mlx",
       label: mlxSupported
-        ? (mlxInstalled ? "MLX" : "MLX · needs mlx-lm")
+        ? (!mlxInstalled
+          ? "MLX · needs mlx-lm"
+          : mlxOnDisk.length
+            ? `MLX · ${mlxOnDisk.length} on disk`
+            : "MLX")
         : "MLX",
       disabled: !mlxSupported,
       title: !mlxSupported
         ? (backends?.mlx?.reason || "Apple silicon only")
         : !mlxInstalled
           ? (backends?.mlx?.install_hint || "uv tool install mlx-lm")
-          : "Apple-silicon MLX models from Hugging Face",
+          : mlxOnDisk.length
+            ? `${mlxOnDisk.map((m) => m.label || m.repo).join(", ")} already on this Mac`
+            : "Apple-silicon MLX models from Hugging Face",
     },
     {
       id: "ollama",
@@ -2656,10 +2684,9 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     <section className="sy-settings-packs" ref={sectionRef}>
       <h3 className="sy-settings-h3">Local agent model</h3>
       <p className="sy-settings-blurb">
-        Run models on this machine (~{ram} GB RAM). Pick a server type,
-        then search Hugging Face (or paste <code>owner/name</code>) to
-        install. Installing points ladder <strong>trivial + normal</strong> at
-        the local model; planning/review stay on your best cloud provider.
+        Run models on this machine (~{ram} GB RAM). Pick a server type.
+        Installing points ladder <strong>trivial + normal</strong> at the
+        local model.
       </p>
 
       {/* Server type */}
@@ -2682,35 +2709,22 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
         ))}
       </div>
 
-      {backend === "mlx" && mlxSupported && !mlxInstalled && (
-        <p className="sy-settings-blurb" style={{ color: "var(--type-fact)" }}>
-          This Mac supports MLX, but <code>mlx-lm</code> is not on the
-          daemon&apos;s PATH. Install with{" "}
-          <code>{backends?.mlx?.install_hint || "uv tool install mlx-lm"}</code>
-          , then restart the service (<code>make restart</code>).
-        </p>
-      )}
-      {backend === "mlx" && mlxInstalled && (
+      {backend !== "mlx" && mlxOnDisk.length > 0 && (
         <p className="sy-settings-blurb">
-          MLX runtime ready
-          {backends?.mlx?.binary ? <> (<code>{backends.mlx.binary}</code>)</> : null}
-          . Search or paste an <code>mlx-community/…</code> (or any MLX) repo below.
-        </p>
-      )}
-      {backend === "llamacpp" && (
-        <p className="sy-settings-blurb">
-          GGUF models via managed <code>llama-server</code>. Search Hugging Face
-          or paste <code>owner/name</code> (e.g. <code>unsloth/Qwen3-8B-GGUF</code>).
-        </p>
-      )}
-      {backend === "ollama" && ollamaOk && (
-        <p className="sy-settings-blurb">
-          Paste an Ollama library tag (e.g. <code>qwen2.5-coder:7b</code>) and
-          Search, then Install to pull.
+          Found {mlxOnDisk.map((m) => m.label || m.repo).join(", ")} already
+          on this Mac.{" "}
+          <button
+            type="button"
+            className="sy-confirm-btn"
+            onClick={() => setBackend("mlx")}
+          >
+            Show in MLX
+          </button>
         </p>
       )}
 
-      {/* Installed for this backend */}
+      {/* Installed for this backend — above blurbs so on-disk finds
+          aren't pushed under the footer. */}
       {installedForBackend.length > 0 && (
         <div style={{ marginBottom: 12 }}>
           <div className="sy-settings-blurb" style={{ fontWeight: 600 }}>
@@ -2758,7 +2772,9 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
                       ? `Server running${server?.pid ? ` (pid ${server.pid})` : ""}`
                       : isActive
                         ? "Active config — server starting or not responding"
-                        : "Installed, not serving"}
+                        : isCacheDiscovered(m)
+                          ? cacheSourceCaption(m)
+                          : "Installed, not serving"}
                 </div>
                 <div className="sy-settings-local-cand-actions">
                   <button
@@ -2769,18 +2785,55 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
                   >
                     {isActive ? "Active" : "Use this"}
                   </button>
-                  <button
-                    type="button"
-                    className="sy-confirm-btn"
-                    disabled={!!busy}
-                    onClick={() => void removeModel(m.id)}
-                  >
-                    Remove
-                  </button>
+                  {isCacheDiscovered(m) && !m.port ? (
+                    <span
+                      className="sy-settings-help"
+                      title="Weights live in a shared Hugging Face cache. Switch Bay will not delete them."
+                    >
+                      shared cache
+                    </span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="sy-confirm-btn"
+                      disabled={!!busy}
+                      onClick={() => void removeModel(m.id)}
+                    >
+                      Remove
+                    </button>
+                  )}
                 </div>
               </div>
             );
           })}
+        </div>
+      )}
+
+      {backend === "mlx" && mlxSupported && !mlxInstalled && (
+        <p className="sy-settings-blurb" style={{ color: "var(--type-fact)" }}>
+          This Mac supports MLX, but <code>mlx-lm</code> is not on PATH.
+          Install with{" "}
+          <code>{backends?.mlx?.install_hint || "uv tool install mlx-lm"}</code>
+          , then <code>make restart</code>.
+        </p>
+      )}
+      {backend === "mlx" && mlxInstalled && installedForBackend.length === 0 && (
+        <p className="sy-settings-blurb">
+          No MLX weights on disk yet — search below, or switch to llama.cpp
+          if you already installed a GGUF.
+        </p>
+      )}
+      {backend === "mlx" && mlxInstalled && installedForBackend.length === 0 && (
+        <div className="sy-settings-blurb" style={{ marginBottom: 10 }}>
+          {(body?.installed || []).filter((m) => (m.backend || "llamacpp") === "llamacpp").length > 0 && (
+            <button
+              type="button"
+              className="sy-confirm-btn sy-confirm-btn--primary"
+              onClick={() => setBackend("llamacpp")}
+            >
+              Use installed llama.cpp models
+            </button>
+          )}
         </div>
       )}
 

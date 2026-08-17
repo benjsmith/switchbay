@@ -1076,14 +1076,21 @@ def _save_plot(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     # even when the Plot tab isn't focused. The Plot tab itself
     # polls /api/plots on focus + on a periodic tick to pick up
     # agent-authored plots; this is just user-visible feedback.
+    show = _daemon_json(
+        "POST", "/api/plot/command",
+        {"op": "show", "id": rec["id"], "wait_ack": True},
+        timeout=45, workspace=workspace,
+    )
+    opened = not (show.get("ok") is False or show.get("error"))
     return {
         "ok": True,
         "id": rec["id"],
         "name": rec["name"],
-        "next_step_hint": (
-            "Plot saved. The user can open the Plot tab to view it; "
-            "if you want them to land there immediately, suggest they "
-            "click the Plot tab or type `/plot " + rec["name"] + "`."
+        "shown": opened,
+        "note": (
+            f"Opened the Plot tab · {rec['name']}"
+            if opened else
+            f"Plot saved as {rec['name']}. Open the Plot tab to view it."
         ),
     }
 
@@ -1094,8 +1101,10 @@ _VEGA_LITE_SCHEMA = "https://vega.github.io/schema/vega-lite/v5.json"
 register(Tool(
     name="save_plot",
     description=(
-        "Save a Vega-Lite spec as a plot the user can view in the "
-        "Plot tab. The spec is stored at "
+        "Save a Vega-Lite spec as a plot and OPEN the Plot tab. "
+        "Call ONCE. Put every requested series (history, projection, "
+        "derivative) in THIS spec — do not save a second plot. "
+        "The spec is stored at "
         ".workbench/plots/<id>.json. Use when the user asks for a "
         "plot, chart, histogram, scatter, etc. — author the spec "
         "based on data already in the workspace (CSVs, parquet, "
@@ -1118,7 +1127,16 @@ register(Tool(
         "labels: avoid jargon and domain acronyms unless ubiquitous "
         "(AI, CPU, PDF, HTTP, SQL). Spell out or define shorthand "
         "like RLVR/RAG on first use — never leave undefined "
-        "acronyms on a chart a cold reader can't parse.\n\n"
+        "acronyms on a chart a cold reader can't parse.\n"
+        "Legends & labels:\n"
+        "  · If `color` encodes a category (country, group), leave "
+        "its legend ON. Do not set `legend: null` on every layer — "
+        "that hides the shared color key.\n"
+        "  · Keep axis titles short (a few words). For row facets, "
+        "set `header.labelOrient: \"top\"` so long facet labels "
+        "don't collide with the y-axis title.\n"
+        "  · `strokeDash` / `opacity` can have their own short "
+        "legend; they do not replace the color legend.\n\n"
         "Minimal valid spec:\n"
         "  {\"$schema\": \"" + _VEGA_LITE_SCHEMA + "\",\n"
         "   \"title\": \"Token counts per page\",\n"
@@ -1407,6 +1425,63 @@ register(Tool(
 ))
 
 
+def _sheet_set_values(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    values = payload.get("values")
+    if not isinstance(values, list) or not values:
+        return {
+            "ok": False,
+            "error": "`values` is required: a 2D array, first row = headers",
+        }
+    origin = str(payload.get("origin") or payload.get("title") or "agent").strip()
+    body = _daemon_json(
+        "POST", "/api/sheet/command",
+        {"op": "set_values", "values": values, "origin": origin, "wait_ack": True},
+        timeout=45, workspace=workspace,
+    )
+    if body.get("ok") is False or body.get("error"):
+        return {"ok": False, "error": body.get("error") or "set_values failed"}
+    return {
+        "ok": True,
+        "rows": body.get("rows"),
+        "origin": origin,
+        "applied": body.get("applied"),
+        "durable": body.get("durable"),
+        "note": (
+            f"Opened the Sheet tab · {origin} "
+            f"({body.get('rows') or len(values)} rows). "
+            "Capped at 1000 rows × 20 cols."
+        ),
+    }
+
+
+register(Tool(
+    name="sheet_set_values",
+    description=(
+        "Write a 2D table of VALUES into a sheet (Table → ↗ Sheet). "
+        "Row 0 = headers. Call ONCE per requested sheet — the same "
+        "`origin` overwrites that tab instead of duplicating it. "
+        "Do not follow with a second sheet_set_values. "
+        "Capped at 1000 rows × 20 columns."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["values"],
+        "properties": {
+            "values": {
+                "type": "array",
+                "description": "2D grid. First row = headers.",
+                "items": {"type": "array"},
+            },
+            "origin": {
+                "type": "string",
+                "description": "Sheet tab label, e.g. 'life expectancy 5 countries'.",
+            },
+        },
+    },
+    handler=_sheet_set_values,
+))
+
+
 # ── Table / Plot / Sketch — same live-focus pattern as Sheet ────────
 
 
@@ -1420,26 +1495,40 @@ def _ui_focus_get(workspace: Path, surface: str) -> dict[str, Any] | None:
     return uf.load(workspace, surface)
 
 
+def _table_data_files(workspace: Path) -> list[dict[str, Any]]:
+    from . import fileops
+    try:
+        inv = fileops.inventory(workspace)
+    except Exception:  # noqa: BLE001
+        return []
+    want = {"csv", "tsv", "parquet", "pq", "json", "jsonl", "ndjson"}
+    rows = [f for f in inv if str(f.get("ext") or "") in want]
+    rows.sort(key=lambda f: int(f.get("size") or 0), reverse=True)
+    return rows[:16]
+
+
 def _table_context(workspace: Path, _: dict[str, Any]) -> dict[str, Any]:
     focus = _ui_focus_get(workspace, "table")
+    data_files = _table_data_files(workspace)
+    note = (
+        "SQL runs in-browser DuckDB-WASM. Quote workspace-relative paths "
+        "only, e.g. read_csv_auto('data/owid/life-expectancy.csv'). "
+        "Never use /api/fs/raw or host absolute paths — they fail. "
+        "Do not grep CSVs. Call table_run_sql once, then sheet_set_values "
+        "once, then save_plot once."
+    )
     if not focus or not (focus.get("sql") or focus.get("query")):
         return {
             "ok": True,
             "focus": focus,
-            "note": (
-                "No Table SQL focus yet. Use table_run_sql(sql=…) to put a "
-                "query in the editor and run it (same as !sql), or ask the "
-                "user to open the Table tab."
-            ),
+            "data_files": data_files,
+            "note": "No SQL in the editor yet. " + note,
         }
     return {
         "ok": True,
         "focus": focus,
-        "note": (
-            "Use table_run_sql to set + run a query in the Table tab "
-            "(same path as the user's !sql prefix). Prefer this over "
-            "pasting SQL in chat."
-        ),
+        "data_files": data_files,
+        "note": note,
     }
 
 
@@ -1634,9 +1723,11 @@ register(Tool(
     name="table_run_sql",
     description=(
         "Put SQL into the Table tab editor and run it — same path as "
-        "the user's `!sql` rail prefix. Prefer this over pasting SQL "
-        "in chat or only managing starter pills. DuckDB SQL flavour; "
-        "pre-seeded tables: files, pages."
+        "the user's `!sql` rail prefix. DuckDB-WASM; pre-seeded tables "
+        "files + pages. For workspace CSVs use a RELATIVE path: "
+        "read_csv_auto('data/owid/life-expectancy.csv'). Never "
+        "/api/fs/raw or /Users/... absolute paths (those fail). "
+        "Call table_context first to see data_files. Do not grep the CSV."
     ),
     input_schema={
         "type": "object",
@@ -1644,7 +1735,10 @@ register(Tool(
         "properties": {
             "sql": {
                 "type": "string",
-                "description": "SQL to run in the Table tab.",
+                "description": (
+                    "DuckDB SQL. Workspace files: "
+                    "read_csv_auto('data/foo.csv') — relative path only."
+                ),
             },
         },
     },

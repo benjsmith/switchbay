@@ -1422,6 +1422,7 @@ async def handle_sheet_command(request: web.Request) -> web.Response:
       {op: "select", range: "H18"|"C2:H2"}
       {op: "set_formula", formula: "=AVERAGE(C2:C17)", cell?: "C18"}
       {op: "set_formula", writes: [{cell, formula}, …], wait_ack?: true}
+      {op: "set_values", values: [[headers…], [row…], …], origin?: str}
 
     When ``wait_ack`` is true (agent tools), the response blocks until
     the Sheet tab ACKs apply + durable save, or times out — never a
@@ -1555,8 +1556,71 @@ async def handle_sheet_command(request: web.Request) -> web.Response:
             ),
         })
 
+    if op == "set_values":
+        raw_vals = body.get("values")
+        if not isinstance(raw_vals, list) or not raw_vals:
+            return web.json_response(
+                {"error": "`values` must be a non-empty 2D array"}, status=400)
+        values: list[list[Any]] = []
+        for row in raw_vals[:1000]:
+            if not isinstance(row, list):
+                row = [row]
+            clipped: list[Any] = []
+            for cell in row[:20]:
+                if cell is None or isinstance(cell, (str, int, float, bool)):
+                    clipped.append(cell)
+                else:
+                    clipped.append(str(cell))
+            values.append(clipped)
+        origin = str(body.get("origin") or "agent").strip() or "agent"
+        command_id = uuid.uuid4().hex
+        fut: asyncio.Future | None = None
+        if wait_ack:
+            fut = _register_ui_ack(request.app, command_id)
+        await _broadcast(request.app, protocol.custom({
+            "type": "sheet.values",
+            "values": values,
+            "origin": origin,
+            "command_id": command_id if wait_ack else None,
+            "workspace": str(ws),
+        }))
+        if not wait_ack or fut is None:
+            return web.json_response({
+                "ok": True, "op": "set_values",
+                "rows": len(values), "origin": origin, "workspace": str(ws),
+            })
+        ack = await _wait_ui_ack(request.app, command_id, fut)
+        if ack.get("timeout"):
+            return web.json_response({
+                "ok": False,
+                "error": (
+                    f"Sheet tab did not confirm the grid within "
+                    f"{int(_UI_ACK_TIMEOUT_S)}s — open the Sheet tab and retry"
+                ),
+                "command_id": command_id,
+                "workspace": str(ws),
+            }, status=504)
+        if not ack.get("ok"):
+            return web.json_response({
+                "ok": False,
+                "error": ack.get("error") or "Sheet apply failed",
+                "command_id": command_id,
+                "workspace": str(ws),
+            }, status=422)
+        await _broadcast(request.app, protocol.notice(
+            f"Opened Sheet · {origin}", kind="chat"))
+        await _broadcast(request.app, protocol.artifact(
+            "univer", f"sheet · {origin}"))
+        return web.json_response({
+            "ok": True, "op": "set_values",
+            "applied": True, "durable": bool(ack.get("durable")),
+            "command_id": command_id, "origin": origin,
+            "rows": len(values), "workspace": str(ws),
+            "label": ack.get("label"),
+        })
+
     return web.json_response(
-        {"error": f"unknown op {op!r}; expected select|set_formula"},
+        {"error": f"unknown op {op!r}; expected select|set_formula|set_values"},
         status=400,
     )
 
@@ -1720,6 +1784,8 @@ async def handle_plot_command(request: web.Request) -> web.Response:
         await asyncio.to_thread(ui_focus.save, ws, "plot", {
             "id": pid, "name": name,
         })
+        await _broadcast(request.app, protocol.notice(
+            f"Opened Plot · {name}", kind="chat"))
         if not wait_ack or fut is None or command_id is None:
             return web.json_response({
                 "ok": True, "op": "show", "id": pid, "name": name,
@@ -3155,17 +3221,18 @@ async def handle_micro_model_get(request: web.Request) -> web.Response:
     tier is `trivial` (the default effective rung); we surface it at
     both scopes so the editor can show "follows picker" when unset."""
     workspace: Path = request.app["workspace"]
-    g_pid, g_model = None, None
+    g_pid, g_model, g_effort = None, None, None
     grow = (app_settings.load().get("micro_edits") or {})
     if isinstance(grow, dict):
         m = grow.get("models")
         if isinstance(m, dict) and isinstance(m.get("trivial"), dict):
             g_pid = m["trivial"].get("provider")
             g_model = m["trivial"].get("model")
+            g_effort = m["trivial"].get("effort")
     rung = micro_edits.effective_rung(workspace, None)
     e_pid, e_model = micro_edits.micro_model_for_rung(workspace, rung)
     return web.json_response({
-        "global": {"provider": g_pid, "model": g_model},
+        "global": {"provider": g_pid, "model": g_model, "effort": g_effort},
         "effective": {"provider": e_pid, "model": e_model, "rung": rung},
     })
 
@@ -3308,11 +3375,12 @@ async def handle_micro_model_post(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid json"}, status=400)
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
+    effort = str(body.get("effort") or "").strip()
     if provider and provider not in llmgateway.PROVIDERS:
         return web.json_response({"error": f"unknown provider: {provider}"}, status=400)
     await asyncio.to_thread(
         micro_edits.set_micro_model, "global", workspace, "trivial",
-        provider or None, model or None,
+        provider or None, model or None, effort or None,
     )
     return await handle_micro_model_get(request)
 
@@ -8734,7 +8802,8 @@ async def _auto_title_thread(
             messages=[{"role": "user", "content": _title_prompt(first[:1000])}],
             model=model or provider.PROVIDER.get("default_model"),
             max_tokens=32,
-            reasoning_effort=_effort_for(pid, model, "ladder"),
+            reasoning_effort=_effort_for(
+                pid, model, "ladder", rung="trivial", workspace=workspace),
             temperature=0.0,
             workspace=str(workspace),
         )
@@ -9040,7 +9109,13 @@ async def _dispatch_chat(
                 # (the latter arrives with provider/model overridden), so
                 # the lane follows which one this turn actually is.
                 reasoning_effort=_effort_for(
-                    pid, model, "micro" if micro_meta else "rail"),
+                    pid, model, "micro" if micro_meta else "rail",
+                    workspace=workspace,
+                    rung_effort=(
+                        micro_edits.micro_effort(workspace, thread_id)
+                        if micro_meta else None
+                    ),
+                ),
             )
             assistant_blocks: list[dict] = []
             current_text = ""
@@ -10487,7 +10562,7 @@ def _artifact_for_tool(
     out = output if isinstance(output, dict) else {}
     if out.get("ok") is False:
         return None
-    if name == "save_plot":
+    if name in ("save_plot", "plot_show", "plot_update"):
         pid = out.get("id") or tinput.get("id")
         pname = str(out.get("name") or tinput.get("name") or "plot")
         sel = (
@@ -10495,6 +10570,9 @@ def _artifact_for_tool(
             if isinstance(pid, str) and pid else None
         )
         return protocol.artifact("vega", f"plot · {pname}", sel)
+    if name == "sheet_set_values":
+        origin = str(out.get("origin") or tinput.get("origin") or "sheet")
+        return protocol.artifact("univer", f"sheet · {origin}", None)
     if name in ("make_slides_from_doc", "make_slides_from_docs", "compose_analysis"):
         a = out.get("analysis") if isinstance(out.get("analysis"), dict) else {}
         path = a.get("path")
@@ -10906,15 +10984,25 @@ async def handle_digest(request: web.Request) -> web.Response:
 
 def _effort_for(
     provider_id: str, model: str | None, lane: str = "background",
+    *,
+    rung: str | None = None,
+    workspace: Path | None = None,
+    rung_effort: str | None = None,
 ) -> str | None:
     """Reasoning effort for a dispatch — see `routing_status.effort_for`.
 
     Thin wrapper that supplies the daemon's notion of the current picker
     provider (which falls back to a configured default when the user has
-    never chosen one).
+    never chosen one). Pass `rung` + `workspace` (or `rung_effort`) so
+    a ladder row's own effort wins over the pair default.
     """
+    if rung_effort is None and rung and workspace is not None:
+        rung_effort = modestore.rung_effort(workspace, rung)
     return routing_status.effort_for(
-        provider_id, model, lane, picker_provider=_resolve_default_provider())
+        provider_id, model, lane,
+        picker_provider=_resolve_default_provider(),
+        rung_effort=rung_effort,
+    )
 
 
 async def _handle_effort_slash(
@@ -13340,6 +13428,65 @@ async def _serve_static(path: Path) -> web.Response:
     return resp
 
 
+_FRONTEND_MISSING_HTML = """\
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Switch Bay — building</title>
+  <style>
+    :root { --bg:#0f1115; --text:#e6e8eb; --muted:#9aa0a8; --faint:#5a6068; }
+    html, body { margin:0; height:100%; background:var(--bg); color:var(--text);
+      font-family:system-ui,-apple-system,sans-serif; }
+    body { display:flex; align-items:center; justify-content:center; padding:24px; }
+    .card { max-width:420px; text-align:center; }
+    h1 { font-size:16px; font-weight:600; margin:0 0 8px; }
+    p { font-size:13px; line-height:1.5; color:var(--muted); margin:0 0 8px; }
+    code { font-size:12px; color:var(--text); }
+    .hint { font-size:11px; color:var(--faint); }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Frontend isn’t built yet</h1>
+    <p>This window will reload on its own. To build it: <code>make refresh BUILD=1</code></p>
+    <p class="hint" id="st">waiting for <code>frontend/dist</code>…</p>
+  </div>
+  <script>
+    const st = document.getElementById("st");
+    async function tick() {
+      try {
+        const r = await fetch("/api/health", { cache: "no-store" });
+        if (!r.ok) { st.textContent = "daemon waking…"; return; }
+        const h = await r.json();
+        if (h && h.ok && Number(h.frontend_mtime) > 0) {
+          st.textContent = "frontend ready — reloading…";
+          location.reload();
+        }
+      } catch (e) { st.textContent = "waiting for daemon…"; }
+    }
+    setInterval(tick, 1500);
+    tick();
+  </script>
+</body>
+</html>
+"""
+
+
+def _frontend_missing_response() -> web.Response:
+    """PWA-safe 503: a mid-restart navigation used to land on a bare
+    `frontend not built` text page with no JS, so the dock window
+    never recovered. This shell polls /api/health and reloads once
+    frontend/dist/index.html is there."""
+    return web.Response(
+        text=_FRONTEND_MISSING_HTML,
+        status=503,
+        content_type="text/html",
+        headers={"Cache-Control": "no-store, must-revalidate"},
+    )
+
+
 async def handle_spa(request: web.Request) -> web.StreamResponse:
     """Static file server for the built frontend, with SPA fallback to
     index.html. Registered last as a catch-all GET, so the specific
@@ -13347,11 +13494,7 @@ async def handle_spa(request: web.Request) -> web.StreamResponse:
     and this just serves whatever was last built (or 503s)."""
     dist: Path = request.app["frontend_dist"]
     if not dist.is_dir():
-        return web.Response(
-            text="frontend not built — run `make build-frontend` "
-            "(or use the vite dev server on :5173)",
-            status=503,
-        )
+        return _frontend_missing_response()
     rel = request.match_info.get("tail", "").lstrip("/")
     # Never serve the SPA for API/WS paths — an unregistered /api GET
     # must 404 (so clients that probe GET-then-POST fall back correctly),
@@ -13382,7 +13525,7 @@ async def handle_spa(request: web.Request) -> web.StreamResponse:
     index = dist / "index.html"
     if index.is_file():
         return await _serve_static(index)
-    return web.Response(text="frontend not built", status=503)
+    return _frontend_missing_response()
 
 
 def build_app(workspace: Path) -> web.Application:

@@ -56,14 +56,17 @@ def effort_for(
     lane: str = "background",
     *,
     picker_provider: str | None = None,
+    rung_effort: str | None = None,
 ) -> str | None:
     """Reasoning effort for a dispatch on `provider_id`/`model`.
 
     Order:
       1. An explicit per-lane policy (a pinned effort id) wins outright —
          "always think hard when curating", whatever the ladder points at.
-      2. Otherwise the effort stored for THIS provider+model.
-      3. Otherwise the lane's fallback policy. `inherit` (the default)
+      2. A per-rung `effort` on the model ladder (same model, cheaper
+         think — the other way to weaken a rung besides swapping models).
+      3. Otherwise the effort stored for THIS provider+model.
+      4. Otherwise the lane's fallback policy. `inherit` (the default)
          borrows the rail picker's effort so background work tracks how
          hard you've said you want things thought about, instead of
          silently reverting to the provider's idea; `default` sends
@@ -84,6 +87,11 @@ def effort_for(
             pinned = llmgateway.base.coerce_effort(policy, opts)
             if pinned:
                 return pinned
+
+        if rung_effort:
+            from_rung = llmgateway.base.coerce_effort(rung_effort, opts)
+            if from_rung:
+                return from_rung
 
         own = llm_config.get_reasoning_effort(provider_id, model)
         if own:
