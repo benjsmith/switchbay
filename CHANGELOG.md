@@ -3,6 +3,50 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-17 — v0.9.9 — local MLX, plot legends, sheet SQL
+
+**Migration:** none. **Breaking:** none.
+
+Detect MLX weights already on disk (including other apps' Hugging Face
+caches). Plot cards keep a category color legend. Table/Sheet SQL can
+read workspace CSVs in DuckDB-WASM. Unsent composer text survives a
+Zen ↔ Power switch.
+
+### Fixed
+
+- **Plot color legend** — `legend: null` on one layer no longer hides
+  the shared category key (countries vanished; only dash style
+  remained). Row-facet headers sit above each panel instead of
+  colliding with the y-axis title. The card no longer paints a native
+  “Double-click to edit” tooltip over the chart.
+- **Table / DuckDB-WASM** — `read_csv_auto('/api/fs/raw/…')` and
+  host-absolute paths failed in the browser. Workspace files are
+  registered as buffers; SQL paths are rewritten. BigInt cells no
+  longer crash `JSON.stringify`.
+- **Sheet** — reuse a sheet by name instead of creating `…NG1`
+  duplicates. `sheet_set_values` writes a grid in one call.
+- **Grok Build spawn** — 1.0.4 rejects `--deny NotebookEdit(*)`;
+  unknown deny prefixes are skipped.
+- **PWA mid-restart** — a 503 while `frontend/dist` is missing is now
+  a self-reloading HTML page instead of a dead “frontend not built”
+  text response.
+- **Settings selects** — ladder provider/model menus no longer wrap
+  one letter per line.
+- **Composer drafts** — unsent Zen/Power text is kept when switching
+  modes or mid-prompt model picker.
+
+### Added
+
+- **On-disk MLX** — Settings → Local agent model lists MLX snapshots
+  already in Hugging Face hub caches (including sandboxed Mac app
+  caches). **Use this** starts `mlx_lm.server --model <snapshot>`
+  without downloading again.
+- **Per-rung effort** — each ladder row has its own effort control.
+
+### Version
+
+0.9.9 (micro). History retained.
+
 ## 2026-08-16 — v0.9.8 — Atlas click + preview sources
 
 **Migration:** none. **Breaking:** none.
