@@ -3,23 +3,26 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
-## Unreleased
+## 2026-08-18 — v0.9.10 — new-install pin, global skills, honest picker
+
+**Migration:** none. **Breaking:** none.
+
+A new Mac with system Python 3.14 can install CE/kuzu. Skills resolve
+from `~/.agents/skills` without Claude Code. Copilot and other
+HTTP/CLI providers can run CE scripts as Switch Bay tools. The rail
+picker only lists signed-in / present models. Atlas first paint is
+the individual-node log-rim.
 
 ### Fixed
 
-- **Atlas first paint** — opens as individual nodes with
-  log-compressed rim scaling, not clustered type bubbles. Dragging the
-  boundary streams the corpus (streaks + nodes/s) instead of panning
-  the middle graph.
+- **CE install on Python 3.14** — workspace `.venv` is pinned to 3.13
+  (kuzu has no newer wheel). `install.sh` / daemon setup install the
+  global curiosity-engine skill non-interactively (`skills add -g -y`).
 - **Global skills without Claude Code** — discovery and new user
   skills use `~/.agents/skills` (the `npx skills add -g` target).
   `~/.claude/skills` is still scanned when present. CLI spawns set
   `CURIOSITY_ENGINE_SCRIPTS_DIR` so Copilot / Grok / Codex / Muse
   find CE without a Claude skill tree.
-
-- **CE install on Python 3.14** — workspace `.venv` is pinned to 3.13
-  (kuzu has no newer wheel). `install.sh` / daemon setup install the
-  global curiosity-engine skill non-interactively (`skills add -g -y`).
 - **CE tools on HTTP providers** — every CE script is a Switch Bay
   tool (`ce_run` + first-class wrappers). Copilot no longer has to
   fake the skill from a sandbox without it.
@@ -34,6 +37,10 @@ Human-curated release notes. Earlier 0.9.x notes also live on the
   as frontmatter + `[[wikilinks]]`.
 - **Proposal review** — View stashes the report so the Reports tab
   is not empty; Accept refreshes the wiki browser and graph.
+- **Atlas first paint** — opens as individual nodes with
+  log-compressed rim scaling, not clustered type bubbles. Dragging the
+  boundary streams the corpus (streaks + nodes/s) instead of panning
+  the middle graph.
 
 ## 2026-08-17 — v0.9.9 — local MLX, plot legends, sheet SQL
 
