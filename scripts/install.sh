@@ -57,6 +57,19 @@ info "switchbay install → $REPO"
 ensure_uv
 ensure_node_pnpm
 
+# kuzu (CE graph) has wheels only through Python 3.13. A Mac whose
+# `python3` is 3.14 makes bare `uv venv` / `uv sync` pick 3.14 and
+# CE setup then fails to install kuzu. Pin 3.13 first.
+CE_PY="${SWITCHBAY_CE_PYTHON:-3.13}"
+info "Ensuring Python ${CE_PY} (kuzu / curiosity-engine)…"
+uv python install "$CE_PY" || warn "uv python install ${CE_PY} failed — continuing if it is already present"
+if [ -x "$REPO/.venv/bin/python" ] || [ -x "$REPO/.venv/bin/python3" ]; then
+  :
+else
+  uv python pin "$CE_PY" || true
+fi
+export UV_PYTHON="$CE_PY"
+
 info "Python deps (uv sync)…"
 uv sync
 if [ "$SEMANTIC" = "1" ]; then
@@ -71,6 +84,20 @@ fi
 info "Frontend deps + build…"
 pnpm --dir frontend install
 pnpm --dir frontend run build
+
+info "Curiosity-engine skill (global)…"
+if [ -d "$HOME/.agents/skills/curiosity-engine/scripts" ] || [ -d "$HOME/.claude/skills/curiosity-engine/scripts" ]; then
+  ok "curiosity-engine skill already installed"
+else
+  if command -v npx >/dev/null 2>&1; then
+    # -y on *skills* is required — without it a headless install hangs.
+    npx -y skills add -g -y benjsmith/curiosity-engine \
+      && ok "curiosity-engine skill installed" \
+      || warn "skill install failed — run: npx skills add -g -y benjsmith/curiosity-engine"
+  else
+    warn "npx not found — install Node, then: npx skills add -g -y benjsmith/curiosity-engine"
+  fi
+fi
 
 info "Registering the always-on service…"
 PYTHONPATH="$REPO/src" uv run --no-sync python -m switchbay service install

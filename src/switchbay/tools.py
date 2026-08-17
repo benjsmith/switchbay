@@ -957,7 +957,8 @@ register(Tool(
         "List skills available to this workspace — bundles of "
         "domain-specific instructions + scripts the agent can read "
         "to learn how to handle a task. Discovered from "
-        "`~/.claude/skills/`, `<workspace>/.workbench/skills/`, "
+        "`~/.agents/skills/` (and `~/.claude/skills/` if present), "
+        "`<workspace>/.workbench/skills/`, "
         "pack-bundled `<pack>/skills/`, and the curiosity-engine "
         "repo's top-level SKILL.md. Returns name + short description "
         "+ when-to-use hint per skill. Call load_skill(name) to fetch "
@@ -1064,11 +1065,21 @@ def _save_plot(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     origin = payload.get("origin")
     if not isinstance(spec, dict):
         return {"ok": False, "error": "spec must be a JSON object"}
+    caption = str(payload.get("caption") or "").strip()
+    if not caption and isinstance(spec.get("description"), str):
+        caption = spec["description"].strip()
+    sources = payload.get("sources")
+    relates = payload.get("relates_to") or payload.get("relates")
+    analysis = payload.get("analysis") or payload.get("source_analysis")
     try:
         rec = plots.save_plot(
             workspace, name=name, spec=spec,
             plot_id=str(plot_id) if isinstance(plot_id, str) and plot_id else None,
             origin=str(origin) if isinstance(origin, str) and origin else None,
+            caption=caption or None,
+            sources=sources if isinstance(sources, list) else None,
+            relates_to=relates if isinstance(relates, list) else None,
+            analysis=str(analysis) if isinstance(analysis, str) and analysis else None,
         )
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -1186,8 +1197,30 @@ register(Tool(
                     "set this to the exact `origin` value the prompt "
                     "supplies so the frontend can recognise existing "
                     "plots and skip re-generation if the user clicks "
-                    "↗ Plot on the same table twice."
+                    "↗ Plot on the same table twice. Carried onto the "
+                    "figure page as provenance when the plot is saved."
                 ),
+            },
+            "caption": {
+                "type": "string",
+                "description": (
+                    "Figure caption. Defaults to spec.description. "
+                    "Copied onto the wiki figure page on save."
+                ),
+            },
+            "analysis": {
+                "type": "string",
+                "description": "Wiki analysis page this plot belongs to (path or stem).",
+            },
+            "sources": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Vault / wiki source paths cited by this plot.",
+            },
+            "relates_to": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Related wiki page stems for [[wikilinks]].",
             },
         },
     },
@@ -2734,3 +2767,7 @@ register(Tool(
     },
     handler=_ce_bridge_candidates,
 ))
+
+
+# CE script wrappers (Copilot / HTTP providers have no CE-aware shell).
+from . import ce_tools as _ce_tools  # noqa: E402,F401

@@ -26,6 +26,28 @@ def test_has_workspace_venv_false_when_missing(wiki_ws: Path) -> None:
     assert cebridge.has_workspace_venv(wiki_ws) is False
 
 
+def test_venv_python_too_new_detects_314() -> None:
+    assert cebridge.venv_python_too_new((3, 14)) is True
+    assert cebridge.venv_python_too_new((3, 13)) is False
+    assert cebridge.venv_python_too_new((3, 12)) is False
+    assert cebridge.venv_python_too_new(None) is False
+
+
+def test_inject_skill_env_sets_scripts_dir(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "ce"
+    (root / "scripts").mkdir(parents=True)
+    (root / "scripts" / "setup.sh").write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setattr(cebridge, "ce_root", lambda: root)
+    env = cebridge.inject_skill_env({})
+    assert env["CURIOSITY_ENGINE_SCRIPTS_DIR"] == str(root / "scripts")
+    assert env["CURIOSITY_ENGINE_SKILL_DIR"] == str(root)
+
+
+def test_skill_is_installed_false_without_scripts(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(cebridge, "ce_root", lambda: tmp_path / "missing-ce")
+    assert cebridge.skill_is_installed() is False
+
+
 def test_has_workspace_venv_true_with_bin_python(wiki_ws: Path) -> None:
     py = wiki_ws / ".venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
@@ -97,6 +119,7 @@ async def test_build_calls_ensure_venv_when_no_venv(
     monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_backfill_unclassified_types", lambda *_a, **_k: None)
+    monkeypatch.setattr("switchbay.wiki_sync.inject_on_disk_pages", lambda *_a, **_k: 0)
 
     data = await cebridge.build(wiki_ws)
     assert data is not None
@@ -137,6 +160,7 @@ async def test_build_skips_ensure_when_disabled(
     monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_backfill_unclassified_types", lambda *_a, **_k: None)
+    monkeypatch.setattr("switchbay.wiki_sync.inject_on_disk_pages", lambda *_a, **_k: 0)
 
     data = await cebridge.build(wiki_ws, ensure_env=False)
     assert data is not None

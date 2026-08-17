@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from switchbay import cebridge, tools
+from switchbay import ce_tools, cebridge, tools
 from switchbay.agents import rail_default
 
 
@@ -17,6 +17,7 @@ def test_ce_tools_registered_and_allowed():
         "ce_graph_path",
         "ce_shared_sources",
         "ce_bridge_candidates",
+        *ce_tools.CE_TOOL_NAMES,
     ]
     for n in names:
         assert n in tools.REGISTRY
@@ -50,6 +51,31 @@ def test_ce_vault_search_invokes_bridge(tmp_path: Path, monkeypatch):
     assert "--mode" in calls[0][1]
     assert "--graph-expand" in calls[0][1]
     assert out["results"][0]["path"] == "vault/a.md"
+
+
+def test_ce_run_refuses_unknown_script(tmp_path: Path):
+    out = tools.REGISTRY["ce_run"].handler(
+        tmp_path, {"script": "not_a_ce_script.py"},
+    )
+    assert "error" in out
+    assert "unknown" in out["error"].lower()
+
+
+def test_ce_graph_rebuild_invokes_graph_py(tmp_path: Path, monkeypatch):
+    seen = {}
+
+    def fake_run(script, args=None, *, cwd, timeout=120.0, require_json=True):
+        seen["script"] = script
+        seen["args"] = list(args or [])
+        seen["require_json"] = require_json
+        return {"ok": True}
+
+    monkeypatch.setattr(cebridge, "run_script", fake_run)
+    out = tools.REGISTRY["ce_graph_rebuild"].handler(tmp_path, {})
+    assert seen["script"] == "graph.py"
+    assert seen["args"][:2] == ["rebuild", "wiki"]
+    assert seen["require_json"] is False
+    assert out.get("ok") is True
 
 
 def test_ce_graph_neighbors_resolves_page(tmp_path: Path, monkeypatch):

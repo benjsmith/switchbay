@@ -31,7 +31,8 @@ LABEL = "com.switchbay.daemon"   # macOS launchd label / Linux unit stem base
 UNIT = "switchbay"               # systemd unit name + Windows task name
 
 # First-party skills auto-installed at `service install` into
-# ~/.claude/skills (which skillkit discovers). Distinct from third-party
+# ~/.agents/skills (which skillkit discovers; Claude Code may also
+# symlink into ~/.claude/skills). Distinct from third-party
 # packs, which stay opt-in. Installed via the `skills` CLI over npx.
 BUNDLED_SKILLS = ("benjsmith/curiosity-engine", "benjsmith/curiosity-merge")
 
@@ -75,7 +76,10 @@ def _install_bundled_skills() -> None:
                 # ~/.claude/skills symlink) regardless of cwd. Without it
                 # the CLI installs into the nearest project's
                 # .agents/skills (would pollute the workspace/repo).
-                [npx, "-y", "skills", "add", "-g", ref],
+                # -y after `add` is the skills CLI's non-interactive
+                # flag — omit it and a headless install hangs on a
+                # confirmation prompt (the new-Mac CE failure).
+                [npx, "-y", "skills", "add", "-g", "-y", ref],
                 capture_output=True, text=True, timeout=180,
             )
             if r.returncode == 0:

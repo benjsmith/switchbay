@@ -3,16 +3,17 @@
 A "skill" is a directory containing a `SKILL.md` with a small
 frontmatter + a markdown body. Anthropic's Claude Skills format —
 we follow it byte-for-byte so user-global skills under
-`~/.claude/skills/` and CE's own `/Users/.../curiosity-engine/SKILL.md`
-work without translation.
+`~/.agents/skills/` (the host-neutral `npx skills add -g` target)
+and the older Claude-only `~/.claude/skills/` both work.
 
 Discovery roots (scanned in priority order; later wins on name
 collision):
 
-  1. `~/.claude/skills/<name>/SKILL.md`        — user-global
-  2. `<workspace>/.workbench/skills/<name>/SKILL.md` — workspace
-  3. `<workspace>/.workbench/packs/<pack>/skills/<name>/SKILL.md` — pack
-  4. `~/.config/switchbay/packs/<pack>/skills/<name>/SKILL.md` — user-global pack
+  1. `~/.agents/skills/<name>/SKILL.md`        — user-global (any CLI)
+  2. `~/.claude/skills/` (and sibling CLI dirs) — host-specific aliases
+  3. `<workspace>/.workbench/skills/<name>/SKILL.md` — workspace
+  4. `<workspace>/.workbench/packs/<pack>/skills/<name>/SKILL.md` — pack
+  5. `~/.config/switchbay/packs/<pack>/skills/<name>/SKILL.md` — user-global pack
 
 Plus the curiosity-engine repo itself as a single-skill bundle
 (its top-level SKILL.md describes the whole tool surface; we
@@ -59,7 +60,31 @@ class Skill:
 
 
 def _user_skills_root() -> Path:
-    return Path.home() / ".claude" / "skills"
+    """Where NEW user-global skills are written.
+
+    Host-neutral: `npx skills add -g` installs here. Claude Code may
+    also symlink the same tree into `~/.claude/skills`, but a machine
+    with only Copilot / Grok / Codex has no Claude dir at all.
+    """
+    return Path.home() / ".agents" / "skills"
+
+
+def _global_skill_roots() -> list[Path]:
+    """Every directory that may hold user-global skills.
+
+    Agents-first so a no-Claude-Code install still sees CE / merge.
+    Sibling CLI dirs are scanned next (often symlinks to the same
+    files). Dedup is by resolved SKILL.md path in list_skills.
+    """
+    home = Path.home()
+    return [
+        home / ".agents" / "skills",
+        home / ".claude" / "skills",
+        home / ".codex" / "skills",
+        home / ".grok" / "skills",
+        home / ".cursor" / "skills",
+        home / ".gemini" / "skills",
+    ]
 
 
 def _workspace_skills_root(workspace: Path) -> Path:
@@ -209,9 +234,19 @@ def list_skills(workspace: Path) -> list[Skill]:
     if sk is not None:
         by_name[sk.name] = sk
 
-    # 2. user-global ~/.claude/skills/<name>/SKILL.md
-    for sk in _scan_root(_user_skills_root(), source="user"):
-        by_name[sk.name] = sk
+    # 2. user-global skills. ~/.agents/skills is the skills-CLI
+    #    target; ~/.claude/skills is Claude-only and may be absent.
+    seen_paths: set[str] = set()
+    for root in _global_skill_roots():
+        for sk in _scan_root(root, source="user"):
+            try:
+                rp = str(Path(sk.path).resolve())
+            except OSError:
+                rp = sk.path
+            if rp in seen_paths:
+                continue
+            seen_paths.add(rp)
+            by_name[sk.name] = sk
 
     # 3. workspace .workbench/skills/<name>/SKILL.md
     for sk in _scan_root(_workspace_skills_root(workspace), source="workspace"):
@@ -291,11 +326,11 @@ WRITABLE_SOURCES = ("workspace", "user")
 _SCOPES = ("workspace", "user")
 
 # First-party bundled skills are read-only upstream (charter: never
-# modify the curiosity-engine repo). They are *symlinked* into
-# `~/.claude/skills/` at install, so discovery reports them with
-# source="user" even though they are NOT user-authored. Editing one
-# would clobber the upstream skill. Belt-and-suspenders: a name
-# denylist PLUS a symlink/real-path check (`_is_writable_dir`).
+# modify the curiosity-engine repo). `npx skills add -g` drops them
+# in `~/.agents/skills/` and *may* symlink into `~/.claude/skills`.
+# Discovery reports them with source="user" even though they are NOT
+# user-authored. Editing one would clobber the upstream skill.
+# Belt-and-suspenders: a name denylist PLUS a symlink check.
 _PROTECTED_NAMES = frozenset({"curiosity-engine", "curiosity-merge"})
 
 
@@ -321,7 +356,7 @@ def _is_writable_dir(workspace: Path, skill_dir: Path) -> bool:
     real_parent = _real(skill_dir).parent
     writable_roots = {
         str(_real(_workspace_skills_root(workspace))),
-        str(_real(_user_skills_root())),
+        *(str(_real(r)) for r in _global_skill_roots()),
     }
     return str(real_parent) in writable_roots
 
@@ -403,11 +438,13 @@ def _named_sources(workspace: Path, name: str) -> list[str]:
             _add(ce_md, "ce")
     except Exception:  # noqa: BLE001
         pass
-    for root, src in ((_user_skills_root(), "user"),
-                      (_workspace_skills_root(workspace), "workspace")):
+    for root in _global_skill_roots():
         md = root / slug / SKILL_FILE
         if md.exists():
-            _add(md, src)
+            _add(md, "user")
+    md = _workspace_skills_root(workspace) / slug / SKILL_FILE
+    if md.exists():
+        _add(md, "workspace")
     for pack_name, skills_dir in _pack_skill_dirs(workspace):
         md = skills_dir / slug / SKILL_FILE
         if md.exists():
@@ -622,7 +659,7 @@ def delete_skill(workspace: Path, name: str) -> bool:
 
 def promote_skill(workspace: Path, name: str) -> Skill:
     """Move a workspace-private skill up to the user-global scope
-    (`~/.claude/skills/`), so it's available in every workspace. The
+    (`~/.agents/skills/`), so it's available in every workspace. The
     deliberate 'ready to reuse everywhere' step below publishing."""
     import shutil
 

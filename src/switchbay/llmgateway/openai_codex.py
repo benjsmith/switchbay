@@ -71,12 +71,32 @@ PROVIDER = {
 }
 
 
-def has_key() -> bool:
-    """For subscription providers, "has_key" is "is the CLI installed
-    and on PATH?". The actual auth state lives inside the CLI's own
-    config; we treat its presence as readiness and let chat dispatch
-    surface auth errors if needed."""
+def is_installed() -> bool:
     return shutil.which(BINARY) is not None
+
+
+def _signed_in() -> bool:
+    """Codex CLI auth: ~/.codex/auth.json (`tokens` or API key)."""
+    p = Path.home() / ".codex" / "auth.json"
+    if not p.is_file():
+        return bool(os.environ.get("OPENAI_API_KEY"))
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    tokens = data.get("tokens")
+    if tokens:
+        return True
+    if data.get("OPENAI_API_KEY") or data.get("access_token"):
+        return True
+    return bool(os.environ.get("OPENAI_API_KEY"))
+
+
+def has_key() -> bool:
+    """Available = CLI on PATH *and* signed in."""
+    return is_installed() and _signed_in()
 
 
 def _verify_workspace(workspace: str | None) -> Path:
@@ -259,6 +279,8 @@ async def _stream_codex(
             "PYTHONPATH",
         }
     }
+    from .. import cebridge
+    env = cebridge.inject_skill_env(env)
 
     log.info(
         "spawning codex in cwd=%s sandbox=workspace-write mode=%s",

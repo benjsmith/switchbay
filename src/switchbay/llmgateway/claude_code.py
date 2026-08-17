@@ -125,9 +125,30 @@ PROVIDER = {
 }
 
 
-def has_key() -> bool:
-    """For subscription providers, "has key" means "binary is on PATH"."""
+def is_installed() -> bool:
     return shutil.which(PROVIDER["binary"]) is not None
+
+
+def _signed_in() -> bool:
+    """Claude Code OAuth lives in ~/.claude.json (`oauthAccount`)."""
+    p = Path.home() / ".claude.json"
+    if not p.is_file():
+        return bool(os.environ.get("ANTHROPIC_API_KEY"))
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    oa = data.get("oauthAccount")
+    if isinstance(oa, dict) and (oa.get("emailAddress") or oa.get("accountUuid")):
+        return True
+    return bool(os.environ.get("ANTHROPIC_API_KEY"))
+
+
+def has_key() -> bool:
+    """Available = CLI on PATH *and* signed in (not just installed)."""
+    return is_installed() and _signed_in()
 
 
 def _content_to_text(content: object) -> str:
@@ -265,6 +286,8 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     # it unset and their cards render in the "other approvals" strip.
     if req.origin_thread:
         env["CSWY_THREAD_ID"] = req.origin_thread
+    from .. import cebridge
+    env = cebridge.inject_skill_env(env)
 
     log.info("spawning claude in cwd=%s settings=%s", workspace, settings_file)
     try:

@@ -66,14 +66,24 @@ def supported() -> bool:
     return local_models.mlx_installed()
 
 
+def is_installed() -> bool:
+    return supported()
+
+
 def has_key() -> bool:
-    """Configured = an MLX model is the active local config AND the
-    runtime is present. Unlike a hosted provider there's no credential;
-    readiness is "the server can actually start"."""
+    """Available when mlx-lm is present and at least one MLX model
+    exists on disk (registry or HF cache) — not only when MLX is the
+    *active* localllm backend. The rail picker used to hide installed
+    weights because has_key required backend==mlx."""
     if not supported():
         return False
     cfg = localllm.load_config()
-    return bool(cfg and cfg.get("backend") == "mlx")
+    if cfg and cfg.get("backend") == "mlx":
+        return True
+    for meta in local_models.list_installed():
+        if meta.get("backend") == "mlx":
+            return True
+    return False
 
 
 def reasoning_options(model: str | None = None) -> list[dict]:

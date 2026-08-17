@@ -36,6 +36,7 @@ import {
 } from "./lib/pendingUiCommands";
 import { notifyHtmlDeckOpen } from "./widgets/htmldeck/htmlDeckOpen";
 import { notifyReportDocOpen } from "./widgets/library/reportDocOpen";
+import { notifyReportOpen } from "./widgets/report/reportOpen";
 
 const EMPTY_MODE: Mode = { name: "—", tabs: [] };
 const EMPTY_WORKSPACES: Workspaces = { paths: [], active: null };
@@ -1263,9 +1264,7 @@ export default function App() {
         // just added to mode.tabs by the preceding hello, but React state
         // may not have settled this tick, so retry the focus briefly
         // until switch-by-kind finds it.
-        window.dispatchEvent(new CustomEvent("sy:open-report", {
-          detail: { report_id: msg.report_id, title: msg.title },
-        }));
+        notifyReportOpen(String(msg.report_id || ""), String(msg.title || "Report"));
         const focus = (tries: number) => {
           if (switchToKindRef.current?.("report")) return;
           if (tries > 0) window.setTimeout(() => focus(tries - 1), 60);

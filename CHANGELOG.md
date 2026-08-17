@@ -3,6 +3,38 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## Unreleased
+
+### Fixed
+
+- **Atlas first paint** — opens as individual nodes with
+  log-compressed rim scaling, not clustered type bubbles. Dragging the
+  boundary streams the corpus (streaks + nodes/s) instead of panning
+  the middle graph.
+- **Global skills without Claude Code** — discovery and new user
+  skills use `~/.agents/skills` (the `npx skills add -g` target).
+  `~/.claude/skills` is still scanned when present. CLI spawns set
+  `CURIOSITY_ENGINE_SCRIPTS_DIR` so Copilot / Grok / Codex / Muse
+  find CE without a Claude skill tree.
+
+- **CE install on Python 3.14** — workspace `.venv` is pinned to 3.13
+  (kuzu has no newer wheel). `install.sh` / daemon setup install the
+  global curiosity-engine skill non-interactively (`skills add -g -y`).
+- **CE tools on HTTP providers** — every CE script is a Switch Bay
+  tool (`ce_run` + first-class wrappers). Copilot no longer has to
+  fake the skill from a sandbox without it.
+- **Rail model picker** — hide unsigned / unavailable providers
+  (Claude Code CLI present but not logged in is hidden). Copilot /
+  MLX / llama.cpp / Ollama lists match Settings (live, not a 24h
+  stale suggestion set).
+- **Wiki browser after authoring** — new pages are injected into the
+  viewer bundle, `[[wikilinks]]` are wired deterministically, and
+  kuzu is rebuilt so the wiki list and graph update without `/curate`.
+- **Plot → figure** — caption, origin, and related pages ride along
+  as frontmatter + `[[wikilinks]]`.
+- **Proposal review** — View stashes the report so the Reports tab
+  is not empty; Accept refreshes the wiki browser and graph.
+
 ## 2026-08-17 — v0.9.9 — local MLX, plot legends, sheet SQL
 
 **Migration:** none. **Breaking:** none.

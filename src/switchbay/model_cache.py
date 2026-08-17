@@ -29,6 +29,15 @@ from . import llmgateway
 log = logging.getLogger("switchbay.model_cache")
 
 DEFAULT_TTL_SECONDS = 24 * 60 * 60  # 24h
+# Local model lists change when the user pulls/deletes weights.
+# A daily cache made the rail picker show stale llama.cpp / Ollama /
+# MLX suggestions while Settings (live /api/local-models) was right.
+LOCAL_TTL_SECONDS = 30
+LOCAL_PROVIDER_IDS = frozenset({"mlx", "llamacpp", "ollama"})
+
+
+def _ttl_for(pid: str) -> float:
+    return LOCAL_TTL_SECONDS if pid in LOCAL_PROVIDER_IDS else DEFAULT_TTL_SECONDS
 
 # pid → (fetched_at, models). Empty list when the provider opts out
 # (no list_models). None until first successful fetch.
@@ -61,6 +70,10 @@ async def _fetch(pid: str) -> list[str]:
         log.warning("list_models(%s) failed: %s — falling back", pid, e)
         return _static_fallback(pid)
     if not isinstance(models, list) or not models:
+        # Empty live list is truthful for local backends (nothing
+        # installed). Cloud providers fall back to suggestions.
+        if pid in LOCAL_PROVIDER_IDS:
+            return []
         return _static_fallback(pid)
     return [str(m) for m in models]
 
@@ -73,7 +86,7 @@ def get_cached(pid: str) -> tuple[list[str], bool]:
     if entry is None:
         return _static_fallback(pid), False
     fetched_at, models = entry
-    fresh = time.time() - fetched_at < DEFAULT_TTL_SECONDS
+    fresh = time.time() - fetched_at < _ttl_for(pid)
     return list(models), fresh
 
 

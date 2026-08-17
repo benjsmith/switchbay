@@ -14,6 +14,7 @@ type ProviderInfo = {
   key_placeholder?: string;
   key_help_url?: string;
   has_key: boolean;
+  installed?: boolean;
   capabilities: { chat: boolean; streaming: boolean; tools: boolean };
   binary?: string;
   auth_help?: string;
@@ -244,7 +245,9 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
                     </span>
                   ) : (
                     <span className="sy-settings-badge">
-                      {isKeyless ? "not installed" : "no key"}
+                      {isKeyless
+                        ? (p.installed ? "not signed in" : "not installed")
+                        : "no key"}
                     </span>
                   )}
                 </div>

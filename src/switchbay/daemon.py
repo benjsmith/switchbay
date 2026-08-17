@@ -43,7 +43,7 @@ from . import (
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
     ui_focus,
-    streams, tabstore, terminals, tools, verbs, watchfolders, worksheets_store, workspaces,
+    streams, tabstore, terminals, tools, verbs, watchfolders, wiki_sync, worksheets_store, workspaces,
 )
 from .agents import rail_default
 
@@ -481,6 +481,19 @@ async def handle_graph_data(request: web.Request) -> web.Response:
             if not qpath:
                 request.app["graph_data"] = cached  # legacy alias
             asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
+    elif isinstance(cached, dict):
+        # In-memory cache can miss pages written since the last
+        # viewer build (file browser walks the FS; wiki browser
+        # reads nodes). Fold them in cheaply so the BROWSER list
+        # updates without waiting for curate/rescan.
+        added = await asyncio.to_thread(
+            wiki_sync.inject_on_disk_pages, workspace, cached,
+        )
+        if added:
+            cache[ws_key] = cached
+            if not qpath:
+                request.app["graph_data"] = cached
+            asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
     if cached is None:
         # First time we've ever seen this workspace, no on-disk
         # build either — synchronous build is unavoidable.
@@ -682,6 +695,11 @@ async def _refresh_graph_cache(app: web.Application, ws_key: str) -> None:
     `files_changed` so any connected client re-fetches."""
     from pathlib import Path as _Path
     workspace = _Path(ws_key)
+    try:
+        await cebridge.ensure_venv(workspace)
+        await cebridge.graph_rebuild(workspace)
+    except Exception:  # noqa: BLE001
+        log.exception("background kuzu rebuild failed for %s", ws_key)
     fresh = await cebridge.build(workspace)
     if fresh is None:
         return
@@ -2229,8 +2247,9 @@ async def handle_plot_save_as_figure(request: web.Request) -> web.Response:
         assets_dir.mkdir(parents=True, exist_ok=True)
         asset_path.write_bytes(png_bytes)
         if figure_path.exists():
-            # Don't clobber body — just bump the `updated:` frontmatter
-            # line so curation tooling sees the change.
+            # Don't clobber a hand-edited body — bump `updated:` and
+            # fill in missing caption/provenance if the stub is still
+            # the auto-promoted placeholder.
             try:
                 text = figure_path.read_text(encoding="utf-8")
                 if text.startswith("---\n"):
@@ -2255,29 +2274,18 @@ async def handle_plot_save_as_figure(request: web.Request) -> web.Response:
             except OSError:
                 pass
             return True
-        body_md = (
-            f"---\n"
-            f"type: figure\n"
-            f"title: \"[fig] {name}\"\n"
-            f"asset: {asset_name}\n"
-            f"source: plot:{plot_id}\n"
-            f"created: {today}\n"
-            f"updated: {today}\n"
-            f"---\n\n"
-            f"# [fig] {name}\n\n"
-            f"![]({asset_name})\n\n"
-            f"Auto-promoted from a plot in `.workbench/plots/{plot_id}.json` "
-            f"on {today}.\n"
+        body_md = plots.figure_page_markdown(
+            plot, asset_name=asset_name, today=today,
         )
         atomicio.write_text_atomic(figure_path, body_md)
         return False
 
     existed = await asyncio.to_thread(_write_figure)
-    # Tell the rest of the app the wiki shape changed so the file
-    # browser + graph sidebar refresh + the curation-history cache
-    # invalidates naturally on next read.
+    # Wire [[wikilinks]] from caption/provenance, rebuild kuzu + viewer
+    # so the wiki browser and graph pick the figure up without curate.
+    fig_rel = f"wiki/figures/{slug}.md"
     try:
-        asyncio.create_task(_rebuild_graph_async(request.app))
+        asyncio.create_task(_after_wiki_write(request.app, workspace, fig_rel))
     except Exception:  # noqa: BLE001
         log.exception("graph rebuild scheduling failed (plot save-as-figure)")
     return web.json_response({
@@ -2426,7 +2434,9 @@ async def handle_analysis_from_doc(request: web.Request) -> web.Response:
     # rebuild so the sidebar + graph pick it up without forcing the
     # user to /rescan. Best-effort — failures log but don't block.
     try:
-        asyncio.create_task(_rebuild_graph_async(request.app))
+        asyncio.create_task(_after_wiki_write(
+            request.app, workspace, str(analysis.get("path") or ""),
+        ))
     except Exception:  # noqa: BLE001
         log.exception("graph rebuild scheduling failed (deck creation)")
     return web.json_response({"analysis": analysis})
@@ -5356,12 +5366,19 @@ async def _oneshot_json(
 
 async def handle_llm_providers(request: web.Request) -> web.Response:
     providers = llmgateway.list_providers()
-    # Annotate each provider with the user's chosen model (None = use the
-    # provider's static default), plus the live model list from the
-    # cache (or static fallback when the provider doesn't expose one).
-    # If the cache is stale we kick a background refresh so the next
-    # fetch is fresh — current request returns whatever's cached for
-    # snappy UI.
+    # Available providers must show a live model list (Settings and
+    # the rail picker share this payload). Await a refresh when the
+    # cache is stale so the first open after a new-Mac install isn't
+    # a 24h-stale suggestion list. Unavailable providers stay cheap.
+    stale = [
+        p["id"] for p in providers
+        if p.get("has_key") and not model_cache.get_cached(p["id"])[1]
+    ]
+    if stale:
+        await asyncio.gather(
+            *(model_cache.refresh(pid) for pid in stale),
+            return_exceptions=True,
+        )
     for p in providers:
         pid = p["id"]
         p["chosen_model"] = llm_config.get_model(pid)
@@ -7470,9 +7487,10 @@ def _ce_action_prompt(name: str, args: str, *, local: bool = False) -> str | Non
     can act on. Returns None when the slash isn't a CE action.
 
     The prompts are deliberately terse — the CE skill itself is
-    long-form in `<workspace>/.claude/skills/curiosity-engine/`
-    (or the upstream repo's SKILL.md) and the agent reads it
-    via load_skill before running. We just say what to do; the
+    long-form in the global curiosity-engine skill
+    (`~/.agents/skills/curiosity-engine/`, or `~/.claude/skills/`
+    if Claude Code is installed) and the agent reads it via
+    load_skill before running. We just say what to do; the
     skill's body says how.
 
     `local=True` targets the local model, which CAN'T load that skill
@@ -9658,7 +9676,7 @@ async def _vet_proposal(app: web.Application, workspace: Path, pid: str,
                 await _broadcast(app, protocol.notice(
                     f"✓ Filed “{title}” — reviewer approved. ({done['path']})",
                     kind="chat"))
-                await _broadcast(app, protocol.files_changed())
+                await _after_wiki_write(app, workspace, str(done.get("path") or ""))
                 return
         if v == "reject":
             await asyncio.to_thread(proposals.dismiss, workspace, pid)
@@ -10377,7 +10395,9 @@ async def handle_proposal_decide(request: web.Request) -> web.Response:
     if e is None:
         return web.json_response({"error": "unknown or already-resolved proposal"}, status=404)
     if decision == "accept" and e.get("status") == "accepted":
-        await _broadcast(request.app, protocol.files_changed())
+        await _after_wiki_write(
+            request.app, workspace, str(e.get("path") or ""),
+        )
     await _broadcast(request.app, protocol.custom({
         "type": "page_proposal_resolved", "id": pid, "decision": decision}))
     return web.json_response({"ok": True, "status": e.get("status"), "path": e.get("path")})
@@ -12632,16 +12652,38 @@ async def _reconcile_populate_deck(
         log.exception("files_changed broadcast failed (populate reconcile)")
 
 
+async def _after_wiki_write(
+    app: web.Application, workspace: Path, rel: str | None = None,
+) -> None:
+    """Wire [[wikilinks]], refresh CE index, rebuild kuzu + viewer."""
+    try:
+        await asyncio.to_thread(wiki_sync.after_wiki_write, workspace, rel)
+    except Exception:  # noqa: BLE001
+        log.exception("wiki_sync.after_wiki_write failed for %s", rel)
+    await _rebuild_graph_async(app)
+
+
 async def _rebuild_graph_async(app: web.Application) -> None:
-    """Re-run cebridge.build for the active workspace and broadcast a
-    fresh `files_changed` once it's done so the Browser pages section
-    re-fetches data.json. Best-effort — failures log + swallow."""
+    """Rebuild kuzu, then the viewer bundle, then broadcast.
+
+    `viewer.sh build` only *reads* `.curator/graph.kuzu`. Without a
+    ``graph.py rebuild`` first, new pages land as isolated nodes (or
+    stay missing from the wiki browser until a curate wave).
+    """
     try:
         ws = app.get("workspace")
         if not ws:
             return
+        try:
+            await cebridge.ensure_venv(ws)
+            await cebridge.graph_rebuild(ws)
+        except Exception:  # noqa: BLE001
+            log.exception("kuzu graph rebuild failed (continuing with viewer)")
         data = await cebridge.build(ws)
+        if data is None:
+            data = await asyncio.to_thread(cebridge.read_cached, ws)
         if data is not None:
+            await asyncio.to_thread(wiki_sync.inject_on_disk_pages, ws, data)
             cache: dict[str, dict] = app.setdefault("graph_data_per_ws", {})
             cache[str(ws.resolve())] = data
             app["graph_data"] = data
@@ -13845,6 +13887,17 @@ def build_app(workspace: Path) -> web.Application:
             model_cache.warm_all(list(llmgateway.PROVIDERS.keys()))
         )
     app.on_startup.append(_warm)
+
+    async def _ensure_ce_skill(_app: web.Application) -> None:
+        # Do not block bind — npx skills add can take a while.
+        async def _go() -> None:
+            ok, msg = await asyncio.to_thread(cebridge.install_skill)
+            if not ok:
+                log.warning("curiosity-engine skill: %s", msg)
+            else:
+                log.info("curiosity-engine skill: %s", msg.split("\n", 1)[0])
+        _app["_ce_skill_task"] = asyncio.create_task(_go())
+    app.on_startup.append(_ensure_ce_skill)
 
     # The launch workspace is set directly (no _activate), so relocate
     # its rail-history DB to match the current setting on startup too.

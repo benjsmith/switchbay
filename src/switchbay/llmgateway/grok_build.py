@@ -233,9 +233,25 @@ def grok_binary() -> str | None:
     return None
 
 
-def has_key() -> bool:
-    """Subscription provider: "has key" = the binary is installed."""
+def is_installed() -> bool:
     return grok_binary() is not None
+
+
+def _signed_in() -> bool:
+    """Grok Build stores OAuth in ~/.grok/auth.json (keyed by issuer)."""
+    p = Path.home() / ".grok" / "auth.json"
+    if not p.is_file():
+        return False
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return isinstance(data, dict) and any(bool(v) for v in data.values())
+
+
+def has_key() -> bool:
+    """Available = CLI present *and* signed in."""
+    return is_installed() and _signed_in()
 
 
 _DEFAULT_MODEL_RE = re.compile(r"^Default model:\s+(\S+)", re.I)
@@ -685,6 +701,8 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     env = {k: v for k, v in os.environ.items()
            if k not in {"XAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
                         "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}}
+    from .. import cebridge
+    env = cebridge.inject_skill_env(env)
 
     log.info("spawning grok in cwd=%s", workspace)
     try:

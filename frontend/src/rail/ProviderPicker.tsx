@@ -13,6 +13,7 @@ type ProviderInfo = {
   models_fresh?: boolean;
   model_suggestions?: string[];
   has_key: boolean;
+  installed?: boolean;
   chosen_model?: string | null;
   /** Execution surface — set for curate-override eligibility. Only
    *  providers with BOTH can orchestrate a curation run. */
@@ -183,14 +184,30 @@ export default function ProviderPicker() {
       </button>
       {open && (
         <div className="sy-rail-pickmenu" role="menu">
-          {info.providers.map((p) => {
-            // Live list when the provider has one; static suggestions
-            // otherwise; finally the default_model alone.
-            let baseModels = (p.models && p.models.length > 0)
-              ? p.models
-              : (p.model_suggestions && p.model_suggestions.length > 0
-                  ? p.model_suggestions
-                  : [p.default_model]);
+          {info.providers.filter((p) => p.has_key).length === 0 && (
+            <div className="sy-rail-pickprov">
+              <div className="sy-rail-pickprovhd">
+                <span className="sy-rail-pickproname">No providers ready</span>
+              </div>
+              <div className="sy-rail-pickroutesub">
+                Sign in or add a key in Settings. Unsigned CLIs stay hidden.
+              </div>
+            </div>
+          )}
+          {info.providers.filter((p) => p.has_key).map((p) => {
+            // Same union as Settings (`modelsForProvider`): live list +
+            // suggestions + default/chosen. Preferring only `models`
+            // made Copilot's rail list diverge from Settings whenever
+            // the cache was a partial live fetch.
+            const union = [
+              ...(p.models ?? []),
+              ...(p.model_suggestions ?? []),
+              p.default_model,
+              p.chosen_model ?? "",
+            ].map((m) => String(m || "").trim()).filter(Boolean);
+            const seen = new Set<string>();
+            let baseModels = union.filter((m) => (seen.has(m) ? false : (seen.add(m), true)));
+            if (baseModels.length === 0) baseModels = [p.default_model];
             // BYOK providers expose dozens of models via their API — most
             // irrelevant. Show only the 6 newest/strongest (ranked by
             // version, small tiers demoted); the "paste any model id" box
@@ -208,9 +225,6 @@ export default function ProviderPicker() {
               <div key={p.id} className="sy-rail-pickprov">
                 <div className="sy-rail-pickprovhd">
                   <span className="sy-rail-pickproname">{p.label}</span>
-                  {!p.has_key && (
-                    <span className="sy-rail-picknokey">no key</span>
-                  )}
                 </div>
                 {models.map((m) => {
                   const sel = isActive && m === chosen;

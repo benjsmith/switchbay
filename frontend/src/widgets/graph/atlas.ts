@@ -25,6 +25,7 @@ type AtlasHandle = {
   engine: {
     focus(id: string, origin?: string): void;
     getState(): { focusId?: string };
+    setViewScale?(scale: number): void;
   };
   setLabels(mode: "auto" | "on" | "off", types?: readonly string[] | null): void;
   setPhysics(physics: Record<string, number>): void;
@@ -42,7 +43,7 @@ type AtlasGlobal = {
     container: HTMLElement,
     opts: {
       data: GraphData;
-      config?: { layout?: string; budget?: { maxEdges?: number } };
+      config?: { layout?: string; corpusSize?: number; budget?: { maxEdges?: number } };
       onOpenItem?: (id: string) => void;
       onEvent?: (event: AtlasEvent) => void;
     },
@@ -300,7 +301,12 @@ export function mountAtlas(
   const handle = api.mount(container, {
     data: themed,
     config: {
+      // Hybrid: Classic field in the core, log-compressed individual
+      // nodes on the rim. corpusSize makes the first frame that view
+      // (not type-cluster bubbles). Boundary drag is lens traversal
+      // (nodes/s), not a pan of the middle graph.
       layout: "hybrid",
+      corpusSize: pageCount(data),
       budget: { maxEdges: Math.max(900, (data.edges || []).length) },
     },
     onOpenItem: openAtlasPage,

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { getLastReportOpen } from "./reportOpen";
 
 /**
  * Report tab — renders a capable model's `create_report` HTML in a
@@ -9,11 +10,18 @@ import { useEffect, useState } from "react";
  * via the `sy:open-report` window event.
  */
 export default function ReportTab() {
-  const [report, setReport] = useState<{ id: string; title: string } | null>(null);
+  const [report, setReport] = useState<{ id: string; title: string } | null>(
+    () => {
+      const pending = getLastReportOpen();
+      return pending ? { id: pending.id, title: pending.title } : null;
+    },
+  );
   const [html, setHtml] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    const pending = getLastReportOpen();
+    if (pending) setReport({ id: pending.id, title: pending.title });
     const onOpen = (ev: Event) => {
       const d = (ev as CustomEvent).detail as { report_id?: string; title?: string };
       if (d?.report_id) setReport({ id: d.report_id, title: d.title || "Report" });

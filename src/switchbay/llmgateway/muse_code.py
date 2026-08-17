@@ -100,10 +100,27 @@ def muse_binary() -> str | None:
     return None
 
 
-def has_key() -> bool:
-    """Subscription provider: binary present. Auth lives inside the CLI
-    (browser session or META_API_KEY)."""
+def is_installed() -> bool:
     return muse_binary() is not None
+
+
+def _signed_in() -> bool:
+    if os.environ.get("META_API_KEY"):
+        return True
+    home = Path.home()
+    for cand in (
+        home / ".muse" / "auth.json",
+        home / ".config" / "muse" / "auth.json",
+        home / ".muse" / "credentials.json",
+    ):
+        if cand.is_file() and cand.stat().st_size > 8:
+            return True
+    return False
+
+
+def has_key() -> bool:
+    """Available = CLI present *and* some auth marker exists."""
+    return is_installed() and _signed_in()
 
 
 def _content_to_text(content: object) -> str:
@@ -332,6 +349,8 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         k: v for k, v in os.environ.items()
         if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
     }
+    from .. import cebridge
+    env = cebridge.inject_skill_env(env)
     # If the user stored a Meta Model API key in Settings, let the CLI
     # use it when META_API_KEY isn't already in the environment.
     if not env.get("META_API_KEY") and not env.get("MODEL_API_KEY"):

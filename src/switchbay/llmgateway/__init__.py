@@ -56,6 +56,8 @@ def list_providers() -> list[dict]:
     for p in PROVIDERS.values():
         info = dict(p.PROVIDER)
         info["has_key"] = p.has_key()
+        installed_fn = getattr(p, "is_installed", None)
+        info["installed"] = bool(installed_fn()) if callable(installed_fn) else info["has_key"]
         out.append(info)
     return out
 

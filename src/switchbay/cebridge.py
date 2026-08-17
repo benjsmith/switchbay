@@ -17,6 +17,8 @@ import json
 import logging
 import os
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +28,12 @@ log = logging.getLogger("switchbay.cebridge")
 # resort; curiosity-engine now ships as a bundled global skill. Home-
 # relative so it doesn't embed a developer username in a shipped build.
 DEFAULT_CE_ROOT = Path.home() / "Documents" / "bin" / "curiosity-engine"
+
+# kuzu (CE graph) has no wheels past 3.13. System Python 3.14 makes
+# `uv venv` pick 3.14 and `uv pip install kuzu` fails. Pin the
+# workspace CE env (and UV_PYTHON) to this unless the operator
+# overrides SWITCHBAY_CE_PYTHON.
+CE_PYTHON_PIN = "3.13"
 
 
 def _ce_root_candidates() -> list[Path]:
@@ -66,24 +74,219 @@ def has_wiki(workspace: Path) -> bool:
     return (workspace / "wiki").is_dir()
 
 
+def _ce_python_pin() -> str:
+    return (os.environ.get("SWITCHBAY_CE_PYTHON") or CE_PYTHON_PIN).strip() or CE_PYTHON_PIN
+
+
+def _workspace_venv_python(workspace: Path) -> Path | None:
+    ws = Path(workspace)
+    for rel in (
+        Path(".venv") / "bin" / "python",
+        Path(".venv") / "bin" / "python3",
+        Path(".venv") / "Scripts" / "python.exe",
+    ):
+        p = ws / rel
+        if p.is_file():
+            return p
+    return None
+
+
+def workspace_venv_version(workspace: Path) -> tuple[int, int] | None:
+    """(major, minor) of the workspace CE venv, or None if missing."""
+    py = _workspace_venv_python(workspace)
+    if py is None:
+        return None
+    try:
+        out = subprocess.run(
+            [str(py), "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}')"],
+            capture_output=True, text=True, timeout=8,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    text = (out.stdout or "").strip()
+    if "." not in text:
+        return None
+    try:
+        maj, minr = text.split(".", 1)
+        return int(maj), int(minr)
+    except ValueError:
+        return None
+
+
+def venv_python_too_new(ver: tuple[int, int] | None) -> bool:
+    pin = _ce_python_pin()
+    try:
+        pmaj, pmin = (int(x) for x in pin.split(".", 1)[:2])
+    except ValueError:
+        pmaj, pmin = 3, 13
+    if ver is None:
+        return False
+    return ver > (pmaj, pmin)
+
+
+def _setup_env() -> dict[str, str]:
+    env = _scrubbed_env()
+    env["UV_PYTHON"] = _ce_python_pin()
+    env["CURIOSITY_ENGINE_NONINTERACTIVE"] = "1"
+    return env
+
+
+def scripts_dir() -> Path:
+    return ce_root() / "scripts"
+
+
+def inject_skill_env(env: dict[str, str]) -> dict[str, str]:
+    """Point non-Claude CLIs at the global CE skill.
+
+    Copilot / Codex / Grok / Muse sandboxes do not search
+    `~/.claude/skills`. CE's SKILL.md documents
+    `CURIOSITY_ENGINE_SCRIPTS_DIR` as the portable substitute.
+    """
+    out = dict(env)
+    scripts = scripts_dir()
+    if scripts.is_dir():
+        out["CURIOSITY_ENGINE_SCRIPTS_DIR"] = str(scripts)
+        out.setdefault("CURIOSITY_ENGINE_SKILL_DIR", str(ce_root()))
+    return out
+
+
+def skill_is_installed() -> bool:
+    """True when a CE install with scripts/ (not SKILL.md-only) is found."""
+    return (ce_root() / "scripts" / "setup.sh").is_file()
+
+
+def install_skill(*, timeout: float = 180.0) -> tuple[bool, str]:
+    """Install the global curiosity-engine skill via `npx skills add -g -y`.
+
+    Best-effort. The skills CLI must get `-y` or a headless install
+    hangs on a confirmation prompt (the new-Mac failure mode).
+    """
+    if skill_is_installed():
+        return True, f"curiosity-engine skill present at {ce_root()}"
+    npx = shutil.which("npx")
+    if npx is None:
+        return False, (
+            "npx not on PATH — install Node.js, then: "
+            "`npx skills add -g -y benjsmith/curiosity-engine`"
+        )
+    try:
+        proc = subprocess.run(
+            [npx, "-y", "skills", "add", "-g", "-y", "benjsmith/curiosity-engine"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False, "npx skills add timed out while installing curiosity-engine"
+    except OSError as e:
+        return False, f"failed to run npx skills add: {e}"
+    if skill_is_installed():
+        return True, (
+            f"installed curiosity-engine skill at {ce_root()}\n"
+            f"{(proc.stdout or proc.stderr or '')[-400:]}"
+        )
+    tail = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()[-800:]
+    return False, (
+        f"curiosity-engine skill still missing after npx skills add "
+        f"(rc={proc.returncode}). {tail}\n"
+        "Install manually: `npx skills add -g -y benjsmith/curiosity-engine`"
+    )
+
+
+def _write_workspace_python_pin(workspace: Path) -> None:
+    """Drop `.python-version` so a later bare `uv venv` still picks 3.13."""
+    pin = _ce_python_pin()
+    path = Path(workspace) / ".python-version"
+    try:
+        if path.is_file() and path.read_text(encoding="utf-8").strip() == pin:
+            return
+        path.write_text(pin + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+async def _ensure_uv_python(pin: str) -> None:
+    """Best-effort `uv python install <pin>` so `uv venv --python` works."""
+    if shutil.which("uv") is None:
+        return
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "uv", "python", "install", pin,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        await asyncio.wait_for(proc.communicate(), 180)
+    except (OSError, asyncio.TimeoutError):
+        log.warning("uv python install %s failed or timed out", pin)
+
+
+async def ensure_pinned_venv(workspace: Path) -> tuple[bool, str]:
+    """Make sure workspace `.venv` exists on Python ≤ the kuzu pin.
+
+    CE's setup.sh runs bare `uv venv`, which follows the system
+    interpreter. On a 3.14 Mac that yields a venv kuzu cannot
+    install into. We create/rebuild the venv with `uv venv --python
+    3.13` first so setup.sh only has to `uv pip install kuzu`.
+    """
+    ws = Path(workspace)
+    _write_workspace_python_pin(ws)
+    ver = workspace_venv_version(ws)
+    if ver is not None and not venv_python_too_new(ver):
+        return True, f"venv already on Python {ver[0]}.{ver[1]}"
+    pin = _ce_python_pin()
+    venv_dir = ws / ".venv"
+    if venv_python_too_new(ver) and venv_dir.is_dir():
+        log.info("removing workspace .venv on Python %s (kuzu needs ≤%s)",
+                 f"{ver[0]}.{ver[1]}" if ver else "?", pin)
+        try:
+            shutil.rmtree(venv_dir)
+        except OSError as e:
+            return False, f"could not remove incompatible .venv: {e}"
+    if shutil.which("uv") is None:
+        return False, "uv not on PATH — install uv, then retry CE setup"
+    await _ensure_uv_python(pin)
+    env = _setup_env()
+    proc = await asyncio.create_subprocess_exec(
+        "uv", "venv", "--python", pin,
+        cwd=str(ws),
+        env=env,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await proc.communicate()
+    text = (out or b"").decode(errors="replace")
+    if proc.returncode != 0:
+        return False, (
+            f"uv venv --python {pin} failed: {text[-800:]}\n"
+            f"Install Python {pin} (`uv python install {pin}`) and retry."
+        )
+    return True, f"created .venv on Python {pin}"
+
+
 async def setup(workspace: Path) -> tuple[bool, str]:
     """Run CE's `scripts/setup.sh` against the workspace. Idempotent —
     re-running on an already-initialised workspace just refreshes the
     template skeleton.
 
     Returns (ok, captured_output). Same env-scrubbing rule as `build()`.
+    Pins the workspace venv to Python 3.13 so kuzu can install.
     """
     if not workspace.is_dir():
         return False, f"workspace path is not a directory: {workspace}"
+    installed, skill_msg = await asyncio.to_thread(install_skill)
+    if not installed:
+        return False, skill_msg
     script = ce_root() / "scripts" / "setup.sh"
     if not script.is_file():
-        return False, f"CE setup.sh not found at {script}"
+        return False, (
+            f"CE setup.sh not found at {script}. "
+            "Install the curiosity-engine skill: "
+            "`npx skills add -g -y benjsmith/curiosity-engine`"
+        )
 
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
-    }
+    pinned, pin_msg = await ensure_pinned_venv(workspace)
+    if not pinned:
+        return False, pin_msg
+
+    env = _setup_env()
     proc = await asyncio.create_subprocess_exec(
         "bash",
         str(script),
@@ -94,9 +297,10 @@ async def setup(workspace: Path) -> tuple[bool, str]:
     )
     out, _ = await proc.communicate()
     text = out.decode(errors="replace")
+    notes = skill_msg + "\n" + pin_msg + "\n" + text
     if proc.returncode != 0:
-        return False, text[-2000:]
-    return True, text[-2000:]
+        return False, notes[-2000:]
+    return True, notes[-2000:]
 
 
 def read_cached(workspace: Path) -> dict[str, Any] | None:
@@ -129,6 +333,8 @@ def read_cached(workspace: Path) -> dict[str, Any] | None:
     # `nodes` (curator exclusion). Inject them so the BROWSER
     # ANALYSES group lists them alongside real analyses.
     inject_deck_nodes(workspace, data)
+    from . import wiki_sync
+    wiki_sync.inject_on_disk_pages(workspace, data)
     _override_palette(data)
     return data
 
@@ -156,13 +362,14 @@ def has_workspace_venv(workspace: Path) -> bool:
 async def ensure_venv(workspace: Path) -> tuple[bool, str]:
     """Create the workspace CE env via `setup.sh` if missing.
 
-    Idempotent when the venv already exists (returns ok immediately).
-    Returns (ok, message). Fail-soft — callers decide whether to
-    continue a nodes-only build or abort.
+    Also rebuilds a venv that is too new for kuzu (Python 3.14+).
+    Fail-soft — callers decide whether to continue a nodes-only
+    build or abort.
     """
-    if has_workspace_venv(workspace):
+    ver = workspace_venv_version(workspace)
+    if has_workspace_venv(workspace) and not venv_python_too_new(ver):
         return True, "venv already present"
-    log.info("workspace %s has no .venv — running CE setup.sh", workspace)
+    log.info("workspace %s needs a pinned CE venv — running setup.sh", workspace)
     return await setup(workspace)
 
 
@@ -174,11 +381,13 @@ def graph_db_path(workspace: Path) -> Path:
 def _scrubbed_env() -> dict[str, str]:
     """Env for CE subprocesses: drop switchbay venv pointers so CE's
     own .venv / uv project (kuzu, embeddings) resolve correctly."""
-    return {
+    env = {
         k: v
         for k, v in os.environ.items()
         if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
     }
+    env.setdefault("UV_PYTHON", _ce_python_pin())
+    return env
 
 
 def _ce_python() -> list[str]:
@@ -199,12 +408,26 @@ def _ce_python() -> list[str]:
     return ["uv", "run", "--directory", str(root), "python3"]
 
 
+def _script_python(cwd: Path) -> list[str]:
+    """Interpreter for a CE script run *against* a workspace.
+
+    kuzu lives in the workspace `.venv` (setup.sh). `uv run python3`
+    from the workspace cwd discovers that venv. The skill-root venv
+    (if any) does not have kuzu.
+    """
+    py = _workspace_venv_python(cwd)
+    if py is not None:
+        return [str(py)]
+    return ["uv", "run", "python3"]
+
+
 def run_script(
     script: str,
     args: list[str] | None = None,
     *,
     cwd: Path,
     timeout: float = 120.0,
+    require_json: bool = True,
 ) -> dict[str, Any]:
     """Synchronously run a CE script and parse JSON from stdout.
 
@@ -214,7 +437,9 @@ def run_script(
     captured as ``note`` when results otherwise succeed; ``{"error":…}``
     bodies are unwrapped to a flat ``error`` string.
 
-    Returns a dict always — never raises.
+    ``require_json=False`` keeps stdout as text (rebuild / sweep
+    verbs that print a human summary). Returns a dict always —
+    never raises.
     """
     import subprocess
 
@@ -229,7 +454,7 @@ def run_script(
     if not Path(cwd).is_dir():
         return {"error": f"workspace is not a directory: {cwd}"}
 
-    cmd = [*_ce_python(), str(script_path), *(args or [])]
+    cmd = [*_script_python(Path(cwd)), str(script_path), *(args or [])]
     try:
         proc = subprocess.run(
             cmd,
@@ -285,6 +510,11 @@ def run_script(
                 ),
                 "returncode": proc.returncode,
             }
+        if not require_json:
+            out_ok: dict[str, Any] = {"ok": True, "stdout": stdout}
+            if note:
+                out_ok["note"] = note
+            return out_ok
         return {
             "error": f"{script}: expected JSON on stdout, got: {(stdout or '')[:400]!r}",
             "note": note,
@@ -320,9 +550,10 @@ async def graph_rebuild(workspace: Path) -> tuple[bool, str]:
     if not script.is_file():
         return False, f"CE graph.py not found at {script}"
     env = _scrubbed_env()
+    cmd = [*_script_python(Path(workspace)), str(script), "rebuild", "wiki"]
     try:
         proc = await asyncio.create_subprocess_exec(
-            "uv", "run", "python3", str(script), "rebuild", "wiki",
+            *cmd,
             cwd=str(workspace),
             env=env,
             stdout=asyncio.subprocess.PIPE,
@@ -365,14 +596,9 @@ async def build(
 
     # Scrub uv/venv env vars so `uv run` inside viewer.sh resolves to the
     # *workspace's* project (which has kuzu installed), not switchbay's
-    # venv. Without this, wiki_render.py logs
-    #   "graph query failed (No module named 'kuzu'); rendering nodes-only view"
-    # and the resulting data.json has 0 edges.
-    env = {
-        k: v
-        for k, v in os.environ.items()
-        if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
-    }
+    # venv. Pin UV_PYTHON so a bare `uv venv` inside setup never
+    # follows system 3.14.
+    env = _scrubbed_env()
 
     proc = await asyncio.create_subprocess_exec(
         "bash",
@@ -410,6 +636,8 @@ async def build(
     # up under UNCLASSIFIED despite the .md declaring type:table.
     resync_types_from_disk(workspace, data)
     inject_deck_nodes(workspace, data)
+    from . import wiki_sync
+    wiki_sync.inject_on_disk_pages(workspace, data)
     _override_palette(data)
     return data
 

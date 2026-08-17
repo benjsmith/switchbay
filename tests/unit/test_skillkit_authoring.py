@@ -3,7 +3,7 @@ that must NEVER let a bundled first-party skill be overwritten.
 
 Every test isolates the user-global + CE roots to a tmp dir. This is
 load-bearing: `find_writable`/`update_skill` consult the REAL
-`~/.claude/skills` via `get_skill` → `list_skills`, so an un-isolated
+global skills dirs via `get_skill` → `list_skills`, so an un-isolated
 test that named a real skill would edit it on disk. (That is exactly
 how an early smoke test clobbered the real curiosity-engine SKILL.md.)
 """
@@ -28,6 +28,7 @@ def iso(tmp_path, monkeypatch):
     ce_root = tmp_path / "no-ce"
     ce_root.mkdir()
     monkeypatch.setattr(skillkit, "_user_skills_root", lambda: user_root)
+    monkeypatch.setattr(skillkit, "_global_skill_roots", lambda: [user_root])
     monkeypatch.setattr(skillkit.cebridge, "ce_root", lambda: ce_root)
     return ws, user_root
 
@@ -93,6 +94,32 @@ def test_symlinked_bundled_skill_is_not_writable(iso, tmp_path):
         skillkit.delete_skill(ws, "curiosity-engine")
     # the upstream file is untouched
     assert "BIG BODY" in (bundled / "SKILL.md").read_text()
+
+
+def test_discovers_agents_skills_without_claude_dir(tmp_path, monkeypatch):
+    """A no-Claude-Code machine has ~/.agents/skills only. Discovery
+    must still find CE there — not require ~/.claude/skills."""
+    ws = tmp_path / "ws"
+    (ws / ".workbench").mkdir(parents=True)
+    agents = tmp_path / "home" / ".agents" / "skills" / "curiosity-engine"
+    agents.mkdir(parents=True)
+    (agents / "SKILL.md").write_text(
+        "---\nname: curiosity-engine\ndescription: global CE\n---\nbody\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(skillkit, "_user_skills_root",
+                        lambda: tmp_path / "home" / ".agents" / "skills")
+    monkeypatch.setattr(skillkit, "_global_skill_roots", lambda: [
+        tmp_path / "home" / ".agents" / "skills",
+        tmp_path / "home" / ".claude" / "skills",
+    ])
+    monkeypatch.setattr(skillkit.cebridge, "ce_root",
+                        lambda: tmp_path / "missing-ce")
+    names = {s.name: s for s in skillkit.list_skills(ws)}
+    assert "curiosity-engine" in names
+    assert names["curiosity-engine"].path.endswith(
+        "curiosity-engine/SKILL.md")
+    assert not (tmp_path / "home" / ".claude" / "skills").exists()
 
 
 def test_cannot_create_over_protected_name(iso):

@@ -66,13 +66,21 @@ PROVIDER = {
 }
 
 
+def is_installed() -> bool:
+    import shutil
+    return shutil.which("ollama") is not None
+
+
 def has_key() -> bool:
-    """For Ollama, "has_key" means "is the daemon reachable?". We don't
-    actually ping every call — the Settings UI shows availability via
-    validate_key. has_key just returns True so the UI shows "available"
-    and lets the user attempt a chat (which will surface a clear
-    network error if Ollama isn't running)."""
-    return True
+    """Available only when the Ollama daemon answers. Always-True used
+    to list Ollama in the picker on machines that never installed it."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{_host()}/api/tags", method="GET")
+        with urllib.request.urlopen(req, timeout=0.4) as resp:
+            return int(getattr(resp, "status", 200) or 200) < 400
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _http_error(status: int, text: str) -> base.ProviderError:

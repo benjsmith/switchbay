@@ -58,9 +58,21 @@ PROVIDER = {
 }
 
 
+def is_installed() -> bool:
+    from .. import local_models
+    cfg = localllm.load_config()
+    if cfg and str(cfg.get("backend") or "llamacpp") in ("", "llamacpp"):
+        return True
+    return any(
+        str(m.get("backend") or "llamacpp") in ("", "llamacpp")
+        for m in local_models.list_installed()
+    )
+
+
 def has_key() -> bool:
-    """Configured = the installer completed on this machine."""
-    return localllm.load_config() is not None
+    """Available when a GGUF is installed — not when an MLX-only
+    localllm config happens to exist."""
+    return is_installed()
 
 
 def _http_error(status: int, text: str) -> base.ProviderError:

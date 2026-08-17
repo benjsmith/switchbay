@@ -6,10 +6,13 @@ per-workspace Switch Bay MCP (`propose_*`, wiki tools, `create_report`),
 and (for CLIs that support it) a rail approval card on novel tool calls.
 
 HTTP providers never get a shell. They only see Switch Bay's tool
-registry. Curation that must *run* CE scripts needs a CLI with
-`shell` + `file_write` (see `llmgateway.can_execute`).
+registry — which now includes the full curiosity-engine script
+surface (`ce_run`, `ce_sweep`, `ce_graph_rebuild`, `ce_ingest`, …)
+so Copilot / Anthropic / xAI / local models can curate without a
+CE-aware sandbox. A CLI with `shell` + `file_write` can still run
+the skill's own bash allowlist (see `llmgateway.can_execute`).
 
-Last updated **2026-08-13**. Remaining Muse Code work waits on a live
+Last updated **2026-08-17**. Remaining Muse Code work waits on a live
 `muse` install.
 
 ## Status key
