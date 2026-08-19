@@ -325,13 +325,40 @@ def add_report_tab(workspace: Path) -> dict[str, Any] | None:
         return None
     for t in tabs:
         if isinstance(t, dict) and t.get("kind") == REPORT_TAB_KIND:
+            if t.get("title") != "Reviews":
+                t["title"] = "Reviews"
+                atomicio.write_json_atomic(path, data)
             return t
-    tab = {"id": REPORT_TAB_ID, "title": "Report", "kind": REPORT_TAB_KIND,
+    tab = {"id": REPORT_TAB_ID, "title": "Reviews", "kind": REPORT_TAB_KIND,
            "source": "user", "payload": {}}
     tabs.append(tab)
     path.parent.mkdir(parents=True, exist_ok=True)
     atomicio.write_json_atomic(path, data)
     return tab
+
+
+def remove_report_tab(workspace: Path) -> bool:
+    """Drop the Reviews tab from mode.json (the tab's own ✕ close).
+    Pending proposals stay on disk; a later draft re-adds the tab."""
+    path = workspace / ".workbench" / "mode.json"
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    tabs = data.get("tabs") if isinstance(data, dict) else None
+    if not isinstance(tabs, list):
+        return False
+    kept = [
+        t for t in tabs
+        if not (isinstance(t, dict) and t.get("kind") == REPORT_TAB_KIND)
+    ]
+    if len(kept) == len(tabs):
+        return False
+    data["tabs"] = kept
+    atomicio.write_json_atomic(path, data)
+    return True
 
 
 def add_html_deck_tab(workspace: Path) -> dict[str, Any] | None:

@@ -34,6 +34,7 @@ import asyncio
 import uuid
 from . import (
     a2a, action_buttons, agent_rules, analyses, app_settings, atomicio, capture, cebridge,
+    ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect, deck_export,
     demo_workspace,
     duckdb_starters, file_state, fileops, llm_config, llmgateway,
@@ -42,7 +43,7 @@ from . import (
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
-    ui_focus,
+    ui_focus, updater,
     streams, tabstore, terminals, tools, verbs, watchfolders, wiki_sync, worksheets_store, workspaces,
 )
 from .agents import rail_default
@@ -435,6 +436,28 @@ async def handle_curation_history(request: web.Request) -> web.Response:
     return web.json_response(data)
 
 
+_GRAPH_WS_CAP = 3  # in-memory viewer bundles; extra workspaces evicted LRU
+
+
+def _put_graph_cache(app: web.Application, ws_key: str, data: dict) -> None:
+    """Store a slimmed graph bundle and drop old workspaces.
+
+    Full page HTML does not belong here (use /api/page). Unbounded
+    per-workspace copies of data.json were a plausible path to
+    multi-GB RSS on a long-lived daemon.
+    """
+    wiki_sync.slim_graph_payload(data)
+    cache: dict[str, dict] = app.setdefault("graph_data_per_ws", {})
+    cache.pop(ws_key, None)
+    cache[ws_key] = data
+    overflow = len(cache) - _GRAPH_WS_CAP
+    if overflow > 0:
+        for k in list(cache)[:overflow]:
+            cache.pop(k, None)
+    if str(app.get("workspace") and Path(app["workspace"]).resolve()) == ws_key:
+        app["graph_data"] = data
+
+
 async def handle_graph_data(request: web.Request) -> web.Response:
     """Return the workspace's data.json — stale-while-revalidate.
 
@@ -477,9 +500,7 @@ async def handle_graph_data(request: web.Request) -> web.Response:
         # it goes off-thread. This is the hot workspace-switch path.
         cached = await asyncio.to_thread(cebridge.read_cached, workspace)
         if cached is not None:
-            cache[ws_key] = cached
-            if not qpath:
-                request.app["graph_data"] = cached  # legacy alias
+            _put_graph_cache(request.app, ws_key, cached)
             asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
     elif isinstance(cached, dict):
         # In-memory cache can miss pages written since the last
@@ -490,9 +511,7 @@ async def handle_graph_data(request: web.Request) -> web.Response:
             wiki_sync.inject_on_disk_pages, workspace, cached,
         )
         if added:
-            cache[ws_key] = cached
-            if not qpath:
-                request.app["graph_data"] = cached
+            _put_graph_cache(request.app, ws_key, cached)
             asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
     if cached is None:
         # First time we've ever seen this workspace, no on-disk
@@ -503,9 +522,8 @@ async def handle_graph_data(request: web.Request) -> web.Response:
                 {"error": "no wiki/ in workspace, or viewer.sh build failed"},
                 status=404,
             )
-        cache[ws_key] = cached
-        if not qpath:
-            request.app["graph_data"] = cached
+        _put_graph_cache(request.app, ws_key, cached)
+    cached = request.app.get("graph_data_per_ws", {}).get(ws_key) or cached
     return web.json_response(cached)
 
 
@@ -516,9 +534,7 @@ async def handle_graph_rebuild(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "viewer.sh build failed"}, status=500
         )
-    cache: dict[str, dict] = request.app.setdefault("graph_data_per_ws", {})
-    cache[str(workspace.resolve())] = data
-    request.app["graph_data"] = data
+    _put_graph_cache(request.app, str(workspace.resolve()), data)
     _log_event(
         request.app, "curation",
         f"manual graph rebuild (pages={len(data.get('pages') or {})})",
@@ -703,10 +719,7 @@ async def _refresh_graph_cache(app: web.Application, ws_key: str) -> None:
     fresh = await cebridge.build(workspace)
     if fresh is None:
         return
-    cache: dict[str, dict] = app.setdefault("graph_data_per_ws", {})
-    cache[ws_key] = fresh
-    if str(app.get("workspace") and _Path(app["workspace"]).resolve()) == ws_key:
-        app["graph_data"] = fresh
+    _put_graph_cache(app, ws_key, fresh)
     await _broadcast(app, protocol.files_changed())
 
 
@@ -736,6 +749,16 @@ async def _activate(app: web.Application, new_path: Path) -> None:
     app["thread_id"] = None
     app["thread_kind"] = None
     workspaces.register(new_path, set_active=True)
+    try:
+        from . import workspace_plan
+        workspace_plan.ensure(new_path)
+    except Exception:  # noqa: BLE001
+        log.exception("workspace plan seed failed")
+    try:
+        from . import skillkit
+        skillkit.mirror_into_workspace(new_path)
+    except Exception:  # noqa: BLE001
+        log.exception("skill mirror seed failed")
     # First event of the new workspace's first thread. Lazily
     # creates the thread row in the new workspace's DB.
     _log_event(
@@ -2186,6 +2209,7 @@ async def handle_plots_from_table(request: web.Request) -> web.Response:
                 request.app, ws=None, text=prompt,
                 input_excerpt=f"plots from {origin}",
                 run_id=run_id,
+                command="plot",
             )
         except Exception:  # noqa: BLE001
             log.exception("plots-from-table run %s crashed", run_id)
@@ -2648,6 +2672,7 @@ async def handle_analysis_populate(request: web.Request) -> web.Response:
                 request.app, ws=None, text=prompt,
                 input_excerpt=f"populate {analysis['path']}",
                 run_id=run_id,
+                command="deck",
             )
         except Exception:  # noqa: BLE001
             log.exception("populate-analysis run %s crashed", run_id)
@@ -3265,12 +3290,11 @@ def _resolve_ce_override(
     prov = llmgateway.get(provider)
     if not prov.has_key():
         return None, None, f"{prov.LABEL} has no key/binary configured"
-    if not llmgateway.can_execute(provider):
+    if not llmgateway.can_curate(provider):
         return None, None, (
-            f"{prov.LABEL} runs over an API with no shell, so it can only "
-            "PROPOSE edits — curation needs to run CE's scripts. Use a CLI "
-            "agent instead: Claude Code (the Claude that curates), Codex, or "
-            "Grok Build.")
+            f"{prov.LABEL} cannot run CE scripts (no tools, no shell). "
+            "Pick Copilot / a local model (ce_run tools) or a CLI agent."
+        )
     return provider, (model or _effective_model(provider)), None
 
 
@@ -3334,6 +3358,9 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
 
     action = str(body.get("action") or "curate").strip().lower()
     args = str(body.get("args") or "").strip()
+    if action in ("curate", "curator") and args.lower() in ("stop", "cancel", "halt"):
+        n = _cancel_ce_runs(request.app, "curate")
+        return web.json_response({"ok": True, "cancelled": n, "action": "stop"})
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
 
@@ -3345,13 +3372,28 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
         pid, cp_model = _ce_action_provider(workspace)
 
     is_local = bool(pid) and _provider_is_local(pid)
-    ce_prompt = _ce_action_prompt(action, args, local=is_local)
+    _lrung = None
+    if is_local:
+        _lcfg = await asyncio.to_thread(localllm.load_config)
+        _lrung = rail_default.resolve_local_rung(
+            localllm.ram_gb(),
+            model_hint=rail_default.model_hint_from_cfg(_lcfg),
+        )
+    ce_prompt = _ce_action_prompt(
+        action, args, local=is_local, local_rung=_lrung,
+    )
     if ce_prompt is None:
         return web.json_response(
             {"error": f"not a CE action: {action}"}, status=400)
+    extra_system = ""
     if action in ("curate", "curator"):
-        prof = await asyncio.to_thread(_curator_profile, workspace)
-        ce_prompt = _with_curator_profile(ce_prompt, prof)
+        cap = _CURATOR_PROFILE_CAP_TOKENS
+        if _lrung is not None:
+            cap = max(400, _lrung.extra_system_chars // 4)
+        elif is_local:
+            cap = 400
+        prof = await asyncio.to_thread(_curator_profile, workspace, cap)
+        extra_system = _curator_profile_system(prof)
 
     label = pid or _resolve_default_provider()
     try:
@@ -3365,6 +3407,8 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
         request.app, None, ce_prompt,
         provider_override=pid, model_override=cp_model,
         input_excerpt=excerpt,
+        extra_system=extra_system or None,
+        command=action if is_local else None,
     ))
     task.add_done_callback(_make_dispatch_error_surface(request.app, None))
     return web.json_response({
@@ -4380,6 +4424,7 @@ async def handle_ingest_from_upload(request: web.Request) -> web.Response:
                 request.app, ws=None, text=prompt,
                 input_excerpt=f"ingest {safe_name}",
                 run_id=run_id,
+                command="ingest",
             )
         except Exception:  # noqa: BLE001
             log.exception("ingest run %s crashed", run_id)
@@ -4468,6 +4513,7 @@ async def handle_ingest_from_path(request: web.Request) -> web.Response:
                 request.app, ws=None, text=prompt,
                 input_excerpt=f"ingest {candidate.name}",
                 run_id=run_id,
+                command="ingest",
             )
         except Exception:  # noqa: BLE001
             log.exception("ingest run %s crashed", run_id)
@@ -4977,6 +5023,37 @@ def _remember_run_thread(app: web.Application, run_id: str, thread_id: str) -> N
             m.pop(k, None)
 
 
+def _remember_run_palette(
+    app: web.Application,
+    run_id: str,
+    command: str | None,
+    template: str | None,
+) -> None:
+    """Keep the command desk on a finished run so a steer stays on it."""
+    if not command:
+        return
+    m: dict[str, dict[str, str | None]] = app.setdefault("run_palette", {})
+    m[run_id] = {"command": command, "template": template}
+    overflow = len(m) - 256
+    if overflow > 0:
+        for k in list(m)[:overflow]:
+            m.pop(k, None)
+
+
+def _run_palette(
+    app: web.Application, run_id: str,
+) -> tuple[str | None, str | None]:
+    rec = (app.get("run_palette") or {}).get(run_id)
+    if not isinstance(rec, dict):
+        return None, None
+    cmd = rec.get("command")
+    tmpl = rec.get("template")
+    return (
+        str(cmd) if cmd else None,
+        str(tmpl) if tmpl else None,
+    )
+
+
 async def handle_runs_active(request: web.Request) -> web.Response:
     """Snapshot of currently-running rail dispatches. The Agent
     Dashboard polls this every couple of seconds — the registry is in
@@ -5040,12 +5117,15 @@ async def handle_run_steer(request: web.Request) -> web.Response:
             {"error": "run has no thread on record"}, status=404,
         )
     new_run = f"run-{uuid.uuid4().hex[:8]}"
+    steer_cmd, steer_tmpl = _run_palette(app, run_id)
     task = asyncio.create_task(_dispatch_chat(
         app, None, text,
         input_excerpt=f"[steer] {text[:100]}",
         run_id=new_run,
         workspace_override=ws_path,
         thread_id_override=thread_id,
+        command=steer_cmd,
+        command_template=steer_tmpl,
     ))
     task.add_done_callback(_make_dispatch_error_surface(app, new_run))
     return web.json_response({
@@ -5080,6 +5160,26 @@ async def handle_run_cancel(request: web.Request) -> web.Response:
         if s is not None:
             terminals.kill(s)
     return web.json_response({"ok": True})
+
+
+def _cancel_ce_runs(app: web.Application, action: str = "curate") -> int:
+    """Cancel running CE-action background jobs (``/curate stop``)."""
+    runs: dict[str, dict[str, Any]] = app.get("runs") or {}
+    needle = action.lower()
+    cancelled = 0
+    for rec in list(runs.values()):
+        excerpt = str(rec.get("input_excerpt") or "").lower()
+        if needle not in excerpt:
+            continue
+        task = rec.get("task")
+        if task is None or task.done():
+            continue
+        try:
+            task.cancel()
+            cancelled += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return cancelled
 
 
 async def handle_runs_stop_all(request: web.Request) -> web.Response:
@@ -5131,6 +5231,66 @@ async def handle_agent_rules_delete(request: web.Request) -> web.Response:
         return web.json_response({"error": "id required"}, status=400)
     removed = agent_rules.remove(workspace, rid)
     return web.json_response({"ok": removed})
+
+
+async def _local_rung_for_request() -> Any:
+    cfg = await asyncio.to_thread(localllm.load_config)
+    return rail_default.resolve_local_rung(
+        localllm.ram_gb(),
+        model_hint=rail_default.model_hint_from_cfg(cfg),
+    )
+
+
+async def handle_command_palettes_list(request: web.Request) -> web.Response:
+    """Shipped + user-command palettes for the Agent Dashboard editor."""
+    workspace: Path = request.app["workspace"]
+    rung = await _local_rung_for_request()
+    payload = await asyncio.to_thread(
+        command_palettes.describe_all, workspace, rung,
+    )
+    return web.json_response(payload)
+
+
+async def handle_command_palettes_put(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    name = str(body.get("command") or body.get("name") or "").strip()
+    raw = body.get("tools")
+    if not name:
+        return web.json_response({"error": "command required"}, status=400)
+    if not isinstance(raw, list):
+        return web.json_response({"error": "tools must be a list"}, status=400)
+    try:
+        saved = await asyncio.to_thread(
+            command_palettes.set_override, workspace, name, raw,
+        )
+    except ValueError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    rung = await _local_rung_for_request()
+    payload = await asyncio.to_thread(
+        command_palettes.describe_all, workspace, rung,
+    )
+    payload["saved"] = saved
+    return web.json_response(payload)
+
+
+async def handle_command_palettes_delete(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    name = (request.query.get("command") or request.query.get("name") or "").strip()
+    if not name:
+        return web.json_response({"error": "command required"}, status=400)
+    removed = await asyncio.to_thread(
+        command_palettes.clear_override, workspace, name,
+    )
+    rung = await _local_rung_for_request()
+    payload = await asyncio.to_thread(
+        command_palettes.describe_all, workspace, rung,
+    )
+    payload["ok"] = removed
+    return web.json_response(payload)
 
 
 async def handle_sketches_list(request: web.Request) -> web.Response:
@@ -5609,6 +5769,13 @@ def _detect_shellish(text: str) -> bool:
     tok = t.split()[0]
     # Lowercase unix-ish token only — "Git log" reads as prose.
     if not _re.fullmatch(r"[a-z0-9_.~/-]+", tok):
+        return False
+    # On-PATH words that are also ordinary chat replies. `yes` is the
+    # disaster case: it prints y forever in a new shell thread.
+    if tok in {
+        "yes", "no", "y", "n", "ok", "okay", "true", "false",
+        "please", "thanks", "thank",
+    }:
         return False
     builtins = {"cd", "export", "source", "pwd", "env", "alias", "unset", "set"}
     if tok not in builtins and _shutil.which(tok) is None:
@@ -6899,6 +7066,7 @@ async def _dispatch_watch_ingest(app: web.Application, src_abs: str) -> None:
                 app, ws=None, text=prompt,
                 input_excerpt=f"watch-ingest {safe_name}",
                 run_id=run_id,
+                command="ingest",
             )
         except Exception:  # noqa: BLE001
             log.exception("watch-folder ingest run %s crashed", run_id)
@@ -7399,11 +7567,13 @@ def _curator_profile(
     return text[:cap_tokens * _CHARS_PER_TOKEN_EST]
 
 
-def _with_curator_profile(prompt: str, profile: str) -> str:
+def _curator_profile_system(profile: str) -> str:
+    """System-side steering from ``.curator/profile.md``. Kept off the
+    user transcript so Jump on a failed run does not dump the profile
+    into the rail composer."""
     if not profile:
-        return prompt
+        return ""
     return (
-        f"{prompt}\n\n"
         "Workspace curator profile (user-authored steering — honor it "
         "when deciding what counts as an entity or knowledge in this "
         f"workspace):\n{profile}"
@@ -7444,9 +7614,9 @@ def _ce_action_provider(workspace: Path) -> tuple[str | None, str | None]:
         return None, None
     if not p.has_key():
         return None, None
-    if not llmgateway.can_execute(rung_pid):
+    if not llmgateway.can_curate(rung_pid):
         log.info(
-            "CE action: hard rung %s cannot execute (propose-only); "
+            "CE action: hard rung %s cannot curate; "
             "falling back to the picker/default provider", rung_pid)
         return None, None
     return rung_pid, rung_model
@@ -7470,6 +7640,51 @@ _LOCAL_CURATE_HOWTO = (
     "should change and STOP; never hunt for a delete/rm tool."
 )
 
+_CURATE_TOOLS = (
+    "You already have CE tools — do NOT ask what tools you have. Use "
+    "them now: ce_epoch_summary → ce_planner → ce_sweep / ce_run / "
+    "ce_graph_rebuild / ce_ingest / propose_wiki_page. Prefer those "
+    "over loading a skill. If you need extra skill prose (a mode the "
+    "tools do not name), load_skill('curiosity-engine') then "
+    "section='Heading' one chapter at a time — not the full body. "
+    "Write pages as you go (propose_wiki_page). Do NOT wait for "
+    "the user to accept each page; the Reviews tab is a non-blocking "
+    "backlog. Keep going until a sweep finishes or the user stops."
+)
+
+# Local 4B-class worker: judgment jobs that are not deterministic
+# scripts, without asking it to invent wiki prose or run a planner.
+_LOCAL_CURATE_WORKER = (
+    "Worker curate only — no full sweep, no ce_run, no encyclopedias.\n"
+    "Priority, in order:\n"
+    "1. Orient: call ce_epoch_summary once.\n"
+    "2. Search the wiki before writing. If a page already covers an "
+    "item, skip it (or propose a tiny sourced edit).\n"
+    "3. Classify leftovers (notes/new.md, todos/unfiled.md): keep / "
+    "already-covered / skip. Report the classification.\n"
+    "4. For a genuine gap, propose_wiki_page with scaffold=true: "
+    "frontmatter, title, 3–8 bullets of claims-to-verify, [[wikilinks]] "
+    "to existing pages, ## Open questions. No dense prose, no invented "
+    "numbers or mechanisms.\n"
+    "5. If the work needs a planner, a multi-page synthesis, or facts "
+    "you do not have: emit that as a scaffold of what a reviewer should "
+    "write, then STOP.\n"
+    "One tool call per step. Stop after a handful of useful scaffolds "
+    "or when the inbox is classified."
+)
+
+_LOCAL_CURATE_LARGE = (
+    "Local curator on a machine that can hold a 27B-class model.\n"
+    "Mechanical sweep (scan / fix-index / stubs / notes) already ran "
+    "— do not repeat those verbs. You may call ce_sweep for remaining "
+    "read-only queues (concept-candidates, evidence-candidates, "
+    "orphan-sources), ce_lint, ce_planner (pick-mode), retrieve, and "
+    "propose_wiki_page.\n"
+    "One target per turn. Sourced pages when you have citations; "
+    "otherwise scaffold=true and STOP. Never delete wiki pages. "
+    "No parallel worker waves."
+)
+
 
 def _provider_is_local(pid: str) -> bool:
     """True if `pid` is a local (on-device) provider — llama.cpp/Ollama.
@@ -7481,7 +7696,10 @@ def _provider_is_local(pid: str) -> bool:
         return False
 
 
-def _ce_action_prompt(name: str, args: str, *, local: bool = False) -> str | None:
+def _ce_action_prompt(
+    name: str, args: str, *, local: bool = False,
+    local_rung: Any = None,
+) -> str | None:
     """Translate a CE-flavoured slash command into a canned prompt
     that the rail agent (loaded with the curiosity-engine skill)
     can act on. Returns None when the slash isn't a CE action.
@@ -7505,29 +7723,25 @@ def _ce_action_prompt(name: str, args: str, *, local: bool = False) -> str | Non
                 f" Focus on `{mode}` items." if mode in _CE_CURATE_MODES
                 else (f" Focus on: {a}." if a else "")
             )
+            worker = _LOCAL_CURATE_WORKER
+            if local_rung is not None and not getattr(
+                local_rung, "force_scaffold", True,
+            ):
+                worker = _LOCAL_CURATE_LARGE
             return (
-                "Run a curiosity-engine curator sweep over this "
-                "workspace's wiki using the wiki tools directly (do not "
-                "load a skill)." + focus + " " + _LOCAL_CURATE_HOWTO
+                "Worker-curate this workspace's wiki. "
+                + worker + focus + " "
+                + _LOCAL_CURATE_HOWTO
             )
-        if not mode:
-            return (
-                "Run the curiosity-engine curator over this workspace. "
-                "Load the curiosity-engine skill first if you haven't, "
-                "then run a sweep mode appropriate for the current "
-                "wiki state. Report what you fixed."
-            )
-        if mode in _CE_CURATE_MODES:
-            return (
-                f"Run the curiosity-engine curator in `{mode}` mode "
-                f"over this workspace. Load the curiosity-engine "
-                f"skill first if you haven't. Report what changed."
-            )
-        # Unknown subcommand — pass through as a free-form curator
-        # request so the agent can interpret intent.
+        focus = (
+            f" Mode: `{mode}`." if mode in _CE_CURATE_MODES
+            else (f" Focus: {a}." if a else "")
+        )
         return (
-            f"Run a curiosity-engine curator pass focused on: {a}. "
-            f"Load the curiosity-engine skill first if you haven't."
+            "Run the curiosity-engine curator over this workspace as a "
+            "background sweep. " + _CURATE_TOOLS + focus
+            + " Report a short summary when a wave finishes; do not pause "
+            "for review cards."
         )
     # `viewer` / `build-viewer` no longer return a chat prompt —
     # the dispatch in handle_ws short-circuits them into
@@ -7604,8 +7818,7 @@ async def _handle_rescan(
             kind="chat",
         ))
         return
-    cache[ws_key] = fresh
-    app["graph_data"] = fresh
+    _put_graph_cache(app, ws_key, fresh)
     await _broadcast(app, protocol.files_changed())
     await ws.send_json(protocol.notice(
         f"rescan: rebuilt — {len(fresh.get('pages') or {})} pages, "
@@ -7648,7 +7861,9 @@ async def _handle_setup_wiki(
             "then run a curator pass to build out the graph. Load the "
             "curiosity-engine skill first if you haven't."
         )
-        t = asyncio.create_task(_dispatch_chat(app, ws, prompt))
+        t = asyncio.create_task(_dispatch_chat(
+            app, ws, prompt, command="curate",
+        ))
         t.add_done_callback(_make_dispatch_error_surface(app, ws))
     else:
         await _broadcast(app, protocol.notice(
@@ -7798,6 +8013,51 @@ async def handle_restart(request: web.Request) -> web.Response:
         )
     log.info("restart requested via /api/restart")
     return web.json_response({"ok": True})
+
+
+async def handle_update_check(request: web.Request) -> web.Response:
+    """GET /api/update/check — compare running versions to GitHub latest
+    releases (Switch Bay, curiosity-engine, curiosity-merge). Read-only."""
+    try:
+        body = await asyncio.to_thread(updater.check)
+    except Exception as e:  # noqa: BLE001
+        log.exception("update check failed")
+        return web.json_response(
+            {"ok": False, "error": f"update check failed: {e}"}, status=500,
+        )
+    return web.json_response(body)
+
+
+async def handle_update(request: web.Request) -> web.Response:
+    """POST /api/update — check GitHub, apply any older components, then
+    restart the managed service so the PWA reloads. Apply still runs on
+    a dev daemon; only the restart is gated (same 409 as /api/restart)."""
+    try:
+        body = await asyncio.to_thread(updater.apply)
+    except Exception as e:  # noqa: BLE001
+        log.exception("update apply failed")
+        return web.json_response(
+            {"ok": False, "error": f"update failed: {e}", "updated": False},
+            status=500,
+        )
+    if not body.get("updated"):
+        body.setdefault("restarted", False)
+        return web.json_response(body)
+    refusal = _restart_precheck(request.app)
+    if refusal:
+        body["restarted"] = False
+        body["restart_error"] = refusal
+        return web.json_response(body)
+    try:
+        service.spawn_restart()
+    except Exception as e:  # noqa: BLE001
+        log.exception("spawn_restart after update failed")
+        body["restarted"] = False
+        body["restart_error"] = f"could not start restart: {e}"
+        return web.json_response(body, status=500)
+    body["restarted"] = True
+    log.info("restart requested via /api/update")
+    return web.json_response(body)
 
 
 async def _handle_start_slash(
@@ -8860,6 +9120,10 @@ async def _dispatch_chat(
     provider_override: str | None = None,
     model_override: str | None = None,
     max_turns: int | None = None,
+    extra_system: str | None = None,
+    tool_palette: str | None = None,
+    command: str | None = None,
+    command_template: str | None = None,
 ) -> str | None:
     """Run the rail agent against `text`. Multi-turn: streams assistant
     text + tool_use blocks back to every connected client; when the
@@ -8888,6 +9152,16 @@ async def _dispatch_chat(
     global default provider. Callers must pass an available+keyed
     provider id (the CE-action resolver checks first and falls back to
     None → default when the rung is unavailable).
+
+    `extra_system` is appended to the system prompt (not the user
+    turn) so Jump on a failed background run does not dump steering
+    text into the rail transcript.
+
+    `tool_palette` selects a local-model tool subset (``chat`` or
+    ``curate``) when no `command` is set. `command` (slash name or
+    internal key like ``deck``) picks a command-specific desk;
+    `command_template` is the user-command markdown used to infer
+    tools. Ignored for cloud providers.
     """
     workspace: Path = workspace_override or app["workspace"]
     # Micro-edit autorouter: short UI-focused edits use the micro-edit
@@ -9047,8 +9321,10 @@ async def _dispatch_chat(
         # thread — the dashboard shows them as background.
         "is_background": ws is None,
         "micro_edit": micro_meta,
+        "command": command,
     }
     _remember_run_workspace(app, run_id, workspace)
+    _remember_run_palette(app, run_id, command, command_template)
 
     # Provider resume sessions are keyed by the THREAD, not the
     # provider — so rail multi-turn (a new run_id each turn) resumes the
@@ -9086,17 +9362,79 @@ async def _dispatch_chat(
     # and tends to circle (e.g. ls/search to "find" a skill); other
     # providers are untouched.
     is_local_model = localllm.harness_applies_to(pid)
-    # Local models are not offered strong-only tools (e.g. create_report).
-    tools_for_provider = rail_default.tools_for_provider(local=is_local_model)
-    system_prompt = rail_default.SYSTEM_PROMPT
+    local_palette = (tool_palette or "chat") if is_local_model else None
+    local_rung = None
+    cmd_only_tools: list[str] | None = None
+    cmd_resolved = None
     if is_local_model:
-        system_prompt = f"{system_prompt}\n\n{localllm.harness_body()}"
+        _cfg = await asyncio.to_thread(localllm.load_config)
+        local_rung = rail_default.resolve_local_rung(
+            localllm.ram_gb(),
+            model_hint=rail_default.model_hint_from_cfg(_cfg),
+        )
+        cmd_key = command or (
+            tool_palette if tool_palette not in (None, "chat") else None
+        )
+        if cmd_key:
+            cmd_resolved = await asyncio.to_thread(
+                command_palettes.resolve,
+                workspace, cmd_key,
+                rung=local_rung,
+                template=command_template,
+            )
+        if cmd_resolved is not None:
+            cmd_only_tools = list(cmd_resolved.tools)
+            local_palette = f"cmd:{cmd_resolved.name}"
+        do_hygiene = (
+            cmd_resolved is not None and cmd_resolved.kind == "curate"
+        ) or (cmd_resolved is None and local_palette == "curate")
+        if do_hygiene:
+            sweep = await asyncio.to_thread(
+                ce_tools.mechanical_hygiene, workspace,
+            )
+            prelude = rail_default.format_sweep_prelude(sweep)
+            extra_system = (
+                f"{extra_system}\n\n{prelude}" if extra_system else prelude
+            )
+    if is_local_model:
+        system_prompt, tools_for_provider, messages, _pstats = (
+            rail_default.assemble_local_prompt(
+                palette=local_palette or "chat",
+                extra_system=extra_system or "",
+                harness=localllm.harness_body(),
+                messages=messages,
+                rung=local_rung,
+                only_tools=cmd_only_tools,
+            )
+        )
+        palette_names = {str(t.get("name") or "") for t in tools_for_provider}
+        log.info(
+            "local prompt rung=%s palette=%s cmd=%s tools=%s tokens~%s "
+            "(sys=%s tools=%s msgs=%s trimmed=%s scaffold=%s clipped=%s)",
+            _pstats.get("rung"), _pstats.get("palette"),
+            command or "",
+            _pstats.get("n_tools"), _pstats.get("total"),
+            _pstats.get("system"), _pstats.get("tools"),
+            _pstats.get("messages"), _pstats.get("trimmed"),
+            _pstats.get("force_scaffold"),
+            _pstats.get("clipped_tools") or [],
+        )
+    else:
+        tools_for_provider = rail_default.tools_for_provider(local=False)
+        palette_names = set(rail_default.ALLOWED_TOOLS)
+        system_prompt = rail_default.SYSTEM_PROMPT
+        if extra_system:
+            system_prompt = f"{system_prompt}\n\n{extra_system}"
     # Live tab focus (Sheet / Table / Plot / Sketch) so agents act on
     # what the user is looking at instead of hunting the wiki.
     try:
         _ui_line = await asyncio.to_thread(ui_focus.combined_prompt_lines, workspace)
-        if _ui_line:
+        if _ui_line and not is_local_model:
             system_prompt = f"{system_prompt}\n\n{_ui_line}"
+        elif _ui_line and is_local_model:
+            # Keep one line of focus; don't dump full sheet context.
+            short = _ui_line.strip().splitlines()[0][:240]
+            system_prompt = f"{system_prompt}\n\n{short}"
     except Exception:  # noqa: BLE001
         pass
     executed_calls: dict[str, int] = {}
@@ -9361,9 +9699,10 @@ async def _dispatch_chat(
                         guard = (
                             f"(loop guard) You already ran {tname} with these "
                             "exact arguments; the result is unchanged. Do NOT "
-                            "repeat tool calls. To use a skill call "
-                            "load_skill(skill_path='skills/<name>') directly; "
-                            "otherwise answer now with what you have."
+                            "repeat tool calls. Prefer a different covered "
+                            "tool, or load_skill with detail=frontmatter / a "
+                            "new section; otherwise answer now with what you "
+                            "have."
                         )
                         tool_results.append({
                             "type": "tool_result", "tool_use_id": tid,
@@ -9382,9 +9721,9 @@ async def _dispatch_chat(
                         ))
                         continue
                     executed_calls[ckey] = executed_calls.get(ckey, 0) + 1
-                # Enforce the agent's tool allowlist.
-                if tname not in rail_default.ALLOWED_TOOLS:
-                    err = f"tool '{tname}' not in this agent's allowlist"
+                # Enforce this run's tool palette (local) / allowlist.
+                if tname not in palette_names:
+                    err = f"tool '{tname}' not in this run's tool palette"
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": tid,
@@ -9406,14 +9745,26 @@ async def _dispatch_chat(
                     # and ask_thread does a blocking localhost HTTP
                     # call back into this daemon — on the loop that
                     # would deadlock).
+                    if is_local_model and tname == "load_skill":
+                        # Progressive: never dump a 26k-token skill
+                        # into a small window. Frontmatter / one section.
+                        if not tinput.get("section"):
+                            det = str(tinput.get("detail") or "frontmatter")
+                            if det == "full":
+                                tinput = {**tinput, "detail": "frontmatter"}
+                    if is_local_model and tname in (
+                        "propose_wiki_page", "propose_page_edit",
+                    ) and (local_rung is None or local_rung.force_scaffold):
+                        tinput = {**tinput, "scaffold": True}
                     output = await asyncio.to_thread(
                         tools.execute, tname, workspace, tinput,
                     )
-                    # Keep a huge tool result from blowing the small
-                    # local model's context (e.g. load_skill of the
-                    # ~26k-token CE skill → hard exceed_context error).
-                    if is_local_model:
-                        output = _cap_local_tool_output(tname, output)
+                    # Cap results for every model — a 100-turn curate
+                    # that stuffed unbounded JSON into `messages` is a
+                    # plausible path to multi-GB RSS.
+                    output = _cap_tool_output(
+                        tname, output, local=is_local_model,
+                    )
                     payload = json.dumps(output)
                     tool_results.append({
                         "type": "tool_result",
@@ -9436,6 +9787,13 @@ async def _dispatch_chat(
                     art = _artifact_for_tool(tname, tinput, output)
                     if art is not None:
                         await _broadcast(app, art)
+                    if tname in (
+                        "propose_wiki_page", "propose_page_edit",
+                        "propose_charter_edit",
+                    ) and isinstance(output, dict) and output.get("ok"):
+                        rel = str(output.get("path") or "")
+                        if rel:
+                            _schedule_after_wiki_write(app, workspace, rel)
                 except Exception as e:  # noqa: BLE001
                     log.exception("tool %s crashed", tname)
                     tool_results.append({
@@ -9576,29 +9934,44 @@ async def _dispatch_chat(
 
 
 _LOCAL_TOOL_RESULT_CAP = 6000  # chars (~1.5k tokens) fed back per tool
+_TOOL_RESULT_CAP = 24_000      # strong models; still bounds RAM across turns
 
 
-def _cap_local_tool_output(name: str, output: Any) -> Any:
-    """Bound a tool result before it re-enters the small local model's
-    context. `load_skill` of a big skill → a redirect to the wiki tools
-    (the CE skill alone is ~26k tokens vs a 32k window, a hard exceed);
-    any other oversized result → a truncated preview. No-op when small."""
+def _cap_tool_output(name: str, output: Any, *, local: bool = False) -> Any:
+    """Bound a tool result before it re-enters the agent message list.
+
+    Local models get a tighter cap. `load_skill` of a huge skill
+    becomes a frontmatter peek + section hint (progressive load).
+    """
+    cap = _LOCAL_TOOL_RESULT_CAP if local else _TOOL_RESULT_CAP
     try:
         s = output if isinstance(output, str) else json.dumps(output)
     except (TypeError, ValueError):
         return output
-    if len(s) <= _LOCAL_TOOL_RESULT_CAP:
+    if len(s) <= cap:
         return output
     if name == "load_skill":
-        return {"ok": False, "note": (
-            "This skill is too large for the local model's context — do "
-            "NOT load skills. Use the wiki tools directly instead: "
-            "search_wiki, read_wiki_page, wiki_neighbors."
-        )}
+        peek: dict[str, Any] = {}
+        if isinstance(output, dict) and isinstance(output.get("skill"), dict):
+            peek = skillkit.peek_from_payload(output["skill"])
+        return {
+            "ok": True,
+            "truncated": True,
+            "skill": peek,
+            "note": (
+                "Skill body exceeds this context window. Use covered_by "
+                "tools, or load_skill with detail='frontmatter' then "
+                "section='Heading' (progressive). Not a ban on skills."
+            ),
+        }
     return {
         "ok": True, "truncated": True,
-        "preview": s[:_LOCAL_TOOL_RESULT_CAP] + " …[truncated for local context]",
+        "preview": s[:cap] + " …[truncated for context]",
     }
+
+
+def _cap_local_tool_output(name: str, output: Any) -> Any:
+    return _cap_tool_output(name, output, local=True)
 
 
 _PROPOSAL_REVIEW_SYS = (
@@ -9654,10 +10027,9 @@ async def _review_page(app: web.Application, workspace: Path,
 
 async def _vet_proposal(app: web.Application, workspace: Path, pid: str,
                         thread_id: str | None, run_id: str | None) -> None:
-    """Auto-vet a staged page proposal with a strong reviewer, then act:
-    accept → file it + notice; reject → notice with the reason; edit or
-    no-reviewer → leave it pending (offered via /api/proposals/pending)
-    with a review card so the user makes the call. Fail-soft throughout."""
+    """Attach a reviewer card to a provisional page. Never auto-file or
+    auto-revert — Reviews is a backlog the user drains when they want.
+    Fail-soft throughout."""
     try:
         entry = await asyncio.to_thread(proposals.get, workspace, pid)
         if not entry:
@@ -9666,24 +10038,12 @@ async def _vet_proposal(app: web.Application, workspace: Path, pid: str,
         if verdict is not None:
             await asyncio.to_thread(proposals.update, workspace, pid, review=verdict)
             entry = {**entry, "review": verdict}
-        v = (verdict or {}).get("verdict")
-        conf = (verdict or {}).get("confidence") or 0
         title = entry.get("title") or entry.get("path")
         one = (verdict or {}).get("one_line") or ""
-        if v == "accept" and conf >= 0.6:
-            done = await asyncio.to_thread(proposals.accept, workspace, pid)
-            if done and done.get("status") == "accepted":
-                await _broadcast(app, protocol.notice(
-                    f"✓ Filed “{title}” — reviewer approved. ({done['path']})",
-                    kind="chat"))
-                await _after_wiki_write(app, workspace, str(done.get("path") or ""))
-                return
-        if v == "reject":
-            await asyncio.to_thread(proposals.dismiss, workspace, pid)
-            await _broadcast(app, protocol.notice(
-                f"✗ Draft “{title}” rejected by reviewer: {one}", kind="chat"))
-            return
-        # edit / borderline / no reviewer → hand it to the user.
+        # Ensure the Reviews tab exists, but do not steal focus — the
+        # user may be in the graph, notes, or another agent thread.
+        await asyncio.to_thread(tabstore.add_report_tab, workspace)
+        await _broadcast(app, _hello_payload(app))
         await _broadcast(app, protocol.custom({
             "type": "page_proposal_review", "id": pid,
             "op": entry.get("op"), "kind": entry.get("kind"),
@@ -9691,8 +10051,11 @@ async def _vet_proposal(app: web.Application, workspace: Path, pid: str,
             "body": entry.get("body"), "review": verdict,
         }))
         await _broadcast(app, protocol.notice(
-            f"↯ Draft “{title}” needs your call"
-            + (f" — {one}" if one else "") + " (review card).", kind="chat"))
+            f"↯ Draft “{title}” is in Reviews"
+            + (f" — {one}" if one else "") + ".", kind="chat"))
+        rel = str(entry.get("path") or "")
+        if entry.get("written") and rel:
+            _schedule_after_wiki_write(app, workspace, rel)
     except Exception:  # noqa: BLE001
         log.exception("vet_proposal failed for %s", pid)
 
@@ -9710,7 +10073,7 @@ async def _open_report_tab(app: web.Application, workspace: Path,
             "type": "open_report", "report_id": report_id, "title": title,
         }))
         await _broadcast(app, protocol.notice(
-            f"↗ Report ready — “{title}” opened in the Report tab.", kind="chat"))
+            f"↗ Review ready — “{title}” opened in the Reviews tab.", kind="chat"))
     except Exception:  # noqa: BLE001
         log.exception("open_report_tab failed for %s", report_id)
 
@@ -9812,6 +10175,18 @@ async def handle_intro_close(request: web.Request) -> web.Response:
     with `/intro`."""
     workspace: Path = request.app["workspace"]
     removed = await asyncio.to_thread(tabstore.remove_intro_tab, workspace)
+    if removed:
+        await _broadcast(request.app, _hello_payload(request.app))
+        await _broadcast(request.app, protocol.nav("graph", {}, "Graph"))
+    return web.json_response({"ok": True, "removed": removed})
+
+
+async def handle_reviews_close(request: web.Request) -> web.Response:
+    """Close the Reviews tab (its own ✕). Queue stays on disk; a later
+    proposal or create_report re-adds the tab. Focus Graph so the pane
+    doesn't blank."""
+    workspace: Path = request.app["workspace"]
+    removed = await asyncio.to_thread(tabstore.remove_report_tab, workspace)
     if removed:
         await _broadcast(request.app, _hello_payload(request.app))
         await _broadcast(request.app, protocol.nav("graph", {}, "Graph"))
@@ -10386,12 +10761,28 @@ async def handle_proposal_decide(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid json"}, status=400)
     pid = str(body.get("id") or "")
     decision = str(body.get("decision") or "").lower()
+    comments = str(body.get("comments") or "").strip()
+    new_body = body.get("body")
+    if isinstance(new_body, str) and new_body.strip():
+        await asyncio.to_thread(
+            proposals.update, workspace, pid, body=new_body.strip())
+    if comments or decision in ("comment", "save"):
+        e = await asyncio.to_thread(
+            proposals.apply_comments, workspace, pid, comments)
+        if e is None:
+            return web.json_response({"error": "unknown proposal"}, status=404)
+        if decision in ("comment", "save"):
+            rel = str(e.get("path") or "")
+            if e.get("written") and rel.startswith("wiki/"):
+                asyncio.create_task(
+                    _after_wiki_write(request.app, workspace, rel))
+            return web.json_response({"ok": True, "status": e.get("status")})
     if decision == "accept":
         e = await asyncio.to_thread(proposals.accept, workspace, pid)
     elif decision in ("dismiss", "reject"):
         e = await asyncio.to_thread(proposals.dismiss, workspace, pid)
     else:
-        return web.json_response({"error": "decision must be accept|dismiss"}, status=400)
+        return web.json_response({"error": "decision must be accept|dismiss|comment"}, status=400)
     if e is None:
         return web.json_response({"error": "unknown or already-resolved proposal"}, status=404)
     if decision == "accept" and e.get("status") == "accepted":
@@ -11340,9 +11731,22 @@ async def handle_localllm_status(request: web.Request) -> web.Response:
     multi = await asyncio.to_thread(local_models.status_payload)
     cfg = await asyncio.to_thread(localllm.load_config)
     port = int((cfg or {}).get("port") or localllm.PORT) if cfg else None
-    healthy = await localllm.server_healthy(port) if cfg else False
     rec = request.app.get("localllm_install")
-    servers = localllm.running_servers(request.app)
+    installed = multi.get("installed") or []
+    servers = localllm.running_servers(request.app, installed)
+    healthy = False
+    if cfg:
+        cid = str(cfg.get("candidate_id") or "")
+        alias = str(cfg.get("alias") or "")
+        alive = any(
+            s.get("alive") and (
+                (cid and s.get("id") == cid)
+                or (port is not None and s.get("port") == port)
+                or (alias and s.get("alias") == alias)
+            )
+            for s in servers
+        )
+        healthy = bool(alive and await localllm.server_healthy(port))
     return web.json_response({
         "plan": plan,
         "top3": multi.get("top3"),
@@ -11358,6 +11762,10 @@ async def handle_localllm_status(request: web.Request) -> web.Response:
         # Which free-text install paths this machine supports (incl. MLX).
         "backends": multi.get("backends"),
         "install": rec if isinstance(rec, dict) else None,
+        "local_rung": rail_default.resolve_local_rung(
+            localllm.ram_gb(),
+            model_hint=rail_default.model_hint_from_cfg(cfg),
+        ).to_public(),
     })
 
 
@@ -11636,18 +12044,64 @@ async def _install_mlx_model(
                     "alias": alias,
                     "port": port,
                 },
-                activate=True,
+                activate=False,
             )
             await localllm.spawn_server(app, cfg)
             rec["step"] = "downloading weights + loading (first run is slow)"
-            # First load pulls the repo from HF, so allow far longer than
-            # the GGUF path (where the download already happened).
-            healthy = await localllm.wait_healthy(timeout_s=1800, port=port)
+            rec["percent"] = 0
+            target_bytes = float(cand.get("weights_gb") or 0) * (1024 ** 3)
+            deadline = time.time() + 1800
+            healthy = False
+            while time.time() < deadline:
+                if await localllm.server_healthy(port=port):
+                    healthy = True
+                    rec["percent"] = 100
+                    rec["step"] = "server ready"
+                    break
+                got = await asyncio.to_thread(local_models.mlx_cache_bytes, repo)
+                gb = got / (1024 ** 3)
+                if target_bytes > 0 and got > 0:
+                    rec["percent"] = min(99, int(got / target_bytes * 100))
+                    rec["step"] = (
+                        f"downloading weights {gb:.2f} GB ({rec['percent']}%)"
+                    )
+                elif got > 0:
+                    rec["percent"] = min(90, 5 + int(min(gb, 20) / 20 * 85))
+                    rec["step"] = f"downloading weights ({gb:.2f} GB)"
+                else:
+                    rec["step"] = "downloading weights + loading (first run is slow)"
+                await asyncio.sleep(2)
+            if healthy:
+                cfg = await localllm.remember_mlx_served_model(cfg)
+            if not healthy:
+                rec.update(
+                    state="error",
+                    error="server did not become healthy (download or load timed out)",
+                )
+                await _broadcast(app, protocol.notice(
+                    f"MLX install of {cand['label']} timed out — "
+                    "use Start in Settings once the download finishes.",
+                    kind="chat"))
+                return
+            await asyncio.to_thread(
+                local_models.register_installed,
+                cid,
+                {
+                    "label": cand["label"],
+                    "backend": "mlx",
+                    "repo": repo,
+                    "quant": cand.get("quant"),
+                    "ctx": ctx,
+                    "alias": alias,
+                    "port": port,
+                },
+                activate=True,
+            )
             ladder = await asyncio.to_thread(modestore.global_ladder)
             ladder["trivial"] = {"provider": "mlx", "model": alias}
             ladder["normal"] = {"provider": "mlx", "model": alias}
             await asyncio.to_thread(modestore.set_global_ladder, ladder)
-            rec.update(state="done", step="done")
+            rec.update(state="done", step="done", percent=100)
             _log_event(
                 app, "exec",
                 f"MLX model installed: {cand['label']} ctx={ctx} → ladder lower rungs",
@@ -11656,9 +12110,8 @@ async def _install_mlx_model(
                          "candidate_id": cid},
             )
             await _broadcast(app, protocol.notice(
-                f"{cand['label']} ready on MLX ({ctx // 1024}k context)"
-                + ("" if healthy else " — still loading")
-                + ". GLOBAL ladder trivial + normal → mlx.",
+                f"{cand['label']} ready on MLX ({ctx // 1024}k context). "
+                "GLOBAL ladder trivial + normal → mlx.",
                 kind="chat",
             ))
         except Exception as e:  # noqa: BLE001
@@ -11851,21 +12304,28 @@ async def handle_local_models_activate(request: web.Request) -> web.Response:
     if not out.get("ok"):
         return web.json_response(out, status=400)
     cfg = out.get("cfg")
-    if isinstance(cfg, dict) and cfg.get("file"):
+    backend = str((cfg or {}).get("backend") or out.get("backend") or "")
+    if isinstance(cfg, dict) and backend in ("", "llamacpp", "mlx"):
         if not keep_others:
             await localllm.stop_server(request.app)
         await localllm.spawn_server(request.app, cfg)
         healthy = await localllm.wait_healthy(
-            timeout_s=60, port=int(cfg.get("port") or localllm.PORT),
+            timeout_s=180 if backend == "mlx" else 60,
+            port=int(cfg.get("port") or localllm.PORT),
         )
+        if healthy and backend == "mlx" and isinstance(cfg, dict):
+            cfg = await localllm.remember_mlx_served_model(cfg)
+            out["cfg"] = cfg
         out["server_healthy"] = healthy
-        out["servers"] = localllm.running_servers(request.app)
-        # Point ladder lower rungs at this alias when llamacpp
+        out["servers"] = localllm.running_servers(
+            request.app, await asyncio.to_thread(local_models.list_installed),
+        )
         try:
             ladder = await asyncio.to_thread(modestore.global_ladder)
             alias = str(cfg.get("alias") or cid)
-            ladder["trivial"] = {"provider": "llamacpp", "model": alias}
-            ladder["normal"] = {"provider": "llamacpp", "model": alias}
+            provider = "mlx" if backend == "mlx" else "llamacpp"
+            ladder["trivial"] = {"provider": provider, "model": alias}
+            ladder["normal"] = {"provider": provider, "model": alias}
             await asyncio.to_thread(modestore.set_global_ladder, ladder)
             out["ladder_updated"] = True
         except Exception:  # noqa: BLE001
@@ -11887,6 +12347,81 @@ async def handle_local_models_activate(request: web.Request) -> web.Response:
         "backend": out.get("backend"),
     }))
     return web.json_response(out)
+
+
+async def handle_localllm_control(request: web.Request) -> web.Response:
+    """Start / stop / restart a managed local-model server.
+
+    Body: {id?, action: start|stop|restart}. ``id`` defaults to the
+    active registry candidate. Ollama is not spawned here (external
+    daemon); we only report whether :11434 answers.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    action = str(body.get("action") or "").strip().lower()
+    if action not in ("start", "stop", "restart"):
+        return web.json_response(
+            {"error": "action must be start|stop|restart"}, status=400)
+    cid = str(body.get("id") or "").strip()
+    if not cid:
+        payload = await asyncio.to_thread(local_models.status_payload)
+        cid = str(payload.get("active") or "")
+    if not cid:
+        return web.json_response({"error": "no local model selected"}, status=400)
+    installed = await asyncio.to_thread(local_models.list_installed)
+    meta = next((m for m in installed if m.get("id") == cid), {}) or {}
+    backend = str(meta.get("backend") or "")
+    if action == "stop":
+        if backend == "ollama":
+            return web.json_response({
+                "ok": False,
+                "error": "Ollama is an external app — stop it from the menu bar.",
+            }, status=400)
+        port = meta.get("port")
+        try:
+            port_i = int(port) if port is not None else None
+        except (TypeError, ValueError):
+            port_i = None
+        await localllm.stop_server(request.app, cid, port=port_i)
+        return web.json_response({
+            "ok": True, "id": cid, "action": "stop",
+            "servers": localllm.running_servers(request.app, installed),
+        })
+    out = await asyncio.to_thread(local_models.activate, cid)
+    if not out.get("ok"):
+        return web.json_response(out, status=400)
+    cfg = out.get("cfg")
+    backend = str((cfg or {}).get("backend") or out.get("backend") or backend)
+    if backend == "ollama":
+        healthy = await localllm.server_healthy(port=11434)
+        return web.json_response({
+            "ok": healthy, "id": cid, "backend": "ollama",
+            "server_healthy": healthy,
+            "error": None if healthy else "Ollama is not answering on :11434 — start the Ollama app.",
+        }, status=200 if healthy else 503)
+    if not isinstance(cfg, dict):
+        return web.json_response({"error": "could not build server config"}, status=400)
+    if action == "restart":
+        await localllm.stop_server(
+            request.app, cid, port=int(cfg.get("port") or localllm.PORT),
+        )
+    await localllm.spawn_server(request.app, cfg)
+    port = int(cfg.get("port") or localllm.PORT)
+    healthy = await localllm.wait_healthy(
+        timeout_s=180 if backend == "mlx" else 60,
+        port=port,
+    )
+    if healthy and backend == "mlx" and isinstance(cfg, dict):
+        cfg = await localllm.remember_mlx_served_model(cfg)
+    servers = localllm.running_servers(request.app, installed)
+    return web.json_response({
+        "ok": True, "id": cid, "action": action,
+        "server_healthy": healthy,
+        "served_model": (cfg or {}).get("served_model") if isinstance(cfg, dict) else None,
+        "servers": servers,
+    })
 
 
 async def handle_local_models_verify(request: web.Request) -> web.Response:
@@ -11920,14 +12455,26 @@ async def handle_local_models_prompt_ack(request: web.Request) -> web.Response:
 
 
 async def handle_localllm_watch(request: web.Request) -> web.Response:
-    """Open a terminal tailing the managed llama-server's log so the
-    user can watch it run (Settings → Watch server). Spawns a fresh
-    interactive-pty thread, focuses it (every client swaps to the xterm
-    surface), and runs `tail -f` on the log — a real shell, so Ctrl-C
-    drops back to a prompt for further poking."""
+    """Open a terminal tailing the *active* local-model server log.
+
+    Body: {id?} — defaults to the active localllm config's slot.
+    MLX and llama.cpp write per-slot files; Watch used to always tail
+    the Ornith ``llama-server.log``, so an MLX server on :8888 showed
+    a leftover llama.cpp bind-fail.
+    """
     import shlex
     app = request.app
-    logp = localllm.server_log_path()
+    cid = ""
+    try:
+        if request.content_length:
+            body = await request.json()
+            if isinstance(body, dict):
+                cid = str(body.get("id") or "").strip()
+    except (json.JSONDecodeError, TypeError):
+        cid = ""
+    cfg = await asyncio.to_thread(localllm.load_config)
+    logp = localllm.watch_log_path(cfg, cid or None)
+    label = localllm.server_process_label(cfg, candidate_id=cid or None)
     if not logp.exists():
         # Give tail -f something to follow even if the server hasn't
         # written yet (or predates output capture — a restart repopulates
@@ -11935,21 +12482,21 @@ async def handle_localllm_watch(request: web.Request) -> web.Response:
         try:
             logp.parent.mkdir(parents=True, exist_ok=True)
             logp.write_text(
-                "# llama-server log is empty. If the server was started "
-                "before this build, reinstall/restart it (Install above) "
-                "to capture output here.\n",
+                f"# {label} log is empty. If the server was started "
+                "before this build, Restart it in Settings to capture "
+                "output here.\n",
                 encoding="utf-8",
             )
         except OSError:
             pass
     workspace: Path = app["workspace"]
     thread_id = await asyncio.to_thread(
-        conversations.new_thread, workspace, "llama-server", "interactive-pty",
+        conversations.new_thread, workspace, label, "interactive-pty",
     )
     app["thread_id"] = thread_id
     app["thread_kind"] = "interactive-pty"
     try:
-        session = await _spawn_pty_for_thread(app, thread_id, name="llama-server")
+        session = await _spawn_pty_for_thread(app, thread_id, name=label)
     except Exception as e:  # noqa: BLE001
         log.exception("localllm watch spawn failed")
         return web.json_response({"error": str(e)}, status=500)
@@ -11958,7 +12505,9 @@ async def handle_localllm_watch(request: web.Request) -> web.Response:
     terminals.write_input(
         session, f"tail -n 200 -f {shlex.quote(str(logp))}\n".encode("utf-8"),
     )
-    return web.json_response({"ok": True, "thread_id": thread_id, "log": str(logp)})
+    return web.json_response({
+        "ok": True, "thread_id": thread_id, "log": str(logp), "label": label,
+    })
 
 
 async def handle_localllm_reasoning(request: web.Request) -> web.Response:
@@ -12187,14 +12736,7 @@ async def _post_migrate_env_rebuild(app: web.Application, dest: Path) -> None:
                 kind="error",
             ))
             return
-        cache: dict[str, dict] = app.setdefault("graph_data_per_ws", {})
-        cache[str(dest.resolve())] = data
-        # If the user switched to the moved workspace mid-rebuild, keep
-        # the active alias in sync so the Graph tab sees edges without
-        # another rescan.
-        active = app.get("workspace")
-        if active is not None and Path(active).resolve() == dest.resolve():
-            app["graph_data"] = data
+        _put_graph_cache(app, str(dest.resolve()), data)
         n_edges = len(data.get("edges") or [])
         n_nodes = len(data.get("nodes") or data.get("pages") or {})
         await _broadcast(app, protocol.files_changed())
@@ -12652,15 +13194,40 @@ async def _reconcile_populate_deck(
         log.exception("files_changed broadcast failed (populate reconcile)")
 
 
+def _schedule_after_wiki_write(
+    app: web.Application, workspace: Path, rel: str | None = None,
+) -> None:
+    """Coalesce graph rebuilds during a curate wave (2s after last write)."""
+    prev = app.get("_after_wiki_write_task")
+    if isinstance(prev, asyncio.Task) and not prev.done():
+        prev.cancel()
+
+    async def _go() -> None:
+        try:
+            await asyncio.sleep(2.0)
+        except asyncio.CancelledError:
+            return
+        await _after_wiki_write(app, workspace, rel)
+
+    app["_after_wiki_write_task"] = asyncio.create_task(_go())
+
+
 async def _after_wiki_write(
     app: web.Application, workspace: Path, rel: str | None = None,
 ) -> None:
     """Wire [[wikilinks]], refresh CE index, rebuild kuzu + viewer."""
+    rel_s = str(rel or "")
+    if rel_s.startswith("wiki/"):
+        try:
+            await asyncio.to_thread(wiki_sync.after_wiki_write, workspace, rel)
+        except Exception:  # noqa: BLE001
+            log.exception("wiki_sync.after_wiki_write failed for %s", rel)
+        await _rebuild_graph_async(app)
+        return
     try:
-        await asyncio.to_thread(wiki_sync.after_wiki_write, workspace, rel)
+        await _broadcast(app, protocol.files_changed())
     except Exception:  # noqa: BLE001
-        log.exception("wiki_sync.after_wiki_write failed for %s", rel)
-    await _rebuild_graph_async(app)
+        log.exception("files_changed after non-wiki write failed")
 
 
 async def _rebuild_graph_async(app: web.Application) -> None:
@@ -12684,9 +13251,7 @@ async def _rebuild_graph_async(app: web.Application) -> None:
             data = await asyncio.to_thread(cebridge.read_cached, ws)
         if data is not None:
             await asyncio.to_thread(wiki_sync.inject_on_disk_pages, ws, data)
-            cache: dict[str, dict] = app.setdefault("graph_data_per_ws", {})
-            cache[str(ws.resolve())] = data
-            app["graph_data"] = data
+            _put_graph_cache(app, str(ws.resolve()), data)
             await _broadcast(app, protocol.files_changed())
     except Exception:  # noqa: BLE001
         log.exception("graph rebuild after agent edit failed")
@@ -13230,49 +13795,88 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                         # it FIRST so the prompt can be localised — the
                         # local model gets skill-free operating rules
                         # (it can't load the skill).
+                        if sname.lower() in ("curate", "curator") and (
+                            sargs.strip().lower() in ("stop", "cancel", "halt")
+                        ):
+                            n = _cancel_ce_runs(request.app, "curate")
+                            await ws.send_json(protocol.notice(
+                                f"Stopped {n} curation run"
+                                + ("" if n == 1 else "s")
+                                + ". Reviews stay in the Reviews tab.",
+                                kind="slash",
+                            ))
+                            continue
                         cp_pid, cp_model = _ce_action_provider(
                             request.app["workspace"],
                         )
                         _ce_local = bool(cp_pid) and _provider_is_local(cp_pid)
+                        _lrung = None
+                        if _ce_local:
+                            _lcfg = await asyncio.to_thread(localllm.load_config)
+                            _lrung = rail_default.resolve_local_rung(
+                                localllm.ram_gb(),
+                                model_hint=rail_default.model_hint_from_cfg(_lcfg),
+                            )
                         ce_prompt = _ce_action_prompt(
                             sname.lower(), sargs, local=_ce_local,
+                            local_rung=_lrung,
                         )
+                        extra_system = ""
                         if ce_prompt is not None:
                             if sname.lower() in ("curate", "curator"):
                                 # D6: steer the curator with the
-                                # workspace profile, verbatim + capped.
+                                # workspace profile, verbatim + capped —
+                                # system-side so Jump does not dump it.
+                                _cap = _CURATOR_PROFILE_CAP_TOKENS
+                                if _lrung is not None:
+                                    _cap = max(400, _lrung.extra_system_chars // 4)
+                                elif _ce_local:
+                                    _cap = 400
                                 prof = await asyncio.to_thread(
-                                    _curator_profile, request.app["workspace"],
+                                    _curator_profile,
+                                    request.app["workspace"],
+                                    _cap,
                                 )
-                                ce_prompt = _with_curator_profile(ce_prompt, prof)
-                            # CE action verbs (curate / viewer / add-
-                            # source / ingest) translate to a canned
-                            # chat prompt that lets the agent — which
-                            # has the curiosity-engine skill — drive
-                            # the actual work via its native tool
-                            # surface. Same dispatch path as ordinary
-                            # chat so the rail surfaces progress + the
-                            # Agent Dashboard tracks the run. A visible
-                            # notice names the model so the user knows
-                            # curate went local.
+                                extra_system = _curator_profile_system(prof)
                             if cp_pid:
                                 try:
                                     cp_label = llmgateway.get(cp_pid).LABEL
                                 except llmgateway.ProviderError:
                                     cp_label = cp_pid
                                 await ws.send_json(protocol.notice(
-                                    f"/{sname.lower()} running on "
-                                    f"{cp_label} ({cp_model})…", kind="chat",
+                                    f"/{sname.lower()} running in the "
+                                    f"background on {cp_label} "
+                                    f"({cp_model}). The rail stays free. "
+                                    f"Stop with /{sname.lower()} stop.",
+                                    kind="chat",
                                 ))
+                            else:
+                                await ws.send_json(protocol.notice(
+                                    f"/{sname.lower()} running in the "
+                                    "background. Stop with "
+                                    f"/{sname.lower()} stop.",
+                                    kind="chat",
+                                ))
+                            # Background: do not occupy the focused
+                            # rail thread (user can keep chatting).
+                            excerpt = (
+                                f"[{sname.lower()} · background] "
+                                f"{sargs}"
+                            ).strip()
                             t = asyncio.create_task(
                                 _dispatch_chat(
-                                    request.app, ws, ce_prompt,
+                                    request.app, None, ce_prompt,
                                     provider_override=cp_pid,
                                     model_override=cp_model,
+                                    input_excerpt=excerpt,
+                                    extra_system=extra_system or None,
+                                    command=(
+                                        sname.lower() if _ce_local else None
+                                    ),
                                 ),
                             )
                             t.add_done_callback(
-                                _make_dispatch_error_surface(request.app, ws),
+                                _make_dispatch_error_surface(request.app, None),
                             )
                             continue
                         verb = verbs.lookup(sname)
@@ -13299,6 +13903,8 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                 request.app, ws,
                                 commands.render(template, sargs),
                                 input_excerpt=f"/{sname} {sargs}".rstrip()[:120],
+                                command=sname.lower(),
+                                command_template=template,
                             ))
                             t.add_done_callback(
                                 _make_dispatch_error_surface(request.app, ws),
@@ -13607,6 +14213,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/file", handle_file)
     app.router.add_post("/api/quit", handle_quit)
     app.router.add_post("/api/restart", handle_restart)
+    app.router.add_get("/api/update/check", handle_update_check)
+    app.router.add_post("/api/update", handle_update)
     app.router.add_post("/api/file", handle_file_save)
     app.router.add_get("/api/mode", handle_mode)
     app.router.add_get("/api/graph/data", handle_graph_data)
@@ -13680,6 +14288,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/local-models/discover", handle_local_models_discover)
     app.router.add_post("/api/local-models/remove", handle_local_models_remove)
     app.router.add_post("/api/local-models/activate", handle_local_models_activate)
+    app.router.add_post("/api/localllm/control", handle_localllm_control)
     app.router.add_get("/api/local-models/verify", handle_local_models_verify)
     app.router.add_post("/api/local-models/prompt", handle_local_models_prompt_ack)
     app.router.add_get("/api/share/status", handle_share_status)
@@ -13792,6 +14401,9 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/tools", handle_tools_list)
     app.router.add_get("/api/agent_rules", handle_agent_rules_list)
     app.router.add_delete("/api/agent_rules", handle_agent_rules_delete)
+    app.router.add_get("/api/command_palettes", handle_command_palettes_list)
+    app.router.add_put("/api/command_palettes", handle_command_palettes_put)
+    app.router.add_delete("/api/command_palettes", handle_command_palettes_delete)
     app.router.add_get("/api/sketches", handle_sketches_list)
     app.router.add_get("/api/sketch", handle_sketch_get)
     app.router.add_post("/api/sketch", handle_sketch_post)
@@ -13846,6 +14458,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/decks/{slug}/{path:.*}", handle_deck_file)
     app.router.add_get("/api/intro", handle_intro_get)
     app.router.add_post("/api/intro/close", handle_intro_close)
+    app.router.add_post("/api/reviews/close", handle_reviews_close)
     app.router.add_get("/api/walkthrough/status", handle_walkthrough_status)
     app.router.add_post("/api/walkthrough/done", handle_walkthrough_done)
     # Mars Hopper easter egg (vendored static game — not GitHub Pages)
@@ -13990,9 +14603,9 @@ def build_app(workspace: Path) -> web.Application:
         asyncio.create_task(_migrate_legacy_decks(_app, _app["workspace"]))
     app.on_startup.append(_startup_figures_migration)
 
-    # Managed local model server: if the Ornith installer completed on
-    # this machine, bring llama-server up with the daemon (fire-and-
-    # forget — model load takes a while and must not block the bind).
+    # Managed local model server: if a localllm config exists, bring
+    # that backend up with the daemon (llama-server or mlx_lm.server).
+    # Fire-and-forget — model load must not block the bind.
     async def _start_localllm(_app: web.Application) -> None:
         cfg = localllm.load_config()
         if cfg:

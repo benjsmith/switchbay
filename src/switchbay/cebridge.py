@@ -147,6 +147,9 @@ def inject_skill_env(env: dict[str, str]) -> dict[str, str]:
     if scripts.is_dir():
         out["CURIOSITY_ENGINE_SCRIPTS_DIR"] = str(scripts)
         out.setdefault("CURIOSITY_ENGINE_SKILL_DIR", str(ce_root()))
+    # Workspace-relative: CLI cwd is the workspace, and the rail
+    # sandbox cannot see ~/.agents/skills. Copies live here.
+    out.setdefault("SWITCHBAY_SKILL_MIRRORS", ".workbench/skill-mirrors")
     return out
 
 
@@ -469,8 +472,13 @@ def run_script(
     except OSError as e:
         return {"error": f"failed to run {script}: {e}"}
 
+    _STDOUT_CAP = 1_500_000  # ~1.5 MB; unbounded capture is a RAM leak
     stdout = (proc.stdout or "").strip()
     stderr = (proc.stderr or "").strip()
+    if len(stdout) > _STDOUT_CAP:
+        stdout = stdout[:_STDOUT_CAP]
+    if len(stderr) > 8_000:
+        stderr = stderr[-8_000:]
     note = stderr[-1500:] if stderr else None
 
     parsed: Any = None

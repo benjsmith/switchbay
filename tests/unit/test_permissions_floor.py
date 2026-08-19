@@ -16,6 +16,25 @@ def test_read_under_workspace_pre_approved(tmp_path):
     assert permissions.is_pre_approved(tmp_path, pat)
 
 
+def test_read_global_skill_pre_approved(tmp_path, monkeypatch):
+    root = tmp_path / "agents" / "skills"
+    skill = root / "curiosity-engine"
+    skill.mkdir(parents=True)
+    md = skill / "SKILL.md"
+    md.write_text("# x\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "switchbay.skillkit.skill_read_roots", lambda: [root.resolve()])
+    pat = permissions.pattern_for("Read", {"file_path": str(md)})
+    assert permissions.is_pre_approved(
+        tmp_path, pat, tool="Read", tool_input={"file_path": str(md)},
+    )
+    bash = {"command": f"cat {md}"}
+    assert permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("Bash", bash),
+        tool="Bash", tool_input=bash,
+    )
+
+
 def test_read_outside_workspace_not_pre_approved(tmp_path):
     pat = permissions.pattern_for("Read", {"file_path": "/etc/passwd"})
     assert not permissions.is_pre_approved(tmp_path, pat)

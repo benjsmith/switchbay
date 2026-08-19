@@ -8,7 +8,21 @@ become useful.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
+from typing import Any
+
 from .. import tools
+from .local_rungs import (  # noqa: F401 — re-export for callers
+    LOCAL_CHAT_TOOLS,
+    LOCAL_CURATE_TOOLS,
+    LOCAL_RUNGS,
+    LocalRung,
+    format_sweep_prelude,
+    model_hint_from_cfg,
+    parse_param_b,
+    resolve_local_rung,
+)
 
 NAME = "rail-default"
 
@@ -16,6 +30,23 @@ SYSTEM_PROMPT = """\
 You are switchbay's rail assistant. You live alongside the user in a
 local single-user workbench. The user types plain prose into the
 right-hand RAIL column and you respond there.
+
+You already have tools — use them. Do not ask what tools you have.
+Curation path: ce_epoch_summary → ce_planner → ce_sweep / ce_run /
+ce_graph_rebuild / ce_ingest / propose_wiki_page. Reviews is a
+backlog, not a gate: write pages and keep going.
+
+Skills (precedence, not a ban):
+  1. Prefer Switch Bay tools you already have.
+  2. list_skills, then load_skill(name, detail="frontmatter") — that
+     is the frontmatter + covered_by map. Do not start with the full
+     body.
+  3. load_skill(name, section="…") for the next chapter you need —
+     small models: if the reply is a section-outline, load a child
+     heading. detail="full" only when the peek shows extra
+     functionality those tools do not cover (skills drift).
+  Global skills under ~/.agents/skills/ (and ~/.claude/skills/) are
+  Readable. Prefer load_skill over cat. CE scripts: ce_* / ce_run.
 
 Scope (hardwired — repeat back to the user if they ask):
   · You operate inside the active workspace directory ONLY. Never
@@ -68,6 +99,16 @@ Rich answers → the Report tab (create_report):
     never repeat the document body in chat. Short/simple answers stay
     in chat as normal; don't over-reach for a report.
 
+Workspace plan (charter / work-plan / log):
+  · `.workbench/plan/charter.md` = year-scale goals. Propose edits
+    with propose_charter_edit (lands in Reviews) — do not silently
+    rewrite the charter.
+  · `.workbench/plan/work-plan.md` = current tasks. Update with
+    update_work_plan as work moves.
+  · `.workbench/plan/workspace-log.md` = append-only decisions.
+    Distinct from `.curator/log.md` (CE curator) and recall_rail.
+    Use append_workspace_log for insights from this conversation.
+
 Memory & rail log:
   · You see only the LAST ~20 chat turns in your context, to keep token
     cost bounded. EVERYTHING ELSE — older chat, tool calls, file edits,
@@ -96,6 +137,16 @@ Memory & rail log:
       ["sql","exec","slash"]                  command history
       ["curation"]                            ce-curator runs
       ["nav","rule_register","rule_apply"]    user shortcuts
+
+Curation (when the user says curate / improve the wiki / /curate):
+  · You already have the tools. Do NOT say you cannot curate. Call:
+    ce_epoch_summary, ce_planner, ce_sweep, ce_run, ce_graph_rebuild,
+    ce_ingest, propose_wiki_page. Peek curiosity-engine frontmatter
+    if you need a mode the tools do not name; do not dump the whole
+    skill first. Charter edits: propose_charter_edit (Reviews).
+  · Write pages as you go. Do not wait for the user to accept each
+    draft — Reviews is a backlog, not a gate. Keep going until the
+    sweep is done or the user stops the run.
 
 Switch Bay tools you may call:
   · search_wiki(query, limit?) / read_wiki_page(page) /
@@ -138,6 +189,10 @@ Switch Bay tools you may call:
     transcript. Include full background in `message` — the target
     can't see this conversation. Never target the thread you're
     answering in (it will refuse as busy).
+  · list_skills() / load_skill(name, detail?, section?)
+    Skill discovery. Default is frontmatter + headings; then
+    section="Heading" one chapter at a time. Global SKILL.md under
+    ~/.agents/skills is Readable. Prefer this tool over cat.
   · register_rule(trigger, action) / list_rules() / delete_rule(id)
     Save a persistent rail shortcut. When the user asks you to
     remember a habit ("when I say X, /view Y"), call register_rule.
@@ -253,6 +308,55 @@ proposals):
     in one bullet.
 """
 
+# Local (4B-class) models cannot hold the full rail prompt + ~50 tool
+# schemas. This short system + a palette is what they actually get.
+LOCAL_SYSTEM_PROMPT = """\
+You are Switch Bay's on-device worker. Small context. One tool call
+per step, or a short final answer.
+
+You already have the tools listed in this request — use them. Do not
+ask what tools you have. Do not call tools that are not listed.
+
+Wiki answers: search_wiki → read_wiki_page on the best hit. Cite
+[[wikilinks]]. If the wiki is thin, say so; do not invent.
+
+Writing to the wiki (only if the user asked, or this is a curate run):
+  · Search first. If a page already covers it, skip or propose a
+    tiny sourced edit.
+  · New pages must be LIGHT SCAFFOLDS (propose_wiki_page with
+    scaffold=true): YAML frontmatter, title, 3–8 bullets of
+    claims-to-verify, [[wikilinks]] to existing pages, ## Open
+    questions. No dense encyclopedic prose. No invented numbers,
+    dates, equations, or mechanisms.
+  · Work that needs a planner, a multi-page synthesis, or facts you
+    do not have: emit a scaffold that says what a reviewer should
+    write, then STOP.
+
+Never delete wiki pages. Reviews is a backlog, not a gate.
+Skills: load_skill(name) is frontmatter + headings; then section=
+"Heading" one chapter. Never detail=full.
+"""
+
+# 48 GB+ / 27B-class: still a palette, but sourced pages are allowed.
+LOCAL_SYSTEM_PROMPT_LARGE = """\
+You are Switch Bay's on-device curator. One tool call per step, or a
+short final answer. You already have the tools listed in this request.
+
+Wiki answers: search_wiki or ce_graph_retrieve → read the best pages.
+Cite [[wikilinks]] and (vault:...) when you have them. If the wiki is
+thin, say so; do not invent numbers, dates, equations, or mechanisms.
+
+Writing: prefer sourced pages. Search first. If a page already covers
+the item, skip or propose a tiny sourced edit. Full propose_wiki_page
+bodies are allowed when you have sources; otherwise set scaffold=true
+(outline + ## Open questions) and STOP.
+
+Mechanical sweep (scan / fix-index / stubs / notes) may already have
+run. Do not repeat those verbs. One target per turn — no parallel
+waves. Never delete wiki pages. Reviews is a backlog.
+Skills: load_skill frontmatter, then section='Heading'. Never detail=full.
+"""
+
 # Whitelist of tool names this agent is allowed to call. Smaller
 # agents start narrow; larger ones (ingest, curator) get wider lists.
 ALLOWED_TOOLS = [
@@ -303,6 +407,7 @@ ALLOWED_TOOLS = [
     # a charter it had just read a "preserve" ruling for).
     "propose_wiki_page",
     "propose_page_edit",
+    "propose_charter_edit",
     # Rich HTML report → a Report tab (sandboxed iframe). Offered ONLY to
     # capable models (gated out for local in tools_for_provider) — a small
     # model can't produce artifact-quality HTML.
@@ -314,13 +419,13 @@ ALLOWED_TOOLS = [
     "make_slides_from_docs",
     "compose_analysis",
     "author_slide",
-    # Skill discovery + loading. The agent reaches for these when the
-    # user's request feels domain-specific ("how do I X", "find a skill
-    # for Y") OR when its own behaviour should be guided by a saved
-    # SKILL.md (e.g. CE's curiosity-engine skill prescribes the whole
-    # vault/wiki workflow).
+    # Skill discovery + loading. Frontmatter first; full body only
+    # when covered_by tools are not enough.
     "list_skills",
     "load_skill",
+    "read_workspace_plan",
+    "update_work_plan",
+    "append_workspace_log",
     # Vega-Lite plot authoring. Use when the user asks for a plot,
     # chart, histogram, scatter, etc.
     "save_plot",
@@ -352,16 +457,226 @@ ALLOWED_TOOLS = [
 # can't produce artifact-quality HTML, so don't tempt it with the tool.
 _STRONG_ONLY_TOOLS = {"create_report"}
 
+_LOCAL_TOOL_BLURBS: dict[str, str] = {
+    "propose_wiki_page": (
+        "Stage a LIGHT scaffold in Reviews — not a finished page. "
+        "Set scaffold=true. Body: YAML frontmatter, '# Title', 3–8 "
+        "bullets of claims-to-verify, [[wikilinks]] to pages that "
+        "already exist, and ## Open questions. No dense prose, no "
+        "invented numbers or mechanisms. Search the wiki first."
+    ),
+    "propose_page_edit": (
+        "Propose a small, sourced edit to an existing page. If you "
+        "would have to invent facts, skip. Keep the change short."
+    ),
+    "ce_epoch_summary": (
+        "One-shot wiki health snapshot (counts, inboxes). Call once "
+        "to orient, then search/read/propose scaffolds. Do not loop."
+    ),
+    "author_slide": (
+        "Fill one slide: layout + slots + sketch_id. Layouts: title, "
+        "bullets, two_column, quote, section, paragraph, stat, cards. "
+        "Bullets ≤8 words. Same accent colour on every slide."
+    ),
+    "make_slides_from_doc": (
+        "Scaffold placeholder slides from one markdown doc (H1/H2 → "
+        "one sketch each). Then author_slide to fill them."
+    ),
+    "make_slides_from_docs": (
+        "Scaffold one deck from several markdown docs, in order. Then "
+        "author_slide to fill placeholders."
+    ),
+    "compose_analysis": (
+        "Bind existing sketches into a deck (analysis page + slide ids)."
+    ),
+    "save_plot": (
+        "Save a Vega-Lite spec to the Plot tab. Inline data.values; "
+        "set spec.title and spec.description."
+    ),
+}
 
-def tools_for_provider(*, local: bool = False) -> list[dict]:
-    """Build the Anthropic-shaped `tools[]` list for the allowed tools.
-    `local=True` drops strong-only tools (e.g. create_report) so the
-    local model is never offered a tool it can't do well."""
-    out = []
-    for name in ALLOWED_TOOLS:
-        if local and name in _STRONG_ONLY_TOOLS:
+# ~4 chars/token. 4B-4bit on 16–18 GB unified RAM died at ~15k prompt
+# tokens; keep compiled local prompts well under that.
+_CHARS_PER_TOKEN = 4
+LOCAL_PROMPT_TOKEN_BUDGET = 3500
+_LOCAL_EXTRA_SYSTEM_CHARS = 400 * _CHARS_PER_TOKEN
+
+
+def estimate_tokens(text: str) -> int:
+    return -(-len(text or "") // _CHARS_PER_TOKEN)
+
+
+def palette_tool_names(
+    *,
+    local: bool,
+    palette: str | None = None,
+    ram_gb: float | None = None,
+    model_hint: str = "",
+    rung: LocalRung | None = None,
+    only_tools: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    if only_tools is not None:
+        seen: list[str] = []
+        for n in only_tools:
+            if n and n not in seen:
+                seen.append(n)
+        return tuple(seen)
+    if not local:
+        return tuple(ALLOWED_TOOLS)
+    rung = rung or resolve_local_rung(ram_gb, model_hint=model_hint)
+    if palette == "curate":
+        return rung.curate_tools
+    return rung.chat_tools
+
+
+def compile_tool_specs(
+    names: Sequence[str],
+    *,
+    local: bool = False,
+    rung: LocalRung | None = None,
+    skip_strong: bool = True,
+) -> list[dict[str, Any]]:
+    """Anthropic-shaped specs for ``names``, skipping unknowns."""
+    out: list[dict[str, Any]] = []
+    for name in names:
+        if local and skip_strong and name in _STRONG_ONLY_TOOLS:
             continue
         t = tools.REGISTRY.get(name)
-        if t is not None:
-            out.append(t.to_anthropic())
+        if t is None:
+            continue
+        spec = t.to_anthropic()
+        use_blurbs = bool(local and (rung is None or rung.force_scaffold))
+        blurb = _LOCAL_TOOL_BLURBS.get(name) if use_blurbs else None
+        if blurb:
+            spec = dict(spec)
+            spec["description"] = blurb
+            if name == "propose_wiki_page":
+                schema = dict(spec.get("input_schema") or {})
+                props = dict(schema.get("properties") or {})
+                props["scaffold"] = {
+                    "type": "boolean",
+                    "description": "true for a light Reviews scaffold (required on small local rungs).",
+                }
+                schema["properties"] = props
+                spec["input_schema"] = schema
+        out.append(spec)
     return out
+
+
+def clip_tools_to_budget(
+    system: str,
+    specs: list[dict[str, Any]],
+    messages: list[dict[str, Any]] | None,
+    budget: int,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Drop trailing tool specs until system+tools+messages fit.
+
+    Keeps at least one spec when any were offered — a one-tool desk
+    that slightly overshoots is better than a tool-less run.
+    """
+    dropped: list[str] = []
+    kept = list(specs)
+    probe = list(messages or [])
+    stats = prompt_token_breakdown(system, kept, probe)
+    while len(kept) > 1 and stats["total"] > budget:
+        dropped.append(str(kept[-1].get("name") or ""))
+        kept = kept[:-1]
+        stats = prompt_token_breakdown(system, kept, probe)
+    dropped.reverse()
+    return kept, dropped
+
+
+def prompt_token_breakdown(
+    system: str,
+    tool_specs: list[dict[str, Any]],
+    messages: list[dict[str, Any]] | None = None,
+) -> dict[str, int]:
+    sys_n = estimate_tokens(system)
+    tools_n = estimate_tokens(json.dumps(tool_specs, ensure_ascii=False))
+    msg_n = 0
+    for m in messages or []:
+        msg_n += estimate_tokens(json.dumps(m, ensure_ascii=False, default=str))
+    return {
+        "system": sys_n,
+        "tools": tools_n,
+        "messages": msg_n,
+        "total": sys_n + tools_n + msg_n,
+        "n_tools": len(tool_specs),
+    }
+
+
+def assemble_local_prompt(
+    *,
+    palette: str = "chat",
+    extra_system: str = "",
+    harness: str = "",
+    messages: list[dict[str, Any]] | None = None,
+    budget: int | None = None,
+    ram_gb: float | None = None,
+    model_hint: str = "",
+    rung: LocalRung | None = None,
+    only_tools: Sequence[str] | None = None,
+) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]], dict[str, Any]]:
+    """Compile a local-model prompt that fits the rung's token budget.
+
+    Returns (system, tools, messages, breakdown). Oldest messages are
+    dropped first; the last user turn is kept. Trailing tools are
+    clipped if the desk still overshoots after that.
+    """
+    rung = rung or resolve_local_rung(ram_gb, model_hint=model_hint)
+    cap = budget if budget is not None else rung.prompt_budget
+    extra_cap = rung.extra_system_chars
+    system = (
+        LOCAL_SYSTEM_PROMPT if rung.force_scaffold else LOCAL_SYSTEM_PROMPT_LARGE
+    ).rstrip()
+    if harness.strip():
+        system = f"{system}\n\n{harness.strip()}"
+    extra = (extra_system or "").strip()
+    if extra:
+        if len(extra) > extra_cap:
+            extra = extra[:extra_cap].rstrip() + "\n…"
+        system = f"{system}\n\n{extra}"
+    tool_specs = tools_for_provider(
+        local=True, palette=palette, rung=rung, only_tools=only_tools,
+    )
+    kept = list(messages or [])
+    last = kept[-1:] if kept else []
+    tool_specs, clipped_tools = clip_tools_to_budget(system, tool_specs, last, cap)
+    stats = prompt_token_breakdown(system, tool_specs, kept)
+    while stats["total"] > cap and len(kept) > 1:
+        kept = kept[1:]
+        stats = prompt_token_breakdown(system, tool_specs, kept)
+    stats["trimmed"] = max(0, len(messages or []) - len(kept))
+    stats["budget"] = cap
+    stats["palette"] = palette
+    stats["rung"] = rung.id
+    stats["force_scaffold"] = rung.force_scaffold
+    stats["clipped_tools"] = clipped_tools
+    return system, tool_specs, kept, stats
+
+
+def tools_for_provider(
+    *,
+    local: bool = False,
+    palette: str | None = None,
+    ram_gb: float | None = None,
+    model_hint: str = "",
+    rung: LocalRung | None = None,
+    only_tools: Sequence[str] | None = None,
+) -> list[dict]:
+    """Build the Anthropic-shaped `tools[]` list.
+
+    Strong models get the full allowlist. Local models get a RAM/model
+    palette (``chat`` or ``curate``), or an explicit ``only_tools``
+    command desk (may include tools the default local desk bans).
+    """
+    if local:
+        rung = rung or resolve_local_rung(ram_gb, model_hint=model_hint)
+    names = palette_tool_names(
+        local=local, palette=palette, ram_gb=ram_gb,
+        model_hint=model_hint, rung=rung, only_tools=only_tools,
+    )
+    skip_strong = bool(local and only_tools is None)
+    return compile_tool_specs(
+        names, local=local, rung=rung, skip_strong=skip_strong,
+    )

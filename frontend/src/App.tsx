@@ -227,8 +227,10 @@ export default function App() {
     return () => window.removeEventListener("sy:toast", onToast);
   }, [pushToast]);
 
+  const selectionClosedAt = useRef(0);
   /** Local update + push to daemon. Stable across renders. */
   const setSelection = useCallback((s: Selection | null) => {
+    if (s == null) selectionClosedAt.current = Date.now();
     setSelectionLocal(s);
     socketRef.current?.send({ type: "selection_set", selection: s });
   }, []);
@@ -266,6 +268,49 @@ export default function App() {
     } catch {
       // A dropped connection here usually means the restart already took
       // the daemon down — treat as success; devReload reloads on return.
+      pushToast({ text: "Restarting Switch Bay… it'll reconnect automatically." });
+    }
+  }, [pushToast]);
+
+  // Settings → Update: check GitHub, apply older Switch Bay / CE /
+  // curiosity-merge releases, then the same restart path as above so
+  // the boot_id watcher reloads the PWA.
+  const requestUpdate = useCallback(async () => {
+    pushToast({ text: "Checking GitHub for updates…" });
+    try {
+      const r = await fetch("/api/update", { method: "POST" });
+      const body = (await r.json().catch(() => null)) as {
+        ok?: boolean;
+        error?: string;
+        summary?: string;
+        updated?: boolean;
+        restarted?: boolean;
+        restart_error?: string;
+      } | null;
+      const summary = (body?.summary || body?.error || "").trim();
+      if (!r.ok && !summary) {
+        pushToast({ text: body?.error || "Couldn't check for updates.", err: true }, 12000);
+        return;
+      }
+      if (body?.restarted) {
+        pushToast({
+          text: (summary || "Update finished.") + " Restarting… it'll reconnect automatically.",
+        });
+        return;
+      }
+      if (body?.restart_error) {
+        pushToast({
+          text: (summary || "Updates applied.") + " " + body.restart_error,
+          err: true,
+        }, 14000);
+        return;
+      }
+      pushToast(
+        { text: summary || (body?.ok ? "Already up to date." : "Update failed."), err: !body?.ok },
+        body?.ok ? 8000 : 12000,
+      );
+    } catch {
+      // Connection dropped mid-restart — same success path as Restart.
       pushToast({ text: "Restarting Switch Bay… it'll reconnect automatically." });
     }
   }, [pushToast]);
@@ -580,7 +625,15 @@ export default function App() {
         ]);
       } else if (msg.type === "selection_state") {
         // Echo of our own broadcast OR change from another connected client.
-        // Apply locally without resending; setLocal is sufficient.
+        // Ignore a stale page echo just after the user closed the modal —
+        // that race reopened Atlas docs.
+        const incoming = msg.selection as { kind?: string } | null;
+        if (
+          incoming?.kind === "page"
+          && Date.now() - selectionClosedAt.current < 1200
+        ) {
+          return;
+        }
         setSelectionLocal(msg.selection);
       } else if (msg.type === "thread_focused") {
         // Another client (or our own POST, echoed; or a `!cmd` that
@@ -2376,6 +2429,7 @@ export default function App() {
           onClose={() => setSettingsOpen(false)}
           onQuit={requestQuit}
           onRestart={requestRestart}
+          onUpdate={requestUpdate}
         />
         <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
         <Walkthrough

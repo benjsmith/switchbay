@@ -117,9 +117,24 @@ def can_execute(provider_id: str) -> bool:
     return bool(caps.get("shell")) and bool(caps.get("file_write"))
 
 
+def can_curate(provider_id: str) -> bool:
+    """True if this provider can drive a curate/ingest run.
+
+    CLI agents execute CE scripts in their own shell. HTTP / local
+    models do the same via Switch Bay ``ce_run`` tools (no shell
+    needed). Either path is enough — refusing Copilot/MLX here is
+    what made them report they “can't curate” until the user asked
+    what tools they have.
+    """
+    if can_execute(provider_id):
+        return True
+    caps = capabilities(provider_id)
+    return bool(caps.get("tools"))
+
+
 __all__ = [
     "ChatRequest", "ChunkEvent", "DoneChunk", "ProviderError",
     "ReasoningChunk", "TextChunk", "ToolUseChunk",
     "PROVIDERS", "list_providers", "get", "default_provider_id",
-    "capabilities", "can_execute",
+    "capabilities", "can_execute", "can_curate",
 ]

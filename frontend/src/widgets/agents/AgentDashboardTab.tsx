@@ -35,6 +35,29 @@ type Rule = {
   action: string;
 };
 
+type PaletteRow = {
+  name: string;
+  aliases: string[];
+  description: string;
+  source: string;
+  kind: string;
+  scope?: string;
+  default_tools: string[];
+  tools: string[];
+  overridden: boolean;
+  tokens: number;
+  clipped: string[];
+  fits: boolean;
+};
+
+type PaletteCatalogItem = { name: string; description: string };
+
+type PalettesPayload = {
+  rung: { id: string; label: string; prompt_budget: number };
+  commands: PaletteRow[];
+  catalog: PaletteCatalogItem[];
+};
+
 type Provider = {
   id: string;
   label: string;
@@ -127,6 +150,7 @@ export default function AgentDashboardTab() {
   const [focusedWs, setFocusedWs] = useState<string>(readFocusedWorkspace);
   const [tools, setTools] = useState<Tool[] | null>(null);
   const [rules, setRules] = useState<Rule[] | null>(null);
+  const [palettes, setPalettes] = useState<PalettesPayload | null>(null);
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -192,13 +216,15 @@ export default function AgentDashboardTab() {
   const reloadAll = useCallback(async () => {
     setError(null);
     try {
-      const [t, r, p] = await Promise.all([
+      const [t, r, pal, p] = await Promise.all([
         fetch("/api/tools").then((r) => r.json()),
         fetch("/api/agent_rules").then((r) => r.json()),
+        fetch("/api/command_palettes").then((r) => r.json()),
         fetch("/api/llm/providers").then((r) => r.json()),
       ]);
       setTools(t.tools as Tool[]);
       setRules(r.rules as Rule[]);
+      setPalettes(Array.isArray(pal?.commands) ? pal as PalettesPayload : null);
       setProviders(p.providers as Provider[]);
     } catch (e) { setError((e as Error).message); }
   }, []);
@@ -363,6 +389,28 @@ export default function AgentDashboardTab() {
         )}
       </Section>
 
+      <Section
+        title="Command palettes"
+        count={palettes?.commands.length}
+        subtitle={
+          palettes
+            ? `${palettes.rung.label} · ${palettes.rung.prompt_budget} tok budget`
+            : "local model desks"
+        }
+      >
+        {palettes === null ? <Loading /> : palettes.commands.length === 0 ? (
+          <Empty>
+            No command palettes yet. Shipped slashes like <code>/curate</code>{" "}
+            and <code>/create-deck</code> get a tight tool desk automatically.
+          </Empty>
+        ) : (
+          <PaletteList
+            payload={palettes}
+            onChange={(next) => setPalettes(next)}
+          />
+        )}
+      </Section>
+
       <Section title="Providers" count={providers?.length}>
         {providers === null ? <Loading /> : providers.length === 0 ? (
           <Empty>No providers configured.</Empty>
@@ -396,6 +444,214 @@ export default function AgentDashboardTab() {
         <SkillsPanel />
       </Section>
     </div>
+  );
+}
+
+
+function toolGroup(name: string): string {
+  if (
+    name.startsWith("ce_") ||
+    name.startsWith("wiki") ||
+    name.startsWith("propose_") ||
+    name === "search_wiki" ||
+    name === "read_wiki_page" ||
+    name === "list_wiki_pages"
+  ) {
+    return "Wiki / CE";
+  }
+  if (
+    name.includes("slide") ||
+    name.includes("analysis") ||
+    name.startsWith("sketch")
+  ) {
+    return "Deck / sketch";
+  }
+  if (name.startsWith("plot") || name === "save_plot") return "Plot";
+  if (
+    name.startsWith("sheet") ||
+    name.startsWith("table") ||
+    name.includes("duckdb")
+  ) {
+    return "Sheet / table";
+  }
+  return "Other";
+}
+
+
+function PaletteList({
+  payload,
+  onChange,
+}: {
+  payload: PalettesPayload;
+  onChange: (next: PalettesPayload) => void;
+}) {
+  const [open, setOpen] = useState<string | null>(null);
+
+  const apply = useCallback(async (res: Response) => {
+    if (!res.ok) return;
+    const body = (await res.json()) as PalettesPayload;
+    onChange(body);
+  }, [onChange]);
+
+  const save = useCallback(async (name: string, tools: string[]) => {
+    const res = await fetch("/api/command_palettes", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ command: name, tools }),
+    });
+    await apply(res);
+  }, [apply]);
+
+  const reset = useCallback(async (name: string) => {
+    const res = await fetch(
+      `/api/command_palettes?command=${encodeURIComponent(name)}`,
+      { method: "DELETE" },
+    );
+    await apply(res);
+  }, [apply]);
+
+  return (
+    <ul className="sy-agents-list">
+      {payload.commands.map((row) => (
+        <PaletteEditor
+          key={row.name}
+          row={row}
+          catalog={payload.catalog}
+          open={open === row.name}
+          onToggle={() => setOpen((cur) => (cur === row.name ? null : row.name))}
+          onSave={save}
+          onReset={reset}
+        />
+      ))}
+    </ul>
+  );
+}
+
+
+function PaletteEditor({
+  row,
+  catalog,
+  open,
+  onToggle,
+  onSave,
+  onReset,
+}: {
+  row: PaletteRow;
+  catalog: PaletteCatalogItem[];
+  open: boolean;
+  onToggle: () => void;
+  onSave: (name: string, tools: string[]) => Promise<void>;
+  onReset: (name: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState<string[]>(row.tools);
+  const [pick, setPick] = useState("");
+  useEffect(() => { setDraft(row.tools); }, [row.tools]);
+
+  const available = catalog.filter((t) => !draft.includes(t.name));
+  const groups = new Map<string, PaletteCatalogItem[]>();
+  for (const t of available) {
+    const g = toolGroup(t.name);
+    const list = groups.get(g) ?? [];
+    list.push(t);
+    groups.set(g, list);
+  }
+  const dirty =
+    draft.length !== row.tools.length ||
+    draft.some((n, i) => n !== row.tools[i]);
+
+  return (
+    <li className={"sy-agents-palette" + (open ? " sy-agents-palette--open" : "")}>
+      <div className="sy-agents-row sy-agents-palette-head">
+        <button
+          type="button"
+          className="sy-agents-palette-toggle"
+          onClick={onToggle}
+          aria-expanded={open}
+        >
+          <code className="sy-agents-name">/{row.name}</code>
+          {row.aliases.length > 0 && (
+            <span className="sy-agents-cat">
+              {row.aliases.map((a) => `/${a}`).join(" ")}
+            </span>
+          )}
+          <span className="sy-agents-desc">{row.description}</span>
+        </button>
+        <span className="sy-agents-meta">
+          {row.tools.length} tools · ~{row.tokens} tok
+          {row.overridden ? " · override" : ` · ${row.source}`}
+          {row.clipped.length > 0 ? ` · clipped ${row.clipped.length}` : ""}
+        </span>
+      </div>
+      {open && (
+        <div className="sy-agents-palette-edit">
+          <div className="sy-agents-chips">
+            {draft.map((name) => (
+              <span key={name} className="sy-agents-chip">
+                {name}
+                <button
+                  type="button"
+                  className="sy-agents-chip-x"
+                  onClick={() => setDraft((cur) => cur.filter((n) => n !== name))}
+                  title={`Remove ${name}`}
+                >
+                  ×
+                </button>
+              </span>
+            ))}
+            {draft.length === 0 && (
+              <span className="sy-agents-desc">No tools — run will use the default chat desk.</span>
+            )}
+          </div>
+          <div className="sy-agents-palette-add">
+            <select
+              value={pick}
+              onChange={(e) => setPick(e.target.value)}
+              aria-label={`Add a tool to /${row.name}`}
+            >
+              <option value="">Add a tool…</option>
+              {[...groups.entries()].map(([group, items]) => (
+                <optgroup key={group} label={group}>
+                  {items.map((t) => (
+                    <option key={t.name} value={t.name} title={t.description}>
+                      {t.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="sy-vega-toolbar-btn"
+              disabled={!pick}
+              onClick={() => {
+                if (!pick) return;
+                setDraft((cur) => (cur.includes(pick) ? cur : [...cur, pick]));
+                setPick("");
+              }}
+            >
+              Add
+            </button>
+            <button
+              type="button"
+              className="sy-vega-toolbar-btn"
+              disabled={!dirty}
+              onClick={() => void onSave(row.name, draft)}
+            >
+              Save
+            </button>
+            {row.overridden && (
+              <button
+                type="button"
+                className="sy-vega-toolbar-btn"
+                onClick={() => void onReset(row.name)}
+              >
+                Reset
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </li>
   );
 }
 

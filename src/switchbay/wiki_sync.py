@@ -130,12 +130,41 @@ def catalog(workspace: Path) -> list[dict[str, str]]:
     return out
 
 
+_BODY_HTML_CAP = 4_000  # in-memory graph cache; full page is /api/page
+
+
 def _body_html(text: str) -> str:
     body = text
     m = _FM_RE.match(text)
     if m:
         body = m.group("body")
-    return "<pre class=\"wiki-draft\">" + html.escape(body.strip()) + "</pre>"
+    body = body.strip()
+    if len(body) > _BODY_HTML_CAP:
+        body = body[:_BODY_HTML_CAP] + "\n…"
+    return "<pre class=\"wiki-draft\">" + html.escape(body) + "</pre>"
+
+
+def slim_graph_payload(data: dict[str, Any]) -> dict[str, Any]:
+    """Drop bulky page HTML from an in-memory viewer bundle.
+
+    The graph/Atlas only needs ids, types, titles, and edges. Full
+    bodies belong in /api/page. Keeping every page's HTML in
+    ``graph_data_per_ws`` is the kind of growth that can push the
+    daemon into multi-GB RSS.
+    """
+    pages = data.get("pages") if isinstance(data, dict) else None
+    if not isinstance(pages, dict):
+        return data
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        html_body = page.get("body_html")
+        if isinstance(html_body, str) and len(html_body) > _BODY_HTML_CAP + 80:
+            page["body_html"] = html_body[: _BODY_HTML_CAP + 80] + "…"
+        page.pop("body", None)
+        page.pop("html", None)
+        page.pop("content", None)
+    return data
 
 
 def _wikilink_targets(text: str) -> list[str]:

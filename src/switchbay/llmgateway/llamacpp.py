@@ -9,6 +9,7 @@ installer configured (Ornith 9B/35B).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from typing import AsyncIterator
@@ -105,6 +106,26 @@ def reasoning_options(model: str | None = None) -> list[dict]:
     ]
 
 
+def wire_model_id(req: base.ChatRequest, cfg: dict) -> str:
+    """Model string sent to the OpenAI-compat server.
+
+    llama-server honours ``--alias``. ``mlx_lm.server`` does not: the
+    request ``model`` is a path or HF repo to load, and a Switch Bay
+    alias 404s as ``model-not-found``. The managed MLX process serves
+    one model (the CLI ``--model``), mapped as ``default_model``.
+    """
+    if str(cfg.get("backend") or "") == "mlx":
+        return (
+            str(cfg.get("served_model") or "").strip()
+            or "default_model"
+        )
+    return (
+        req.model
+        or str(cfg.get("alias") or "").strip()
+        or DEFAULT_MODEL
+    )
+
+
 def _thinking_enabled(req: base.ChatRequest, cfg: dict) -> bool:
     """Resolve thinking for this request.
 
@@ -124,12 +145,7 @@ def _thinking_enabled(req: base.ChatRequest, cfg: dict) -> bool:
 async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     cfg = localllm.load_config() or {}
     base_url = localllm.server_url_for(cfg)
-    # Prefer request model, else active alias from install/activate.
-    model_id = (
-        req.model
-        or str(cfg.get("alias") or "").strip()
-        or DEFAULT_MODEL
-    )
+    model_id = wire_model_id(req, cfg)
     body: dict = {
         "model": model_id,
         "messages": _to_openai_messages(req.messages, req.system),
@@ -169,10 +185,11 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
                 async for chunk in _parse_sse(resp.content):
                     yield chunk
     except aiohttp.ClientConnectionError as e:
+        backend = str(cfg.get("backend") or "llamacpp")
+        name = "MLX" if backend == "mlx" else "llama.cpp"
         raise base.ProviderError(
-            "The local model server isn't running. If Ornith is "
-            "installed the daemon starts it at boot — check Settings → "
-            "Local agent model (it may still be loading the weights).",
+            f"The local {name} server isn't answering. Check Settings → "
+            "Local agent model (it may have crashed or run out of memory).",
             code="network", retryable=True, cause=e,
         ) from e
     except TimeoutError as e:
@@ -191,9 +208,10 @@ async def list_models() -> list[str]:
     """Installed GGUF aliases (and active config) — not Ornith-only."""
     from .. import local_models  # late: avoid import cycle at module load
 
+    installed = await asyncio.to_thread(local_models.list_installed)
     out: list[str] = []
     seen: set[str] = set()
-    for m in local_models.list_installed():
+    for m in installed:
         if not isinstance(m, dict):
             continue
         backend = str(m.get("backend") or "llamacpp")

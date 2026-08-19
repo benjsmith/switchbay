@@ -196,7 +196,7 @@ def _builtin_allow(workspace: Path) -> list[str]:
     curiosity-merge's own scripts, matched on the FULL command rather
     than the two-token pattern this list is compared against."""
     ws = str(workspace.resolve()).rstrip("/")
-    return [
+    out = [
         "mcp__switchbay__*",
         # Grok strips the `mcp__` prefix and names MCP calls
         # `switchbay__<tool>` (the server slug is unambiguous — it's
@@ -214,6 +214,15 @@ def _builtin_allow(workspace: Path) -> list[str]:
         "ToolSearch(*)",
         f"Read({ws}/*)",
     ]
+    # Global skill installs (Read only). Cat/head of SKILL.md must not
+    # trip the home-scan hard-deny — the rail is allowed to see these.
+    try:
+        from . import skillkit
+        for root in skillkit.skill_read_roots():
+            out.append(f"Read({root}/*)")
+    except Exception:  # noqa: BLE001
+        pass
+    return out
 
 
 def ce_scope_allows(
@@ -265,6 +274,8 @@ def is_pre_approved(
     if tool and tool_input is not None and ce_scope_allows(
         workspace, tool, tool_input,
     ):
+        return True
+    if tool and tool_input is not None and _skill_read_allows(tool, tool_input):
         return True
     allows = _builtin_allow(workspace)
     allows.extend(_load_allow(workspace))
@@ -321,6 +332,49 @@ _ALWAYS_DENY_BIN = re.compile(
 )
 
 
+_SKILL_READ_BIN = re.compile(
+    r"^(?:cat|head|tail|less|more|ls|wc|file|stat)\b",
+    re.IGNORECASE,
+)
+
+
+def _skill_read_allows(tool: str, tool_input: dict[str, Any]) -> bool:
+    """True if this is a read of a global skill install (SKILL.md /
+    scripts). Write/edit of those trees still cards."""
+    from . import skillkit
+    if tool in ("Read", "Grep", "Glob"):
+        path = str(
+            tool_input.get("file_path")
+            or tool_input.get("path")
+            or tool_input.get("pattern")
+            or "",
+        )
+        # Glob pattern like `/Users/…/.agents/skills/**`
+        path = path.replace("**", "").rstrip("/*")
+        return skillkit.path_is_skill_read(path)
+    if tool in ("Bash", "Shell", "bash", "command_execution"):
+        return _bash_is_skill_read(str(tool_input.get("command") or tool_input.get("cmd") or ""))
+    return False
+
+
+def _bash_is_skill_read(cmd: str) -> bool:
+    """`cat ~/.agents/skills/foo/SKILL.md` and friends — not `ls ~`."""
+    from . import skillkit
+    t = (cmd or "").strip()
+    if not t or not _SKILL_READ_BIN.match(t):
+        return False
+    if any(ch in t for ch in (";", "|", "&", "`", "$(", ">", "<", "\n")):
+        return False
+    tokens = t.split()[1:]
+    paths = [
+        tok.strip("'\"") for tok in tokens
+        if tok.startswith(("~", "/", "$HOME", "${HOME}")) or "/skills/" in tok
+    ]
+    if not paths:
+        return False
+    return all(skillkit.path_is_skill_read(p) for p in paths)
+
+
 def hard_deny_reason(tool: str, tool_input: dict[str, Any]) -> str | None:
     """Return a human reason if this tool call is always denied.
 
@@ -350,13 +404,28 @@ def hard_deny_reason(tool: str, tool_input: dict[str, Any]) -> str | None:
     # `find /` bare (root of the volume)
     if re.search(r"\bfind\s+/\s*$", cmd) or re.search(r"\bfind\s+/\s+", cmd):
         return _HARD_DENY_MSG
-    # ls/tree/du of home
-    if _LIST_HOME.search(cmd):
+    # ls/tree/du of home — except a read confined to a skill install.
+    if _LIST_HOME.search(cmd) and not _bash_is_skill_read(cmd):
         return _HARD_DENY_MSG
     return None
 
 
 # ── Request / decide cycle ────────────────────────────────────────
+
+
+def _expire_stale_pending() -> None:
+    """Drop permission cards older than REQUEST_TIMEOUT_S so a wedged
+    hook cannot accumulate tool_input blobs forever."""
+    now = time.time()
+    stale = [
+        rid for rid, rec in _PENDING.items()
+        if now - rec.created_at > REQUEST_TIMEOUT_S
+    ]
+    for rid in stale:
+        rec = _PENDING.pop(rid, None)
+        if rec is not None:
+            rec.decision = "deny"
+            rec.event.set()
 
 
 def register(
@@ -367,6 +436,7 @@ def register(
 ) -> PendingRequest:
     """Create a new pending request. Caller is responsible for awaiting
     the returned `req.event` and reading `req.decision`."""
+    _expire_stale_pending()
     req_id = uuid.uuid4().hex[:12]
     rec = PendingRequest(
         req_id=req_id,
@@ -393,6 +463,7 @@ def list_pending() -> list[PendingRequest]:
     """Snapshot of all pending requests across workspaces — used by
     fresh WS connections to backfill any dialogs the user hasn't
     answered yet."""
+    _expire_stale_pending()
     return list(_PENDING.values())
 
 

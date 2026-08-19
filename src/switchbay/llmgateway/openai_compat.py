@@ -101,6 +101,32 @@ def messages_to_openai(
     return out
 
 
+def _sse_error_message(err: Any) -> str:
+    if isinstance(err, str) and err.strip():
+        return err.strip()[:400]
+    if isinstance(err, dict):
+        msg = err.get("message") or err.get("code") or err.get("type")
+        if msg:
+            return str(msg).strip()[:400]
+        try:
+            return json.dumps(err)[:400]
+        except (TypeError, ValueError):
+            return "server error"
+    return str(err)[:400]
+
+
+def _oomish(msg: str) -> bool:
+    low = msg.lower()
+    return any(
+        n in low
+        for n in (
+            "out of memory",
+            "insufficient memory",
+            "kiogpucommandbuffercallbackerroroutofmemory",
+        )
+    )
+
+
 async def parse_sse(
     content: Any,
     *,
@@ -111,25 +137,40 @@ async def parse_sse(
     Accumulates streamed `tool_calls` deltas and emits ToolUseChunk(s)
     with DoneChunk.stop_reason=\"tool_use\" so the daemon agent loop
     continues.
+
+    A dropped stream (mlx_lm.server dying mid-generate on Metal OOM)
+    used to look like a finished reply of garbage tokens. Incomplete
+    streams without ``[DONE]`` / ``finish_reason`` raise ProviderError.
     """
     input_tokens: int | None = None
     output_tokens: int | None = None
     stop_reason: str | None = None
     tool_acc: dict[int, dict[str, str]] = {}
+    saw_done = False
+    stream_error: str | None = None
 
     async for raw in content:
         line = raw.decode("utf-8", errors="replace").rstrip("\r\n")
+        if not line or line.startswith(":"):
+            continue
         if not line.startswith("data: "):
             continue
         payload = line[6:]
         if not payload:
             continue
         if payload == "[DONE]":
+            saw_done = True
             break
         try:
             evt = json.loads(payload)
         except json.JSONDecodeError:
             continue
+        if not isinstance(evt, dict):
+            continue
+        err = evt.get("error")
+        if err:
+            stream_error = _sse_error_message(err)
+            break
         for choice in evt.get("choices") or []:
             delta = choice.get("delta") or {}
             text = delta.get("content")
@@ -163,6 +204,26 @@ async def parse_sse(
             input_tokens = usage["prompt_tokens"]
         if "completion_tokens" in usage:
             output_tokens = usage["completion_tokens"]
+
+    if stream_error:
+        if _oomish(stream_error):
+            raise base.ProviderError(
+                "The local model ran out of memory mid-reply. Stop other "
+                "local servers in Settings, then retry (or use a cloud "
+                f"provider). {stream_error}",
+                code="server", retryable=True,
+            )
+        raise base.ProviderError(
+            f"Local model server error: {stream_error}",
+            code="server", retryable=True,
+        )
+    if not saw_done and not stop_reason and not tool_acc:
+        raise base.ProviderError(
+            "The local model stopped generating mid-reply (often out of "
+            "memory). Open Settings → Watch server for the Metal/llama "
+            "log, stop leftover local servers, and retry.",
+            code="server", retryable=True,
+        )
 
     for idx in sorted(tool_acc):
         slot = tool_acc[idx]

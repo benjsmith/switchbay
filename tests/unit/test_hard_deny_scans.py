@@ -82,6 +82,22 @@ def test_find_dot_allowed():
     _ok("find wiki sources -name '*.pdf'")
 
 
+def test_cat_global_skill_is_not_hard_denied(tmp_path, monkeypatch):
+    root = tmp_path / "agents" / "skills"
+    (root / "curiosity-engine").mkdir(parents=True)
+    (root / "curiosity-engine" / "SKILL.md").write_text("# x\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "switchbay.skillkit.skill_read_roots", lambda: [root.resolve()])
+    monkeypatch.setattr(
+        "switchbay.skillkit._global_skill_roots", lambda: [root])
+    _ok(f"cat {root / 'curiosity-engine' / 'SKILL.md'}")
+    _ok(f"head -n 20 {root / 'curiosity-engine' / 'SKILL.md'}")
+    _ok(f"ls {root}")
+    # Home itself is still blocked.
+    _blocked("ls ~")
+    _blocked("cat ~/.zshrc")
+
+
 def test_ls_workspace_allowed():
     _ok("ls")
     _ok("ls -la")

@@ -27,6 +27,18 @@ def test_inject_on_disk_pages_adds_missing_node(tmp_path: Path) -> None:
     assert "concepts/attention" in ids
 
 
+def test_inject_caps_body_html(tmp_path: Path) -> None:
+    blob = "word " * 5000
+    _page(tmp_path, "concepts/huge.md", "[con] Huge", blob)
+    data: dict = {"pages": {}, "nodes": [], "edges": []}
+    wiki_sync.inject_on_disk_pages(tmp_path, data)
+    html = data["pages"]["concepts/huge"]["body_html"]
+    assert len(html) < wiki_sync._BODY_HTML_CAP + 200
+    slim = {"pages": {"concepts/huge": {"body_html": "<p>" + "x" * 50_000 + "</p>"}}}
+    wiki_sync.slim_graph_payload(slim)
+    assert len(slim["pages"]["concepts/huge"]["body_html"]) < 8_000
+
+
 def test_inject_adds_wikilink_edges(tmp_path: Path) -> None:
     _page(tmp_path, "concepts/attention.md", "[con] Attention", "See also.")
     _page(

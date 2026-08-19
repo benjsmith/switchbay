@@ -763,6 +763,34 @@ def scan_cached_mlx() -> list[dict[str, Any]]:
     return list(by_id.values())
 
 
+def mlx_cache_bytes(repo: str) -> int:
+    """Bytes on disk for an MLX HF repo, including an in-progress download.
+
+    Hugging Face writes blobs before a snapshot is complete, so counting
+    only a finished snapshot made the install bar sit at 0% then jump
+    to ready.
+    """
+    want = (repo or "").strip().lower()
+    if not want:
+        return 0
+    slug = "models--" + want.replace("/", "--")
+    best = 0
+    for cache in _hf_hub_caches():
+        d = cache / slug
+        if not d.is_dir():
+            continue
+        total = 0
+        try:
+            for p in d.rglob("*"):
+                if p.is_file():
+                    total += p.stat().st_size
+        except OSError:
+            pass
+        if total > best:
+            best = total
+    return best
+
+
 def list_installed() -> list[dict[str, Any]]:
     reg = load_registry()
     out = list((reg.get("installed") or {}).values())

@@ -42,6 +42,18 @@ def test_reopen_appends_when_not_pinned(tmp_path: Path) -> None:
     assert _tabs(tmp_path)[-1] == "intro"
 
 
+def test_reviews_tab_close_and_readd(tmp_path: Path) -> None:
+    tab = tabstore.add_report_tab(tmp_path)
+    assert tab is not None and tab["kind"] == "report"
+    assert tab["title"] == "Reviews"
+    assert _tabs(tmp_path).count("report") == 1
+    assert tabstore.remove_report_tab(tmp_path) is True
+    assert "report" not in _tabs(tmp_path)
+    assert tabstore.remove_report_tab(tmp_path) is False
+    tabstore.add_report_tab(tmp_path)
+    assert _tabs(tmp_path).count("report") == 1
+
+
 def test_remove_is_a_noop_when_absent(tmp_path: Path) -> None:
     # A fresh workspace with a real mode.json but no Intro tab.
     tabstore.add_intro_tab(tmp_path, pin_first=True)

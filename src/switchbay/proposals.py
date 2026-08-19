@@ -1,18 +1,11 @@
-"""Page proposals — the local model's write path, gated by review.
+"""Page proposals — provisional wiki writes, reviewed in the Reviews tab.
 
-The rail tool registry is read-only for the wiki (search/read/list), so
-the local model can't mutate it directly. That's deliberate: a small
-model confidently hallucinates specifics (a fabricated scaling exponent,
-HBM mis-defined) and once reached to *delete* a charter it had read a
-"preserve" ruling for. So it PROPOSES, it doesn't mutate:
-
-  propose_wiki_page / propose_page_edit  →  a proposal here (status
-  "proposed")  →  a strong reviewer auto-vets it (accept | edit |
-  reject)  →  a rail review card  →  accept writes the page.
+Curation writes as it goes (status "proposed"). Reject restores the
+previous file (or deletes a new one). Comments rewrite the provisional
+page. A reviewer card may attach, but never auto-files or auto-reverts.
 
 Store: `<workspace>/.workbench/state/page_proposals.json` (machine-local
-state, regenerable; never on a sync service). Mirrors the D9 decisions
-sidecar shape so the two review flows feel the same.
+state, regenerable; never on a sync service).
 """
 
 from __future__ import annotations
@@ -86,17 +79,63 @@ def target_path(workspace: Path, kind: str, title: str) -> Path:
     return workspace / "wiki" / folder / f"{slugify(title)}.md"
 
 
+CHARTER_REL = ".workbench/plan/charter.md"
+_COMMENT_HEAD = "\n\n## Review comments\n\n"
+_COMMENT_RE = re.compile(r"\n## Review comments\n.*\Z", re.S)
+
+
+def _writable_rel(rel: str) -> bool:
+    if not rel or ".." in rel.split("/"):
+        return False
+    return rel.startswith("wiki/") or rel == CHARTER_REL
+
+
+_SCAFFOLD_BODY_CAP = 2000
+
+
+def clip_scaffold_body(body: str, *, title: str = "", cap: int = _SCAFFOLD_BODY_CAP) -> str:
+    """Keep a local-model draft short enough to be a Reviews scaffold."""
+    text = (body or "").strip()
+    if len(text) <= cap:
+        return text
+    cut = text[:cap].rsplit("\n", 1)[0]
+    extra = (
+        "\n\n## Open questions\n\n"
+        "- Draft truncated — too long for a local-model scaffold. "
+        "A reviewer should expand from sources, not from the cut-off prose."
+    )
+    if "## Open questions" in cut:
+        extra = "\n\n*(truncated for scaffold cap)*"
+    return cut + extra
+
+
 def add(
     workspace: Path, *, op: str, kind: str, title: str, body: str,
     path: str | None = None, ts: float | None = None,
+    scaffold: bool = False,
 ) -> dict[str, Any]:
     """Record a proposal (status 'proposed'). `op` is 'create' or 'edit'.
-    For 'create' the target is derived from kind+title; for 'edit' the
-    caller supplies the existing page `path` (repo-relative)."""
+    Writes the page immediately (provisional). Reject restores `original`
+    or deletes a new file. For 'create' the target is derived from
+    kind+title; for 'edit' the caller supplies the existing page `path`
+    (repo-relative, or the workspace charter)."""
     if op == "edit" and path:
-        rel = path if path.startswith("wiki/") else f"wiki/{path.lstrip('/')}"
+        rel = path.lstrip("/")
+        if rel != CHARTER_REL and not rel.startswith("wiki/"):
+            rel = f"wiki/{rel}"
     else:
         rel = str(target_path(workspace, kind, title).relative_to(workspace))
+    original: str | None = None
+    written = False
+    if _writable_rel(rel):
+        dest = workspace / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            original = dest.read_text(encoding="utf-8")
+        except OSError:
+            original = None
+        dest.write_text((body or "").rstrip() + "\n", encoding="utf-8")
+        written = True
     entry = {
         "id": f"prop-{uuid.uuid4().hex[:8]}",
         "op": op,
@@ -107,6 +146,9 @@ def add(
         "status": "proposed",           # proposed → accepted | dismissed
         "created_at": ts if ts is not None else time.time(),
         "review": None,                 # {verdict, confidence, issues, one_line}
+        "original": original,           # prior file text; None = new page
+        "written": written,             # already on disk (provisional)
+        "scaffold": bool(scaffold),     # light outline, not finished prose
     }
     entries = list_proposals(workspace)
     entries.append(entry)
@@ -115,13 +157,12 @@ def add(
 
 
 def accept(workspace: Path, pid: str) -> dict[str, Any] | None:
-    """Write the proposed page (create or overwrite the edit target),
-    mark the proposal accepted. Never deletes. Returns the entry."""
+    """Keep the provisional page (rewrite if body changed), mark accepted."""
     e = get(workspace, pid)
     if e is None or e.get("status") != "proposed":
         return None
     rel = str(e.get("path") or "")
-    if not rel.startswith("wiki/") or ".." in rel:
+    if not _writable_rel(rel):
         return update(workspace, pid, status="dismissed",
                       error="unsafe path refused")
     dest = workspace / rel
@@ -131,4 +172,47 @@ def accept(workspace: Path, pid: str) -> dict[str, Any] | None:
 
 
 def dismiss(workspace: Path, pid: str) -> dict[str, Any] | None:
+    """Reject: revert a provisional write (restore original or delete)."""
+    e = get(workspace, pid)
+    if e is None or e.get("status") != "proposed":
+        return None
+    rel = str(e.get("path") or "")
+    if e.get("written") and _writable_rel(rel):
+        dest = workspace / rel
+        original = e.get("original")
+        if original is None:
+            try:
+                dest.unlink()
+            except OSError:
+                pass
+        else:
+            try:
+                dest.write_text(str(original), encoding="utf-8")
+            except OSError:
+                pass
     return update(workspace, pid, status="dismissed", dismissed_at=time.time())
+
+
+def apply_comments(workspace: Path, pid: str, comments: str) -> dict[str, Any] | None:
+    """Store comments and rewrite the provisional page with them.
+
+    A `## Review comments` section is replaced in-place so the wiki
+    reflects the user's notes immediately. Reject still restores
+    `original`.
+    """
+    e = get(workspace, pid)
+    if e is None or e.get("status") != "proposed":
+        return None
+    note = (comments or "").strip()
+    body = _COMMENT_RE.sub("", str(e.get("body") or "")).rstrip()
+    if note:
+        body = body + _COMMENT_HEAD + note + "\n"
+    rel = str(e.get("path") or "")
+    if e.get("written") and _writable_rel(rel):
+        dest = workspace / rel
+        try:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text(body.rstrip() + "\n", encoding="utf-8")
+        except OSError:
+            pass
+    return update(workspace, pid, comments=note, body=body)

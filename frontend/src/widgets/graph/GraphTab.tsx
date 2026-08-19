@@ -82,6 +82,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   // graph.js lives across re-mounts; mountGraph resets the
   // container DOM and calls each module's `init(data)` afresh.
   const mountedDataRef = useRef<GraphData | null>(null);
+  const remountingRef = useRef(false);
   const [mounted, setMounted] = useState(false);
   const [viewerMode, setViewerMode] = useState<"classic" | "atlas">("classic");
   const [viewerGen, setViewerGen] = useState(0);
@@ -179,6 +180,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   useEffect(() => {
     if (!data || !containerRef.current) return;
     if (mountedDataRef.current === data) return;
+    remountingRef.current = true;
     mountedDataRef.current = data;
     const mountedView = mountGraph(containerRef.current, data, {
       onSelectPage: (id) => selectPageRef.current(id),
@@ -191,16 +193,20 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     }
     if (window.Modal && window.Modal.setOnClose) {
       window.Modal.setOnClose(() => {
+        if (remountingRef.current) return;
         try { window.Graph.clearFocus(); } catch { /* ignore */ }
         setSelection(null);
       });
     }
     setMounted(true);
+    window.requestAnimationFrame(() => { remountingRef.current = false; });
   }, [data, setSelection, viewerGen]);
 
-  // Drive CE modules from the selection layer.
+  // Drive CE modules from the selection layer. Re-apply after a
+  // files_changed remount (`data` / viewerGen change) so a wiki
+  // refresh does not drop the user's highlight.
   useEffect(() => {
-    if (!mounted) return;
+    if (!mounted || !data) return;
     if (!selection || selection.kind !== "page") {
       if (!suppressDocModal) {
         try { window.Modal.close(); } catch { /* ignore */ }
@@ -213,7 +219,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     }
     try { window.Graph.focus(selection.id); } catch { /* ignore */ }
     try { window.Sidebar.setActive(selection.id); } catch { /* ignore */ }
-  }, [selection, mounted, suppressDocModal]);
+  }, [selection, mounted, suppressDocModal, data, viewerGen]);
 
   if (error) {
     return (

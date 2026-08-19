@@ -3,6 +3,53 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## Unreleased
+
+**Migration:** none. **Breaking:** none.
+
+A 4B local curate no longer dumps the full tool rail (~15k prompt
+tokens), Metal-OOM, and stream garbage. RAM-scaled desks plus
+slash-specific palettes keep the request inside the budget. Watch
+and Stop follow the server that is actually serving. Settings can
+pull a GitHub release.
+
+### Fixed
+
+- **Local curate OOM / garbled rail** — the 4B path was offered every
+  rail tool. Mid-generate Metal OOM still returned SSE 200 with
+  `Privacy Privacy` junk. Local models now get a RAM-scaled desk
+  (16–128 GB, capped by loaded model size) and a token budget.
+  Incomplete / OOM streams surface as errors. The host runs the
+  mechanical sweep so a small model is a worker, not the sweeper.
+  Small rungs write Reviews scaffolds, not invented prose.
+- **Watch / Stop leftover servers** — Watch always tailed
+  `llama-server.log` while MLX wrote `llama-server-mlx_*.log`.
+  Settings showed SERVING with no Stop when an orphan
+  `start_new_session` process held the port. Watch follows the
+  active slot; Stop reaps the port; spawn frees leftovers first.
+- **Slash palettes** — `/curate` used the curate desk; deck populate
+  and a user `/create-deck` still got the default local chat list
+  (deck tools banned). Each agent-backed slash now loads only the
+  tools it needs, clipped to the budget. Customize on Agent
+  Dashboard → Command palettes.
+- **MLX model alias** — a request that did not match `default_model`
+  404'd. Alias and default now agree.
+- **`yes` as chat** — typing "yes" in the rail no longer spawned the
+  unix `yes` command in a new shell thread.
+- **Graph remount / Atlas click** — a wiki refresh no longer drops
+  the highlight or races the page closed then open again.
+
+### Added
+
+- **Settings → Update** — compare running Switch Bay / curiosity-engine
+  / curiosity-merge to GitHub latest and apply in place, then restart.
+- **Workspace plan tools** — charter / work-plan / log under
+  `.workbench/plan/`.
+- **Progressive `load_skill`** — frontmatter first, then one section;
+  global skill reads do not raise a permission card.
+- **macOS TCC notes** — python3.13 "other apps" / Keychain prompts
+  documented in the README (expected on first start).
+
 ## 2026-08-18 — v0.9.10 — new-install pin, global skills, honest picker
 
 **Migration:** none. **Breaking:** none.

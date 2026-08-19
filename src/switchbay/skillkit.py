@@ -286,15 +286,200 @@ def get_skill(workspace: Path, name: str) -> Skill | None:
     return None
 
 
+# First-party skills whose work is already reachable via Switch Bay
+# tools. The agent should use these instead of (or before) loading the
+# full SKILL.md — skills drift, so a peek still matters.
+SKILL_TOOL_COVERAGE: dict[str, tuple[str, ...]] = {
+    "curiosity-engine": (
+        "ce_epoch_summary", "ce_planner", "ce_sweep", "ce_run",
+        "ce_graph_rebuild", "ce_graph_retrieve", "ce_graph_neighbors",
+        "ce_graph_path", "ce_shared_sources", "ce_bridge_candidates",
+        "ce_ingest", "ce_lint", "ce_vault_search", "ce_vault_index",
+        "ce_query", "ce_score_diff", "ce_scrub_check", "ce_naming",
+        "ce_tables", "ce_figures", "ce_scan",
+        "search_wiki", "read_wiki_page", "list_wiki_pages",
+        "wiki_neighbors", "wiki_path", "wiki_shared_sources",
+        "wiki_related_by_sources",
+        "propose_wiki_page", "propose_page_edit",
+    ),
+}
+
+MIRROR_DIR = Path(".workbench") / "skill-mirrors"
+_HEADING_RE = re.compile(r"^(#{1,3})\s+(.+?)\s*$")
+
+
+def coverage_for(name: str) -> list[str]:
+    return list(SKILL_TOOL_COVERAGE.get(name or "", ()))
+
+
+def body_headings(body: str) -> list[str]:
+    out: list[str] = []
+    for line in (body or "").splitlines():
+        m = _HEADING_RE.match(line)
+        if m and len(m.group(1)) >= 2:
+            out.append(m.group(2).strip())
+        if len(out) >= 40:
+            break
+    return out
+
+
+def extract_section(body: str, heading: str) -> str | None:
+    """Return one `##` / `###` section (heading line + body), or None."""
+    chunk = extract_section_chunk(body, heading)
+    return None if chunk is None else chunk[0]
+
+
+def extract_section_chunk(
+    body: str, heading: str,
+) -> tuple[str, int, list[str]] | None:
+    """(section text, heading-level, child headings) or None."""
+    want = (heading or "").strip().lstrip("#").strip().lower()
+    if not want or not body:
+        return None
+    lines = body.splitlines()
+    start: int | None = None
+    level = 2
+    for i, line in enumerate(lines):
+        m = _HEADING_RE.match(line)
+        if m and m.group(2).strip().lower() == want:
+            start = i
+            level = len(m.group(1))
+            break
+    if start is None:
+        return None
+    end = len(lines)
+    for j in range(start + 1, len(lines)):
+        m = _HEADING_RE.match(lines[j])
+        if m and len(m.group(1)) <= level:
+            end = j
+            break
+    text = "\n".join(lines[start:end]).strip()
+    children: list[str] = []
+    for line in lines[start + 1:end]:
+        m = _HEADING_RE.match(line)
+        if m and len(m.group(1)) > level:
+            children.append(m.group(2).strip())
+    return text, level, children
+
+
+SECTION_SOFT_CAP = 4000  # chars fed to a small model per section
+
+
+def progressive_section(body: str, heading: str) -> dict[str, object] | None:
+    """Load one heading. If it is still huge, return an outline of
+    child headings instead of the whole chapter (small-context path)."""
+    chunk = extract_section_chunk(body, heading)
+    if chunk is None:
+        return None
+    text, _level, children = chunk
+    if len(text) <= SECTION_SOFT_CAP:
+        return {
+            "detail": "section",
+            "section": heading,
+            "body": text,
+            "child_headings": children,
+        }
+    preview = text[:SECTION_SOFT_CAP].rsplit("\n", 1)[0]
+    return {
+        "detail": "section-outline",
+        "section": heading,
+        "body": preview + "\n\n…[truncated — load a child heading]",
+        "child_headings": children,
+        "body_chars": len(text),
+        "hint": (
+            "This chapter is too large for a small context window. "
+            "Call load_skill again with section set to one of "
+            "child_headings."
+        ),
+    }
+
+
+def skill_read_roots() -> list[Path]:
+    """Directories the rail may Read without a card: global skill
+    installs (and the CE checkout). Write is still refused."""
+    roots: list[Path] = []
+    seen: set[str] = set()
+    for r in _global_skill_roots():
+        try:
+            if r.is_dir():
+                key = str(r.resolve())
+                if key not in seen:
+                    seen.add(key)
+                    roots.append(r.resolve())
+        except OSError:
+            continue
+    try:
+        from . import cebridge
+        ce = cebridge.ce_root()
+        if ce.is_dir():
+            key = str(ce.resolve())
+            if key not in seen:
+                seen.add(key)
+                roots.append(ce.resolve())
+    except Exception:  # noqa: BLE001
+        pass
+    return roots
+
+
+def path_is_skill_read(path: str) -> bool:
+    raw = (path or "").strip().strip("'\"")
+    if not raw:
+        return False
+    try:
+        p = Path(raw).expanduser()
+        if not p.is_absolute():
+            # relative skill paths aren't global; workspace Read covers those
+            return False
+        p = p.resolve()
+    except OSError:
+        return False
+    for root in skill_read_roots():
+        try:
+            p.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
+
+
 def to_summary(sk: Skill) -> dict[str, object]:
     """Listing-friendly dict: drops the body to keep the listing API
     cheap. Use get_skill / load_skill (the MCP tool) for the body."""
+    covered = coverage_for(sk.name)
     return {
         "name": sk.name,
         "description": sk.description,
         "when_to_use": sk.when_to_use,
         "source": sk.source,
         "path": sk.path,
+        "body_chars": len(sk.body or ""),
+        "headings": body_headings(sk.body),
+        "covered_by": covered,
+    }
+
+
+def to_peek(sk: Skill) -> dict[str, object]:
+    """Frontmatter + map of already-available tools. Prefer this
+    over the full body; load a section or `detail=full` only if the
+    peek says you need extra skill prose."""
+    covered = coverage_for(sk.name)
+    if covered:
+        hint = (
+            "Prefer the covered_by tools (they work in this sandbox). "
+            "Call load_skill again with section='Heading' or "
+            "detail=full only if you need skill prose those tools "
+            "do not cover."
+        )
+    else:
+        hint = (
+            "No first-party tools cover this skill yet — load "
+            "detail=full or a named section."
+        )
+    return {
+        **to_summary(sk),
+        "extras": sk.extras,
+        "detail": "frontmatter",
+        "hint": hint,
     }
 
 
@@ -306,7 +491,91 @@ def to_full(sk: Skill) -> dict[str, object]:
         "body": sk.body,
         "extras": sk.extras,
         "writable": sk.source in WRITABLE_SOURCES,
+        "detail": "full",
     }
+
+
+def peek_from_payload(skill: dict[str, object]) -> dict[str, object]:
+    """Shrink a full load_skill payload to a frontmatter peek."""
+    body = str(skill.get("body") or "")
+    name = str(skill.get("name") or "")
+    covered = skill.get("covered_by")
+    if not isinstance(covered, list):
+        covered = coverage_for(name)
+    return {
+        "name": name,
+        "description": skill.get("description") or "",
+        "when_to_use": skill.get("when_to_use") or "",
+        "source": skill.get("source") or "",
+        "path": skill.get("path") or "",
+        "extras": skill.get("extras") or {},
+        "body_chars": skill.get("body_chars") or len(body),
+        "headings": skill.get("headings") or body_headings(body),
+        "covered_by": covered,
+        "detail": "frontmatter",
+        "hint": (
+            "Full body exceeded this model's context. Use covered_by "
+            "tools, or load_skill with section='Heading'."
+        ),
+    }
+
+
+def mirror_root(workspace: Path) -> Path:
+    return Path(workspace) / MIRROR_DIR
+
+
+def mirror_into_workspace(workspace: Path) -> Path:
+    """Copy each discovered SKILL.md into `.workbench/skill-mirrors/`
+    so a workspace-sandboxed shell can Read it. Not a symlink — a
+    write through a symlink would escape the sandbox into the real
+    skill install. Scripts stay at the real skill root (use ce_run)."""
+    root = mirror_root(workspace)
+    root.mkdir(parents=True, exist_ok=True)
+    cards: list[str] = [
+        "# Skill index",
+        "",
+        "Auto-generated. Prefer Switch Bay tools, then "
+        "`load_skill(name, detail=frontmatter)`. Full SKILL.md copies "
+        "live beside this file so a sandboxed shell can Read them. "
+        "Do not `cat`/`find` `~/.agents/skills` — that tree is outside "
+        "the rail sandbox.",
+        "",
+    ]
+    for sk in list_skills(workspace):
+        dest_dir = root / sk.name
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / SKILL_FILE
+        src = Path(sk.path)
+        try:
+            src_mtime = src.stat().st_mtime if src.is_file() else 0
+            dst_mtime = dest.stat().st_mtime if dest.is_file() else 0
+            if src.is_file() and src_mtime > dst_mtime:
+                dest.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            elif not dest.is_file():
+                dest.write_text(
+                    f"---\nname: {sk.name}\ndescription: {sk.description}\n---\n\n"
+                    + (sk.body or ""),
+                    encoding="utf-8",
+                )
+        except OSError:
+            log.exception("skill mirror failed for %s", sk.name)
+        covered = coverage_for(sk.name)
+        cards.append(f"## {sk.name}")
+        cards.append(f"- path: `.workbench/skill-mirrors/{sk.name}/SKILL.md`")
+        cards.append(f"- source: {sk.source}")
+        if sk.when_to_use:
+            cards.append(f"- when: {sk.when_to_use}")
+        if covered:
+            cards.append(f"- covered_by: {', '.join(covered)}")
+        cards.append("")
+    index = root / "INDEX.md"
+    try:
+        atomic_text = "\n".join(cards).rstrip() + "\n"
+        if not index.is_file() or index.read_text(encoding="utf-8") != atomic_text:
+            index.write_text(atomic_text, encoding="utf-8")
+    except OSError:
+        log.exception("skill index write failed")
+    return root
 
 
 # ── Authoring (create / edit / delete / promote) ────────────────────

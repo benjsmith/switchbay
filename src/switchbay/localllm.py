@@ -40,6 +40,8 @@ import logging
 import os
 import re
 import shutil
+import signal
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -166,10 +168,44 @@ def models_dir() -> Path:
 
 
 def server_log_path() -> Path:
-    """Where the managed llama-server's stdout/stderr is captured, so
-    the user can watch it (Settings → Watch server). Truncated on each
-    spawn — it reflects the CURRENT server session."""
+    """Default/Ornith llama-server log (legacy slot key ``default``).
+
+    Watch and spawn must use ``watch_log_path`` / ``server_log_path_for``
+    so an MLX slot is not mistaken for this file.
+    """
     return statedir.state_root() / "llama-server.log"
+
+
+def server_process_label(
+    cfg: dict[str, Any] | None = None,
+    *,
+    candidate_id: str | None = None,
+) -> str:
+    """Short name for the managed process (log header, Watch thread)."""
+    cid = str(candidate_id or (cfg or {}).get("candidate_id") or "").strip()
+    backend = str((cfg or {}).get("backend") or "")
+    if cid.startswith("mlx:") or backend == "mlx":
+        return "mlx-server"
+    return "llama-server"
+
+
+def watch_log_path(
+    cfg: dict[str, Any] | None = None,
+    candidate_id: str | None = None,
+) -> Path:
+    """Log file Settings → Watch server should tail.
+
+    Spawn writes ``server_log_path_for(_slot_key(cfg))``. Watch used to
+    always open ``llama-server.log`` (the Ornith default slot), so an
+    MLX model serving on another port showed a leftover llama.cpp
+    bind-fail instead of ``mlx_lm.server``.
+    """
+    key = str(candidate_id or "").strip()
+    if not key:
+        if cfg is None:
+            cfg = load_config()
+        key = _slot_key(cfg) if cfg else "default"
+    return server_log_path_for(key)
 
 
 # ── Model harness (silent for casual users, editable for power users) ─
@@ -191,7 +227,7 @@ def server_log_path() -> Path:
 
 DEFAULT_HARNESS = """\
 ---
-applies_to: llamacpp
+applies_to: llamacpp mlx
 ---
 
 You are an executor. Act; do not describe, rate, or explain yourself.
@@ -209,7 +245,13 @@ you are unsure of a specific, leave it out or mark it unverified rather
 than guess. (This is about the content you output, not a cue to
 re-examine yourself.)
 For the knowledge base, use the wiki tools directly (search_wiki,
-read_wiki_page, wiki_neighbors) — do not load a skill.
+read_wiki_page, wiki_neighbors).
+To curate, call ce_epoch_summary once, then search_wiki / read
+pages, then propose_wiki_page with scaffold=true (light outline
+for Reviews — not a finished encyclopedia). Do not run a full
+sweep or invent facts. Skills: load_skill(name) returns
+frontmatter + headings; then section="Heading" one chapter.
+Never request detail=full. Reviews is a backlog.
 """
 
 # The judge-refine ceiling: once the harness passes this many lines the
@@ -310,7 +352,16 @@ def load_config() -> dict[str, Any] | None:
         cfg = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    return cfg if isinstance(cfg, dict) and cfg.get("file") else None
+    if not isinstance(cfg, dict):
+        return None
+    if cfg.get("file"):
+        return cfg
+    # MLX configs have repo / local_path, never a GGUF `file`. Treating
+    # them as missing made Settings show ACTIVE + "not responding"
+    # (status never probed the port) and blocked boot respawn.
+    if cfg.get("backend") == "mlx" and (cfg.get("repo") or cfg.get("local_path") or cfg.get("model")):
+        return cfg
+    return None
 
 
 def save_config(cfg: dict[str, Any]) -> None:
@@ -521,6 +572,185 @@ def _slot_key(cfg: dict[str, Any]) -> str:
     )
 
 
+def _is_managed_server_cmd(cmd: str) -> bool:
+    """True if ``cmd`` is a llama-server or mlx_lm.server we spawned."""
+    return "llama-server" in cmd or "mlx_lm.server" in cmd
+
+
+def _ps_pid_args() -> list[tuple[int, str]]:
+    try:
+        out = subprocess.check_output(
+            ["ps", "-ax", "-o", "pid=", "-o", "args="],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return []
+    rows: list[tuple[int, str]] = []
+    for line in out.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            rows.append((int(parts[0]), parts[1]))
+        except ValueError:
+            continue
+    return rows
+
+
+def _cmd_targets_port(cmd: str, port: int) -> bool:
+    token = str(int(port))
+    return f"--port {token}" in cmd or f"--port={token}" in cmd
+
+
+def _port_from_cmd(cmd: str) -> int | None:
+    m = re.search(r"--port(?:=|\s+)(\d+)", cmd)
+    if not m:
+        return None
+    try:
+        return int(m.group(1))
+    except ValueError:
+        return None
+
+
+def _pids_listening_on(port: int) -> set[int]:
+    """PIDs with a TCP LISTEN socket on ``port`` (lsof)."""
+    try:
+        out = subprocess.check_output(
+            ["lsof", "-nP", f"-iTCP:{int(port)}", "-sTCP:LISTEN", "-t"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return set()
+    pids: set[int] = set()
+    for line in out.split():
+        try:
+            pids.add(int(line))
+        except ValueError:
+            continue
+    return pids
+
+
+def _match_installed(
+    cmd: str,
+    port: int | None,
+    installed: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Map a live llama/mlx process back to a registry row."""
+    by_port: dict[str, Any] | None = None
+    for meta in installed:
+        if not isinstance(meta, dict):
+            continue
+        if port is not None and meta.get("port") is not None:
+            try:
+                if int(meta["port"]) == int(port):
+                    by_port = meta
+            except (TypeError, ValueError):
+                pass
+        path = str(meta.get("file") or meta.get("local_path") or "")
+        if path and path in cmd:
+            return meta
+        alias = str(meta.get("alias") or "")
+        if alias and f"--alias {alias}" in cmd:
+            return meta
+        repo = str(meta.get("repo") or "")
+        if repo and repo in cmd:
+            return meta
+    return by_port
+
+
+def _discover_managed_listeners(
+    installed: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """llama-server / mlx_lm.server processes that currently hold a port.
+
+    Daemon refresh orphans (``start_new_session``) are invisible in
+    ``app["localllm_servers"]`` but still serve — Settings must list
+    them so Stop is offered.
+    """
+    installed = installed or []
+    rows: list[dict[str, Any]] = []
+    seen_ports: set[int] = set()
+    listen_cache: dict[int, set[int]] = {}
+    for pid, cmd in _ps_pid_args():
+        if pid == os.getpid() or not _is_managed_server_cmd(cmd):
+            continue
+        port = _port_from_cmd(cmd)
+        if port is None or port in seen_ports:
+            continue
+        if port not in listen_cache:
+            listen_cache[port] = _pids_listening_on(port)
+        if pid not in listen_cache[port]:
+            continue
+        seen_ports.add(port)
+        match = _match_installed(cmd, port, installed)
+        backend = "mlx" if "mlx_lm.server" in cmd else "llamacpp"
+        rows.append({
+            "id": str((match or {}).get("id") or f"orphan:{port}"),
+            "port": port,
+            "alive": True,
+            "pid": pid,
+            "alias": (match or {}).get("alias"),
+            "file": (match or {}).get("file"),
+            "model_label": (match or {}).get("label") or (match or {}).get("model_label"),
+            "backend": backend,
+            "orphan": True,
+        })
+    return rows
+
+
+def _managed_pids_for_port(port: int) -> list[int]:
+    """llama-server / mlx_lm.server processes aimed at ``port``.
+
+    Includes copies that failed to bind (daemon refresh orphans) so
+    spawn can reap them, not only the listener lsof would see.
+    """
+    me = os.getpid()
+    out: list[int] = []
+    for pid, cmd in _ps_pid_args():
+        if pid == me:
+            continue
+        if not _is_managed_server_cmd(cmd):
+            continue
+        if _cmd_targets_port(cmd, port):
+            out.append(pid)
+    return out
+
+
+async def _free_managed_port(port: int) -> None:
+    """Stop leftover managed servers still claiming ``port``.
+
+    ``spawn_server`` uses ``start_new_session``, so a daemon refresh
+    can orphan the previous mlx_lm.server / llama-server. The next
+    spawn then fails to bind while ``/v1/models`` still hits the
+    orphan — Watch looks like a bind-fail, curate looks like a
+    server error against a process the daemon no longer owns.
+    """
+    pids = _managed_pids_for_port(port)
+    if not pids:
+        return
+    log.info("freeing port %s: stopping leftover pids %s", port, pids)
+    for pid in pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    deadline = time.time() + 8
+    while time.time() < deadline:
+        left = _managed_pids_for_port(port)
+        if not left:
+            return
+        await asyncio.sleep(0.2)
+    for pid in _managed_pids_for_port(port):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
 async def _stop_slot(app: dict, key: str) -> None:
     servers = _servers(app)
     slot = servers.pop(key, None)
@@ -548,11 +778,12 @@ async def _stop_slot(app: dict, key: str) -> None:
 
 
 async def spawn_server(app: dict, cfg: dict[str, Any]) -> None:
-    """Start a managed llama-server for ``cfg``.
+    """Start the managed local server for ``cfg`` (llama-server or
+    ``mlx_lm.server``). Chat uses ``load_config``'s port, not a
+    leftover process on another slot.
 
     If another server already owns this candidate_id, it is replaced.
-    Other candidates keep running (multi-active). The active config
-    (``load_config``) is what chat uses; call ``activate`` via
+    Other candidates keep running (multi-active). Call ``activate`` via
     local_models to retarget the ladder / config.
     """
     key = _slot_key(cfg)
@@ -562,6 +793,9 @@ async def spawn_server(app: dict, cfg: dict[str, Any]) -> None:
     for other_key, slot in list(_servers(app).items()):
         if int((slot.get("cfg") or {}).get("port") or 0) == port:
             await _stop_slot(app, other_key)
+    # Orphans from a previous daemon (start_new_session) still occupy
+    # the port; stop_slot only knows about *this* process's children.
+    await _free_managed_port(port)
 
     binp = binary_for(cfg)
     if not binp:
@@ -571,15 +805,17 @@ async def spawn_server(app: dict, cfg: dict[str, Any]) -> None:
         )
         return
     logp = server_log_path_for(key)
+    label = server_process_label(cfg, candidate_id=key)
     logp.parent.mkdir(parents=True, exist_ok=True)
+    argv = server_args(binp, cfg)
     try:
         logf = logp.open("w", encoding="utf-8")
-        logf.write(f"# llama-server starting: {' '.join(server_args(binp, cfg))}\n")
+        logf.write(f"# {label} starting: {' '.join(argv)}\n")
         logf.flush()
     except OSError:
         logf = None
     proc = await asyncio.create_subprocess_exec(
-        *server_args(binp, cfg),
+        *argv,
         stdout=(logf or asyncio.subprocess.DEVNULL),
         stderr=(asyncio.subprocess.STDOUT if logf else asyncio.subprocess.DEVNULL),
         start_new_session=True,
@@ -591,17 +827,47 @@ async def spawn_server(app: dict, cfg: dict[str, Any]) -> None:
         app["localllm_proc"] = proc
         app["localllm_logf"] = logf
     log.info(
-        "llama-server started key=%s pid=%d port=%s ctx=%s",
-        key, proc.pid, port, cfg.get("ctx"),
+        "%s started key=%s pid=%d port=%s ctx=%s backend=%s",
+        label, key, proc.pid, port, cfg.get("ctx"),
+        cfg.get("backend") or "llamacpp",
     )
 
 
-async def stop_server(app: dict, candidate_id: str | None = None) -> None:
-    """Stop one server (by id) or all managed servers."""
+async def stop_server(
+    app: dict,
+    candidate_id: str | None = None,
+    *,
+    port: int | None = None,
+) -> None:
+    """Stop one server (by id) or all managed servers.
+
+    ``port`` is required to reap a leftover llama-server / mlx_lm.server
+    this daemon did not spawn (refresh orphan). ``_stop_slot`` alone
+    no-ops when the process is not in ``app["localllm_servers"]``.
+    """
     if candidate_id:
+        slot = _servers(app).get(candidate_id)
+        if port is None and slot:
+            try:
+                port = int(
+                    slot.get("port")
+                    or (slot.get("cfg") or {}).get("port")
+                    or 0,
+                ) or None
+            except (TypeError, ValueError):
+                port = None
         await _stop_slot(app, candidate_id)
+        if port:
+            await _free_managed_port(int(port))
         return
-    for key in list(_servers(app).keys()):
+    ports: set[int] = set()
+    for key, slot in list(_servers(app).items()):
+        try:
+            p = int(slot.get("port") or (slot.get("cfg") or {}).get("port") or 0)
+        except (TypeError, ValueError):
+            p = 0
+        if p:
+            ports.add(p)
         await _stop_slot(app, key)
     # Legacy single-proc leftover
     proc = app.get("localllm_proc")
@@ -615,23 +881,59 @@ async def stop_server(app: dict, candidate_id: str | None = None) -> None:
             except ProcessLookupError:
                 pass
     app["localllm_proc"] = None
+    for p in ports:
+        await _free_managed_port(p)
 
 
-def running_servers(app: dict) -> list[dict[str, Any]]:
+def running_servers(
+    app: dict,
+    installed: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
+    """Tracked slots plus leftover managed listeners (orphans)."""
     out: list[dict[str, Any]] = []
+    by_id: dict[str, dict[str, Any]] = {}
+    by_port: dict[int, dict[str, Any]] = {}
     for key, slot in _servers(app).items():
         proc = slot.get("proc")
         cfg = slot.get("cfg") or {}
         alive = proc is not None and proc.returncode is None
-        out.append({
+        port = slot.get("port") or cfg.get("port")
+        try:
+            port_i = int(port) if port is not None else None
+        except (TypeError, ValueError):
+            port_i = None
+        row: dict[str, Any] = {
             "id": key,
-            "port": slot.get("port") or cfg.get("port"),
+            "port": port_i if port_i is not None else port,
             "alive": alive,
             "pid": getattr(proc, "pid", None) if alive else None,
             "alias": cfg.get("alias"),
             "file": cfg.get("file"),
             "model_label": cfg.get("model_label"),
-        })
+            "backend": cfg.get("backend") or "llamacpp",
+            "orphan": False,
+        }
+        out.append(row)
+        by_id[key] = row
+        if port_i is not None:
+            by_port[port_i] = row
+    for found in _discover_managed_listeners(installed):
+        port_i = found.get("port")
+        existing = by_id.get(str(found.get("id") or ""))
+        if existing is None and port_i is not None:
+            existing = by_port.get(int(port_i))
+        if existing is not None:
+            tracked_pid = existing.get("pid")
+            existing["alive"] = True
+            existing["pid"] = found.get("pid")
+            existing["orphan"] = tracked_pid != found.get("pid")
+            if found.get("backend"):
+                existing["backend"] = found["backend"]
+            continue
+        out.append(found)
+        by_id[str(found["id"])] = found
+        if port_i is not None:
+            by_port[int(port_i)] = found
     return out
 
 
@@ -642,19 +944,87 @@ def server_log_path_for(key: str = "default") -> Path:
     return statedir.state_root() / f"llama-server-{safe}.log"
 
 
+async def list_served_models(port: int | None = None) -> list[str]:
+    """Model ids advertised on ``GET /v1/models``, or []."""
+    import aiohttp
+    p = int(port or (load_config() or {}).get("port") or PORT)
+    timeout = aiohttp.ClientTimeout(total=3)
+    try:
+        async with aiohttp.ClientSession(timeout=timeout) as s:
+            async with s.get(f"http://127.0.0.1:{p}/v1/models") as resp:
+                if resp.status != 200:
+                    return []
+                body = await resp.json(content_type=None)
+    except Exception:  # noqa: BLE001
+        return []
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        return []
+    out: list[str] = []
+    for row in data:
+        if isinstance(row, dict):
+            mid = str(row.get("id") or "").strip()
+            if mid:
+                out.append(mid)
+    return out
+
+
 async def server_healthy(port: int | None = None) -> bool:
     import aiohttp
     p = int(port or (load_config() or {}).get("port") or PORT)
+    timeout = aiohttp.ClientTimeout(total=3)
     try:
-        timeout = aiohttp.ClientTimeout(total=3)
         async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get(f"http://127.0.0.1:{p}/health") as resp:
-                return resp.status == 200
+            try:
+                async with s.get(f"http://127.0.0.1:{p}/health") as resp:
+                    if resp.status == 200:
+                        return True
+            except Exception:  # noqa: BLE001
+                pass
+            # mlx_lm.server is OpenAI-compat and often has no /health.
+            async with s.get(f"http://127.0.0.1:{p}/v1/models") as resp:
+                if resp.status != 200:
+                    return False
+                try:
+                    body = await resp.json(content_type=None)
+                except Exception:  # noqa: BLE001
+                    return True
+                data = body.get("data") if isinstance(body, dict) else None
+                # An empty catalogue is a bound port, not a loaded model.
+                if isinstance(data, list):
+                    return any(
+                        isinstance(row, dict) and row.get("id")
+                        for row in data
+                    )
+                return True
     except Exception:  # noqa: BLE001
         return False
 
 
 _WARMUP_S = 120
+
+
+async def remember_mlx_served_model(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Persist the id mlx_lm.server actually lists, so chat never
+    sends a Switch Bay alias that 404s as model-not-found."""
+    if str(cfg.get("backend") or "") != "mlx":
+        return cfg
+    port = int(cfg.get("port") or PORT)
+    listed = await list_served_models(port)
+    local = str(cfg.get("local_path") or "").strip()
+    repo = str(cfg.get("repo") or "").strip()
+    pick = next((c for c in (local, repo) if c and c in listed), "")
+    if not pick and local:
+        try:
+            resolved = str(Path(local).resolve())
+        except OSError:
+            resolved = ""
+        if resolved and resolved in listed:
+            pick = resolved
+    out = dict(cfg)
+    out["served_model"] = pick or "default_model"
+    save_config(out)
+    return out
 
 
 async def wait_healthy(

@@ -107,7 +107,7 @@ export default function ProviderPicker() {
   const active = info.providers.find((p) => p.id === info.default_provider);
   const activeModel = info.default_model || active?.default_model || "?";
   const activeShort = shortModel(activeModel);
-  const activeLabel = active?.label ?? info.default_provider;
+  const activeLabel = shortProvider(active?.label ?? info.default_provider);
   const overrides = info.routing?.overrides ?? [];
   const warnings = info.routing?.warnings ?? [];
   // Providers that can actually orchestrate a curation run (shell +
@@ -167,9 +167,11 @@ export default function ProviderPicker() {
         type="button"
         className="sy-rail-pickbtn"
         onClick={() => setOpen((o) => !o)}
-        title={routingTitle(activeLabel, activeModel, overrides, warnings)}
+        title={routingTitle(active?.label ?? activeLabel, activeModel, overrides, warnings)}
       >
-        {activeLabel} · <span className="sy-rail-pickmodel">{activeShort}</span>
+        <span className="sy-rail-pickbtn-text">
+          {activeLabel} · <span className="sy-rail-pickmodel">{activeShort}</span>
+        </span>
         {overrides.length > 0 && (
           <span
             className={
@@ -388,6 +390,13 @@ function rankModels(ids: string[]): string[] {
     .map((x) => x.id);
 }
 
+/** Rail-head label: keep the pill one line. Full name stays in the title. */
+function shortProvider(label: string): string {
+  if (/^MLX\b/i.test(label)) return "MLX";
+  if (/^llama\.cpp/i.test(label)) return "llama.cpp";
+  return label;
+}
+
 /** Compact display: drop the vendor prefix and version-y suffix where
  *  redundant. e.g. `claude-sonnet-4-6` → `sonnet 4.6`. Falls back to
  *  the raw id for unknown shapes. */
@@ -396,5 +405,10 @@ function shortModel(id: string): string {
   if (/^(opus|sonnet|haiku|default)$/i.test(id)) return `${id.toLowerCase()} (latest)`;
   const m = id.match(/^claude-(opus|sonnet|haiku)-(\d+)-(\d+)/i);
   if (m) return `${m[1]} ${m[2]}.${m[3]}`;
-  return id;
+  let s = id.trim();
+  const slash = s.lastIndexOf("/");
+  if (slash >= 0) s = s.slice(slash + 1);
+  s = s.replace(/^mlx:/i, "");
+  s = s.replace(/^(?:mlx-community|huggingface|lmstudio|mlx)[_-]+/i, "");
+  return s || id;
 }

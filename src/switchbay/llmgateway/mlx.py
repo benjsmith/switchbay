@@ -20,6 +20,7 @@ with mlx-lm actually installed, so it stays invisible everywhere else.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import AsyncIterator
 
@@ -107,8 +108,9 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
 
 async def list_models() -> list[str]:
     """Installed MLX models, by alias (what the ladder addresses)."""
+    installed = await asyncio.to_thread(local_models.list_installed)
     out: list[str] = []
-    for meta in local_models.list_installed():
+    for meta in installed:
         if meta.get("backend") != "mlx":
             continue
         alias = meta.get("alias") or meta.get("repo") or meta.get("id")

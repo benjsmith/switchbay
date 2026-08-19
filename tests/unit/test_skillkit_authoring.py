@@ -33,6 +33,59 @@ def iso(tmp_path, monkeypatch):
     return ws, user_root
 
 
+def test_load_skill_tool_detail_and_section(iso):
+    from switchbay import tools as sb_tools
+    ws, _user = iso
+    skillkit.create_skill(
+        ws, "workspace", "Helper",
+        "Use when doing X.",
+        "# Helper\n\n## Setup\n\nDo setup.\n\n## Extra\n\nOnly here.\n",
+    )
+    peek = sb_tools._load_skill(ws, {"name": "helper", "detail": "frontmatter"})
+    assert peek["ok"] is True
+    assert peek["skill"]["detail"] == "frontmatter"
+    assert "body" not in peek["skill"]
+    default = sb_tools._load_skill(ws, {"name": "helper"})
+    assert default["skill"]["detail"] == "frontmatter"
+    sec = sb_tools._load_skill(ws, {"name": "helper", "section": "Extra"})
+    assert "Only here" in sec["skill"]["body"]
+    assert "Do setup" not in sec["skill"]["body"]
+
+
+def test_peek_and_section_and_mirror(iso):
+    ws, _user = iso
+    skillkit.create_skill(
+        ws, "workspace", "Helper",
+        "Use when doing X.",
+        "# Helper\n\n## Setup\n\nDo setup.\n\n## Extra\n\nOnly here.\n",
+    )
+    sk = skillkit.get_skill(ws, "helper")
+    assert sk is not None
+    peek = skillkit.to_peek(sk)
+    assert peek["detail"] == "frontmatter"
+    assert "Setup" in peek["headings"]
+    assert "body" not in peek
+    extra = skillkit.extract_section(sk.body, "Extra")
+    assert extra is not None and "Only here" in extra
+    assert "Do setup" not in extra
+    root = skillkit.mirror_into_workspace(ws)
+    assert (root / "helper" / "SKILL.md").is_file()
+    assert "helper" in (root / "INDEX.md").read_text(encoding="utf-8")
+    assert "ce_sweep" in skillkit.coverage_for("curiosity-engine")
+
+
+def test_progressive_section_outlines_huge_chapter():
+    kids = "\n".join(
+        f"### Child {i}\n\n" + ("word " * 80) for i in range(12)
+    )
+    body = f"# Skill\n\n## Huge\n\n{kids}\n"
+    out = skillkit.progressive_section(body, "Huge")
+    assert out is not None
+    assert out["detail"] == "section-outline"
+    assert "Child 0" in out["child_headings"]
+    assert len(out["body"]) <= skillkit.SECTION_SOFT_CAP + 80
+
+
 def test_create_edit_delete_workspace_skill(iso):
     ws, _user = iso
     sk = skillkit.create_skill(

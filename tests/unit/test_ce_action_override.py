@@ -29,7 +29,7 @@ def test_execute_capable_provider_accepted():
     prov.has_key.return_value = True
     prov.LABEL = "Claude Code"
     with patch("switchbay.llmgateway.get", return_value=prov), \
-         patch("switchbay.llmgateway.can_execute", return_value=True), \
+         patch("switchbay.llmgateway.can_curate", return_value=True), \
          patch("switchbay.daemon._effective_model", return_value="claude-opus-4-8"):
         pid, model, err = daemon._resolve_ce_override("claude-code", "")
     assert err is None
@@ -42,7 +42,7 @@ def test_explicit_model_preserved():
     prov.has_key.return_value = True
     prov.LABEL = "Grok Build"
     with patch("switchbay.llmgateway.get", return_value=prov), \
-         patch("switchbay.llmgateway.can_execute", return_value=True):
+         patch("switchbay.llmgateway.can_curate", return_value=True):
         pid, model, err = daemon._resolve_ce_override("grok-build", "grok-4.5")
     assert (pid, model, err) == ("grok-build", "grok-4.5", None)
 
@@ -54,10 +54,10 @@ def test_propose_only_provider_rejected():
     prov.has_key.return_value = True
     prov.LABEL = "Anthropic"
     with patch("switchbay.llmgateway.get", return_value=prov), \
-         patch("switchbay.llmgateway.can_execute", return_value=False):
+         patch("switchbay.llmgateway.can_curate", return_value=False):
         pid, model, err = daemon._resolve_ce_override("anthropic", "")
     assert pid is None
-    assert err and "no shell" in err and "PROPOSE" in err
+    assert err and "cannot run CE scripts" in err
 
 
 def test_keyless_provider_rejected():

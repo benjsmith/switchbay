@@ -56,9 +56,12 @@ type Props = {
   /** Restart the daemon (Settings → Restart = `make restart`). App owns
    *  the POST + toast; we own the confirm. */
   onRestart: () => void;
+  /** Check GitHub + apply older Switch Bay / CE / merge releases, then
+   *  restart. App owns the POST + toast; we own the confirm. */
+  onUpdate: () => void;
 };
 
-export default function SettingsModal({ open, onClose, onQuit, onRestart }: Props) {
+export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpdate }: Props) {
   const [info, setInfo] = useState<ProvidersBody | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
@@ -399,6 +402,27 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart }: Prop
         </div>
         <div className="sy-confirm-actions sy-settings-footer">
           <div className="sy-settings-power">
+            <button
+              type="button"
+              className="sy-confirm-btn sy-settings-update"
+              title="Check GitHub for later releases of Switch Bay, Curiosity Engine, and Curiosity Merge"
+              onClick={() => {
+                const ok = window.confirm(
+                  "Update Switch Bay?\n\n"
+                  + "This checks GitHub for later releases of Switch Bay, "
+                  + "Curiosity Engine, and Curiosity Merge, and updates "
+                  + "anything that's behind. Switch Bay then restarts so "
+                  + "the app picks up the changes.\n\n"
+                  + "Agents that are still running will end. Nothing "
+                  + "you've saved is lost.",
+                );
+                if (!ok) return;
+                onClose();
+                onUpdate();
+              }}
+            >
+              ↓ Update
+            </button>
             <button
               type="button"
               className="sy-confirm-btn sy-settings-restart"
@@ -2139,6 +2163,8 @@ type LocalServer = {
   pid?: number | null;
   alias?: string;
   model_label?: string;
+  backend?: string;
+  orphan?: boolean;
 };
 
 type LocalBackends = {
@@ -2217,6 +2243,15 @@ type LocalLlmBody = {
     percent?: number;
     error?: string | null;
     candidate_id?: string;
+  } | null;
+  local_rung?: {
+    id?: string;
+    label?: string;
+    prompt_budget?: number;
+    force_scaffold?: boolean;
+    recommended_ctx?: number;
+    n_tools_curate?: number;
+    blurb?: string;
   } | null;
 };
 
@@ -2315,7 +2350,9 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
   const [hits, setHits] = useState<SearchHit[] | null>(null);
   const [searchNote, setSearchNote] = useState<string | null>(null);
   const [busy, setBusy] = useState<"" | "search" | "install" | "activate" | "remove" | "other">("");
+  const [warmingId, setWarmingId] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
   const [keepOthers, setKeepOthers] = useState(true);
   const sectionRef = useRef<HTMLElement>(null);
   const [harness, setHarness] = useState<{ text: string; lines: number; refine_lines: number; path: string } | null>(null);
@@ -2379,10 +2416,29 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
 
   const installing = body?.install?.state === "running";
   useEffect(() => {
-    if (!open || !installing) return;
-    const iv = window.setInterval(() => void load(), 2500);
+    if (!open) return;
+    const iv = window.setInterval(
+      () => void load(),
+      installing || warmingId ? 1000 : 4000,
+    );
     return () => window.clearInterval(iv);
-  }, [open, installing]);
+  }, [open, installing, warmingId]);
+
+  useEffect(() => {
+    if (!warmingId || !body) return;
+    const m = (body.installed || []).find((row) => row.id === warmingId);
+    const server = (body.servers || []).find((s) =>
+      s.id === warmingId
+      || (m?.alias && s.alias === m.alias)
+      || (m?.port != null && s.port === m.port),
+    );
+    const alive = !!server?.alive;
+    const ready = alive && !!body.server_healthy && (
+      body.active === warmingId
+      || (m?.alias && body.config?.alias === m.alias)
+    );
+    if (ready) setWarmingId(null);
+  }, [body, warmingId]);
 
   useEffect(() => {
     if (!open) return;
@@ -2559,7 +2615,9 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
 
   const activate = async (id: string) => {
     setBusy("activate");
+    setWarmingId(id);
     setErr(null);
+    setNote(null);
     try {
       const r = await fetch("/api/local-models/activate", {
         method: "POST",
@@ -2567,10 +2625,15 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
         body: JSON.stringify({ id, keep_others: keepOthers }),
       });
       const b = await r.json().catch(() => ({} as { error?: string }));
-      if (!r.ok) { setErr(b.error || `activate: HTTP ${r.status}`); return; }
+      if (!r.ok) {
+        setErr(b.error || `activate: HTTP ${r.status}`);
+        setWarmingId(null);
+        return;
+      }
       void load();
     } catch (e) {
       setErr((e as Error).message);
+      setWarmingId(null);
     } finally {
       setBusy("");
     }
@@ -2610,9 +2673,53 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
     }
   };
 
-  const watch = async () => {
+  const controlServer = async (id: string, action: "start" | "stop" | "restart") => {
+    setBusy("other");
+    setWarmingId(action === "stop" ? null : id);
+    setErr(null);
+    setNote(null);
     try {
-      const r = await fetch("/api/localllm/watch", { method: "POST" });
+      const r = await fetch("/api/localllm/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action }),
+      });
+      const b = await r.json().catch(() => ({})) as {
+        error?: string; server_healthy?: boolean; servers?: LocalServer[];
+      };
+      if (!r.ok) {
+        setErr(b.error || `HTTP ${r.status}`);
+        setWarmingId(null);
+        return;
+      }
+      const live = (b.servers || []).some((s: LocalServer) => s.alive);
+      if (action === "stop") {
+        setNote("Stopped.");
+      } else if (b.server_healthy && live) {
+        setNote(action === "restart" ? "Restarted — serving." : "Started — serving.");
+      } else if (live) {
+        setNote("Process is up — still loading weights. Use Watch server for progress.");
+      } else {
+        setErr("Server process did not stay running. Watch server for the log.");
+      }
+      void load();
+    } catch (e) {
+      setErr((e as Error).message);
+      setWarmingId(null);
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const watch = async (id?: string) => {
+    try {
+      const r = await fetch("/api/localllm/watch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: id || body?.active || body?.config?.candidate_id || undefined,
+        }),
+      });
       if (!r.ok) {
         const b = await r.json().catch(() => ({} as { error?: string }));
         setErr(b.error || `HTTP ${r.status}`);
@@ -2691,6 +2798,22 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
         Installing points ladder <strong>trivial + normal</strong> at the
         local model.
       </p>
+      {body.local_rung && (
+        <p className="sy-settings-blurb">
+          Local curate desk: <strong>{body.local_rung.label}</strong>
+          {body.local_rung.n_tools_curate != null
+            ? ` · ${body.local_rung.n_tools_curate} tools`
+            : ""}
+          {body.local_rung.prompt_budget != null
+            ? ` · ~${body.local_rung.prompt_budget} token budget`
+            : ""}
+          {body.local_rung.recommended_ctx != null
+            ? ` · ${Math.round(body.local_rung.recommended_ctx / 1024)}k ctx`
+            : ""}
+          {body.local_rung.force_scaffold ? " · scaffolds only" : " · sourced pages ok"}
+          {body.local_rung.blurb ? ` — ${body.local_rung.blurb}` : ""}
+        </p>
+      )}
 
       {/* Server type */}
       <div className="sy-copilot-auth-actions" style={{ marginBottom: 10 }}>
@@ -2747,47 +2870,136 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
           )}
           {installedForBackend.map((m) => {
             const isActive = (body.active || config?.candidate_id) === m.id
-              || (config?.alias && m.alias && config.alias === m.alias);
-            const server = (body.servers || []).find((s) => s.id === m.id);
+              || !!(config?.alias && m.alias && config.alias === m.alias);
+            const server = (body.servers || []).find((s) =>
+              s.id === m.id
+              || (m.alias && s.alias === m.alias)
+              || (m.port != null && s.port === m.port),
+            );
             const port = m.port ?? server?.port ?? (isActive ? config?.port : undefined);
-            const alive = server?.alive
-              ?? (isActive ? body.server_healthy : false);
+            const processAlive = !!server?.alive;
+            const serving = processAlive && (isActive ? !!body.server_healthy : true);
+            const warming = warmingId === m.id
+              || (inst?.state === "running" && inst.candidate_id === m.id);
+            const loadPct = (inst?.state === "running" && inst.candidate_id === m.id)
+              ? inst.percent
+              : undefined;
+            const statusLine = m.backend === "ollama"
+              ? `Ollama tag ${m.ollama_tag || m.id}`
+              : warming && !serving
+                ? (processAlive
+                  ? "Process up — loading weights into memory…"
+                  : loadPct != null
+                    ? `Downloading / starting (${loadPct}%)`
+                    : "Starting server…")
+                : serving
+                  ? (
+                    `Ready — server running${server?.pid ? ` (pid ${server.pid})` : ""}`
+                    + (server?.orphan ? " · leftover from earlier session" : "")
+                  )
+                  : processAlive
+                    ? "Process up — loading weights"
+                    : isActive
+                      ? "Selected, not running — click Start"
+                      : isCacheDiscovered(m)
+                        ? cacheSourceCaption(m)
+                        : "Installed, not serving";
             return (
-              <div key={m.id} className="sy-settings-local-cand">
+              <div
+                key={m.id}
+                className={
+                  "sy-settings-local-cand"
+                  + (serving && isActive ? " sy-settings-local-cand--on" : "")
+                  + (warming && !serving ? " sy-settings-local-cand--warm" : "")
+                }
+              >
                 <div>
                   <strong>{m.label || m.id}</strong>
-                  {isActive && (
-                    <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 600, color: "var(--accent, #3b82f6)" }}>
-                      ACTIVE
+                  {serving && (
+                    <span className="sy-settings-local-pill">SERVING</span>
+                  )}
+                  {warming && !serving && (
+                    <span className="sy-settings-local-pill sy-settings-local-pill--warm">
+                      STARTING
+                    </span>
+                  )}
+                  {isActive && !serving && !warming && (
+                    <span className="sy-settings-local-pill sy-settings-local-pill--idle">
+                      selected
                     </span>
                   )}
                   {m.quant && <span style={{ opacity: 0.7 }}> · {m.quant}</span>}
                   {port != null && (
                     <span style={{ opacity: 0.7 }}>
-                      {" "}· :{port}{alive ? " ●" : " ○"}
+                      {" "}· :{port}{serving ? " ●" : " ○"}
                     </span>
                   )}
                 </div>
-                <div style={{ fontSize: 12, opacity: 0.85 }}>
-                  {m.backend === "ollama"
-                    ? `Ollama tag ${m.ollama_tag || m.id}`
-                    : alive
-                      ? `Server running${server?.pid ? ` (pid ${server.pid})` : ""}`
-                      : isActive
-                        ? "Active config — server starting or not responding"
-                        : isCacheDiscovered(m)
-                          ? cacheSourceCaption(m)
-                          : "Installed, not serving"}
-                </div>
+                <div style={{ fontSize: 12, opacity: 0.85 }}>{statusLine}</div>
+                {(warming && !serving) && (
+                  <div
+                    className="sy-settings-local-warm"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={typeof loadPct === "number" ? loadPct : undefined}
+                    aria-label={statusLine}
+                  >
+                    <div
+                      className={
+                        "sy-settings-local-warm-bar"
+                        + (typeof loadPct === "number" ? "" : " sy-settings-local-warm-bar--indeterminate")
+                      }
+                      style={typeof loadPct === "number"
+                        ? { width: `${Math.max(4, loadPct)}%` }
+                        : undefined}
+                    />
+                  </div>
+                )}
                 <div className="sy-settings-local-cand-actions">
                   <button
                     type="button"
-                    className={isActive ? "sy-confirm-btn" : "sy-confirm-btn sy-confirm-btn--primary"}
-                    disabled={!!busy || !!isActive}
+                    className={
+                      "sy-confirm-btn"
+                      + ((serving && isActive) || !isActive ? " sy-confirm-btn--primary" : "")
+                    }
+                    disabled={!!busy || (serving && isActive)}
                     onClick={() => void activate(m.id)}
+                    title={
+                      serving && isActive
+                        ? "This is the active local model — ready for chat and /curate"
+                        : "Make this the active local model and start its server"
+                    }
                   >
-                    {isActive ? "Active" : "Use this"}
+                    {warming && !serving
+                      ? "Starting…"
+                      : serving && isActive
+                        ? "In use"
+                        : "Use this"}
                   </button>
+                  {m.backend !== "ollama" && serving && (
+                    <button
+                      type="button"
+                      className="sy-confirm-btn"
+                      disabled={!!busy}
+                      onClick={() => void controlServer(m.id, "stop")}
+                      title="Stop this local server (including leftover processes from a previous session)"
+                    >
+                      Stop
+                    </button>
+                  )}
+                  {m.backend !== "ollama" && (
+                    <button
+                      type="button"
+                      className="sy-confirm-btn"
+                      disabled={!!busy}
+                      onClick={() => void controlServer(m.id, serving ? "restart" : "start")}
+                    >
+                      {warming && !serving
+                        ? "Starting…"
+                        : serving ? "Restart" : "Start"}
+                    </button>
+                  )}
                   {isCacheDiscovered(m) && !m.port ? (
                     <span
                       className="sy-settings-help"
@@ -2942,12 +3154,25 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
       )}
 
       {inst?.state === "running" && (
-        <p className="sy-settings-blurb">
-          Installing — {inst.step}
-          {typeof inst.percent === "number" && inst.step?.startsWith("downloading")
-            ? ` (${inst.percent}%)` : ""}
-          …
-        </p>
+        <div className="sy-settings-blurb" style={{ marginBottom: 10 }}>
+          <div>
+            Installing — {inst.step}
+            {typeof inst.percent === "number" ? ` (${inst.percent}%)` : ""}
+          </div>
+          <div
+            style={{
+              marginTop: 6, height: 6, borderRadius: 99,
+              background: "var(--line)", overflow: "hidden",
+            }}
+          >
+            <div
+              style={{
+                height: "100%", width: `${Math.max(2, inst.percent ?? 0)}%`,
+                background: "var(--accent)", transition: "width 0.4s ease",
+              }}
+            />
+          </div>
+        </div>
       )}
       {inst?.state === "error" && inst.error && (
         <p className="sy-settings-status sy-settings-status--err">{inst.error}</p>
@@ -2957,19 +3182,25 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
       {config && activeBackend === backend && (
         <div style={{ marginTop: 8, marginBottom: 8 }}>
           <p className="sy-settings-blurb">
-            ✓ Active: <strong>{config.model_label}</strong>
+            {body.server_healthy ? "Serving" : "Selected"}:{" "}
+            <strong>{config.model_label}</strong>
             {config.quant ? ` (${config.quant}, ` : " ("}
-            {Math.round((config.ctx ?? 0) / 1024)}k context) — server{" "}
-            {body.server_healthy ? "running" : "starting / not responding yet"}
-            {config.port != null ? ` on :${config.port}` : ""}.
-            {body.server_url ? ` ${body.server_url}` : ""}
+            {Math.round((config.ctx ?? 0) / 1024)}k context)
+            {body.server_healthy
+              ? (config.port != null ? ` on :${config.port}` : "")
+              : " — not running (use Start)"}
+            {body.server_url && body.server_healthy ? ` ${body.server_url}` : ""}
           </p>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <button
               type="button"
               className="sy-confirm-btn"
-              onClick={() => void watch()}
-              title="Open a terminal tailing the server log"
+              onClick={() => void watch(body.active || config?.candidate_id)}
+              title={
+                activeBackend === "mlx"
+                  ? "Open a terminal tailing the MLX server log"
+                  : "Open a terminal tailing the llama-server log"
+              }
             >
               Watch server
             </button>
@@ -2989,6 +3220,7 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
       )}
 
       {err && <p className="sy-settings-status sy-settings-status--err">{err}</p>}
+      {note && !err && <p className="sy-settings-status">{note}</p>}
 
       {harness && (
         <details className="sy-harness">

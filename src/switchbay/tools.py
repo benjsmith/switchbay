@@ -123,10 +123,22 @@ def _propose_wiki_page(workspace: Path, payload: dict[str, Any]) -> dict[str, An
         return {"ok": False, "error": f"kind must be one of {list(proposals.KIND_FOLDER)}"}
     if not title or not body:
         return {"ok": False, "error": "title and body are required"}
-    e = proposals.add(workspace, op="create", kind=kind, title=title, body=body)
+    scaffold = bool(payload.get("scaffold"))
+    if scaffold:
+        body = proposals.clip_scaffold_body(body, title=title)
+    e = proposals.add(
+        workspace, op="create", kind=kind, title=title, body=body,
+        scaffold=scaffold,
+    )
     return {"ok": True, "proposal_id": e["id"], "path": e["path"],
-            "note": "Proposed for review — a reviewer + the user decide "
-            "whether it enters the wiki. Do not propose it again."}
+            "scaffold": scaffold,
+            "note": (
+                "Scaffold staged in Reviews — expand from sources, not "
+                "from this outline."
+                if scaffold else
+                "Written provisionally. Keep going — Reviews is a "
+                "backlog. Reject reverts this page. Do not propose it again."
+            )}
 
 
 def _propose_page_edit(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -134,10 +146,20 @@ def _propose_page_edit(workspace: Path, payload: dict[str, Any]) -> dict[str, An
     body = str(payload.get("body") or "").strip()
     if not path or not body:
         return {"ok": False, "error": "path and body are required"}
+    scaffold = bool(payload.get("scaffold"))
+    if scaffold:
+        body = proposals.clip_scaffold_body(body, title=str(payload.get("title") or path))
     e = proposals.add(workspace, op="edit", kind=str(payload.get("kind") or "note"),
-                      title=str(payload.get("title") or path), body=body, path=path)
+                      title=str(payload.get("title") or path), body=body, path=path,
+                      scaffold=scaffold)
     return {"ok": True, "proposal_id": e["id"], "path": e["path"],
-            "note": "Edit proposed for review. Do not propose it again."}
+            "scaffold": scaffold,
+            "note": (
+                "Scaffold edit staged in Reviews."
+                if scaffold else
+                "Edit written provisionally. Keep going — Reviews is "
+                "a backlog. Reject restores the previous text."
+            )}
 
 
 def _create_report(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -187,15 +209,13 @@ register(Tool(
 register(Tool(
     name="propose_wiki_page",
     description=(
-        "Propose a NEW wiki page (concept / entity / analysis / fact / "
-        "evidence / source / note) for review. Does NOT write the wiki "
-        "directly — it stages the page so a stronger reviewer and the "
-        "user can accept or reject it. Give `kind`, a `title`, and the "
-        "full page `body` (CE format: YAML frontmatter + '# Title' + "
-        "dense prose with [[wikilinks]]). Use this to file curated "
-        "knowledge; never invent specific numbers or facts you are not "
-        "sure of. Plain language: prefer ordinary words; define any "
-        "necessary acronym on first use; avoid domain jargon."
+        "Write a NEW wiki page (concept / entity / analysis / fact / "
+        "evidence / source / note). It lands immediately and shows in "
+        "Reviews as a backlog item — do not wait for the user. Reject "
+        "reverts the file. Give `kind`, a `title`, and the full page "
+        "`body` (CE format: YAML frontmatter + '# Title' + dense prose "
+        "with [[wikilinks]]). Never invent specific numbers or facts "
+        "you are not sure of. Keep going after each page."
     ),
     input_schema={
         "type": "object",
@@ -212,11 +232,10 @@ register(Tool(
 register(Tool(
     name="propose_page_edit",
     description=(
-        "Propose an EDIT to an existing wiki page for review (e.g. file a "
-        "staging-inbox item into a page, or amend a page). Does NOT write "
-        "directly. Give the page `path` (repo-relative, under wiki/) and "
-        "the full new `body`. Never deletes a page. Keep the body in "
-        "plain language; define acronyms on first use."
+        "Edit an existing wiki page. Writes immediately (provisional); "
+        "Reviews can revert it. Give the page `path` (repo-relative, "
+        "under wiki/) and the full new `body`. Never deletes a page. "
+        "Keep going after each edit."
     ),
     input_schema={
         "type": "object",
@@ -931,7 +950,19 @@ register(Tool(
 
 
 def _list_skills(workspace: Path, _: dict[str, Any]) -> dict[str, Any]:
-    return {"skills": [skillkit.to_summary(s) for s in skillkit.list_skills(workspace)]}
+    try:
+        skillkit.mirror_into_workspace(workspace)
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        "skills": [skillkit.to_summary(s) for s in skillkit.list_skills(workspace)],
+        "note": (
+            "Prefer Switch Bay tools in covered_by. Then "
+            "load_skill(name, detail='frontmatter'). Full body only "
+            "when the peek says you need extra skill prose. Sandboxed "
+            "shells can Read copies under .workbench/skill-mirrors/."
+        ),
+    }
 
 
 def _load_skill(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -945,24 +976,31 @@ def _load_skill(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
             "error": f"skill {name!r} not found",
             "available": [s.name for s in skillkit.list_skills(workspace)][:20],
         }
-    return {
-        "ok": True,
-        "skill": skillkit.to_full(sk),
-    }
+    detail = str(payload.get("detail") or "frontmatter").strip().lower()
+    section = str(payload.get("section") or "").strip()
+    if section:
+        prog = skillkit.progressive_section(sk.body, section)
+        if prog is None:
+            return {
+                "ok": False,
+                "error": f"no section {section!r}",
+                "headings": skillkit.body_headings(sk.body),
+                "skill": skillkit.to_peek(sk),
+            }
+        return {"ok": True, "skill": {**skillkit.to_peek(sk), **prog}}
+    if detail in ("frontmatter", "peek", "meta", ""):
+        return {"ok": True, "skill": skillkit.to_peek(sk)}
+    return {"ok": True, "skill": skillkit.to_full(sk)}
 
 
 register(Tool(
     name="list_skills",
     description=(
-        "List skills available to this workspace — bundles of "
-        "domain-specific instructions + scripts the agent can read "
-        "to learn how to handle a task. Discovered from "
-        "`~/.agents/skills/` (and `~/.claude/skills/` if present), "
-        "`<workspace>/.workbench/skills/`, "
-        "pack-bundled `<pack>/skills/`, and the curiosity-engine "
-        "repo's top-level SKILL.md. Returns name + short description "
-        "+ when-to-use hint per skill. Call load_skill(name) to fetch "
-        "the full body when you decide to use one."
+        "List skills for this workspace (name, when-to-use, headings, "
+        "and covered_by Switch Bay tools). Prefer those tools. Then "
+        "load_skill(name, detail='frontmatter') before loading a full "
+        "body. Discovered from ~/.agents/skills/, workspace "
+        ".workbench/skills/, packs, and the curiosity-engine SKILL.md."
     ),
     input_schema={"type": "object", "properties": {}},
     handler=_list_skills,
@@ -972,14 +1010,15 @@ register(Tool(
 register(Tool(
     name="load_skill",
     description=(
-        "Fetch a skill's full body (markdown). Call this when the "
-        "user's request matches one of the skills surfaced by "
-        "list_skills — read the body, follow its instructions, and "
-        "use the tools / files it points at. Skills frequently "
-        "describe how to drive existing CLIs (CE scripts, the find-"
-        "skills npx tool, etc.) rather than offering new tools "
-        "themselves; expect to combine the skill's prose with your "
-        "regular tool surface."
+        "Read a skill. Precedence: Switch Bay tools first, then "
+        "detail='frontmatter' (description, extras, headings, "
+        "covered_by) — this is the default. Use section='Heading' "
+        "to pull one chapter (small models: load the next child "
+        "heading if the chapter is still large). detail='full' "
+        "only when the peek shows extra functionality you do not "
+        "already have as a tool. Global SKILL.md files are also "
+        "Readable under ~/.agents/skills/. CE scripts: ce_run / "
+        "ce_sweep, not a guessed skill path."
     ),
     input_schema={
         "type": "object",
@@ -988,6 +1027,14 @@ register(Tool(
             "name": {
                 "type": "string",
                 "description": "Skill name (the `name:` from its SKILL.md frontmatter).",
+            },
+            "detail": {
+                "type": "string",
+                "description": "frontmatter (default) or full.",
+            },
+            "section": {
+                "type": "string",
+                "description": "Optional ## heading to load instead of the whole body.",
             },
         },
     },
@@ -2307,7 +2354,12 @@ def _graph_index(workspace: Path) -> _GraphIndex:
                 idx.inc[tgt].add(rel)
         for m in _VAULT_CITE.findall(text):
             idx.cites[rel].add(m.strip().rstrip(")").rstrip("."))
+    _GRAPH_CACHE.pop(key, None)
     _GRAPH_CACHE[key] = (sig, idx)
+    overflow = len(_GRAPH_CACHE) - 4
+    if overflow > 0:
+        for old in list(_GRAPH_CACHE)[:overflow]:
+            _GRAPH_CACHE.pop(old, None)
     return idx
 
 
@@ -2771,3 +2823,5 @@ register(Tool(
 
 # CE script wrappers (Copilot / HTTP providers have no CE-aware shell).
 from . import ce_tools as _ce_tools  # noqa: E402,F401
+from . import workspace_plan as _workspace_plan  # noqa: E402
+_workspace_plan.register_tools()

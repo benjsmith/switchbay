@@ -128,3 +128,44 @@ async def test_parse_sse_emits_tool_use_and_stop_reason():
     assert tools[0].input == {"query": "x"}
     assert tools[0].id == "call_abc"
     assert dones and dones[-1].stop_reason == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_incomplete_stream_is_an_error():
+    """mlx_lm.server can return HTTP 200, stream a few tokens, then
+    die on Metal OOM without [DONE] — that must not look like a reply."""
+    payload = {
+        "choices": [{"delta": {"content": "! Privacy Privacy!!"}}],
+    }
+    with pytest.raises(base.ProviderError) as ei:
+        async for _ in parse_sse(_FakeContent([f"data: {json.dumps(payload)}"])):
+            pass
+    assert ei.value.code == "server"
+    assert "out of memory" in str(ei.value).lower() or "stopped generating" in str(ei.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_error_payload_oom():
+    payload = {
+        "error": {
+            "message": "Insufficient Memory (kIOGPUCommandBufferCallbackErrorOutOfMemory)",
+        },
+    }
+    with pytest.raises(base.ProviderError) as ei:
+        async for _ in parse_sse(_FakeContent([f"data: {json.dumps(payload)}"])):
+            pass
+    assert "out of memory" in str(ei.value).lower()
+
+
+@pytest.mark.asyncio
+async def test_parse_sse_keepalive_then_done():
+    events = []
+    async for ev in parse_sse(_FakeContent([
+        ": keepalive 2048/3554",
+        "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}",
+        "data: [DONE]",
+    ])):
+        events.append(ev)
+    texts = [e.text for e in events if isinstance(e, base.TextChunk)]
+    assert texts == ["ok"]
+    assert any(isinstance(e, base.DoneChunk) for e in events)

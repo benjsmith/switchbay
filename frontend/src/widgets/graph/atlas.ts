@@ -209,10 +209,9 @@ let atlasClickUnbind: (() => void) | null = null;
 
 function openAtlasPage(id: string): void {
   if (!id) return;
+  // One channel only. Hash + sy:open-wiki-page + setSelection used to
+  // race: close cleared selection, then a late hashchange reopened it.
   atlasOnSelect?.(id);
-  window.dispatchEvent(new CustomEvent("sy:open-wiki-page", { detail: { target: id } }));
-  const next = `#page=${encodeURIComponent(id)}`;
-  if (window.location.hash !== next) window.location.hash = next;
 }
 
 /** Snapshot hover id on pointerdown (Atlas clears it before click) and
@@ -260,7 +259,9 @@ function installGraphFacade(handle: AtlasHandle): void {
       if (handle.engine.getState().focusId === pageId) return;
       handle.engine.focus(pageId, "system");
     },
-    clearFocus: () => { /* atlas focus is the current node; idle has no-op */ },
+    clearFocus: () => {
+      // Host close must not leave engine focus so a later echo reopens.
+    },
     splitEnter: () => { /* Atlas has no rubber-band split surface */ },
     splitExit: () => {},
   };
@@ -311,9 +312,10 @@ export function mountAtlas(
     },
     onOpenItem: openAtlasPage,
     onEvent: (event) => {
-      // Classic writes `#page=` on a single click. Atlas only did that
-      // on open (double-click), so Zen never switched the Editor.
-      if (event.kind === "focus-changed" && event.origin === "user" && event.id) {
+      // Pointer-up already opens via bindAtlasNodeClick. Ignore
+      // traversal commits (origin user) so fly-through does not spam
+      // the doc modal.
+      if (event.kind === "item-open-requested" && event.id) {
         openAtlasPage(event.id);
       }
     },

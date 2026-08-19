@@ -68,6 +68,25 @@ def test_git_scoped_to_wiki_and_workspace(fake_ce):
     assert not ce_toolscope.allows_command(ws, f"git -C {wiki} push")
 
 
+def test_fs_rules_allow_reading_any_discovered_skill(tmp_path, monkeypatch):
+    ws = tmp_path / "ws"
+    (ws / "wiki").mkdir(parents=True)
+    user = tmp_path / "user-skills" / "my-helper"
+    user.mkdir(parents=True)
+    (user / "SKILL.md").write_text(
+        "---\nname: my-helper\ndescription: d\n---\n\n# Hi\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "switchbay.skillkit._global_skill_roots", lambda: [user.parent])
+    monkeypatch.setattr(
+        "switchbay.skillkit._user_skills_root", lambda: user.parent)
+    monkeypatch.setattr(
+        "switchbay.skillkit.cebridge.ce_root", lambda: tmp_path / "no-ce")
+    rules = ce_toolscope.fs_rules(ws)
+    assert any(str(user) in r and r.startswith("Read(") for r in rules)
+    mirrors = ws.resolve() / ".workbench" / "skill-mirrors"
+    assert any(str(mirrors) in r for r in rules)
+
+
 def test_write_scope_is_curation_dirs_only(fake_ce):
     ws, _root = fake_ce
     r = ws.resolve()

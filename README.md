@@ -63,6 +63,23 @@ local semantic embeddings later with `make sync-semantic`.
 > only. For byte-exact interop with a curiosity-engine vault index you
 > can instead use the PyTorch backend: `make sync-semantic-torch`.
 
+### macOS permission prompts (expected)
+
+The daemon is a `python3.13` process (the venv interpreter `uv`
+provisions). On first install / first start, macOS may show one or
+both of these sheets **from python3.13**, not from an app named
+Switch Bay. That is the same process. **Allow** is the intended
+choice for a normal install.
+
+| Prompt | What it is for | If you click Don’t Allow |
+|--------|----------------|--------------------------|
+| **“…would like to access data from other apps.”** | Looking under `~/Library/Containers/` for Hugging Face / MLX weight caches other Mac apps already downloaded (so Settings can offer **Use this** instead of fetching the same files again). Switch Bay does not read those apps’ documents or accounts. | Local models still work. You just won’t see weights that only live in another app’s sandbox; install or point at a snapshot yourself. |
+| **“…wants to use the keychain”** / **“…wants to access keychain”** | Storing provider API keys (and comms-stream secrets) in the macOS Keychain via `keyring`, service `switchbay`. Keys are not written as plaintext in config files. The first Settings → Providers key save, or a daemon boot that checks the keychain, can trigger this. | You can still run the app, but saving an API key in Settings will fail (`OS keychain unavailable`) until you Allow. |
+
+These can also appear later (first Key save, first local-model scan).
+The process name stays `python3.13` because launchd starts
+`.venv/bin/python` directly.
+
 ## Run (dev)
 
 One-time install:
@@ -113,6 +130,8 @@ The daemon then serves the built app at `http://127.0.0.1:8765`; open it
 and install it (dock icon + standalone window). Closing the window does
 **not** stop work — runs live in the daemon. `make stop` / `make restart`
 / `make status` manage the service; `make uninstall-service` removes it.
+On macOS, the first start may show the python3.13 permission sheets
+documented [above](#macos-permission-prompts-expected).
 
 ### Iterating without quitting the PWA
 

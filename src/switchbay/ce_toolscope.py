@@ -210,6 +210,21 @@ def fs_rules(workspace: Path) -> list[str]:
     ]
     for root in skill_roots(workspace):
         rules.append(f"Read({root}/**)")
+    # Any discovered skill (not just CE/CM) may be Read so a spawned
+    # shell can load SKILL.md. Write/bash stay pinned to SCOPED_SKILLS.
+    try:
+        from . import skillkit
+        for sk in skillkit.list_skills(workspace):
+            parent = Path(sk.path).parent
+            for form in _root_forms(parent):
+                rules.append(f"Read({form}/**)")
+    except Exception:  # noqa: BLE001
+        log.exception("skill read-scope failed")
+    try:
+        mirrors = Path(workspace).resolve() / ".workbench" / "skill-mirrors"
+        rules.append(f"Read({mirrors}/**)")
+    except OSError:
+        pass
     return _dedup(rules)
 
 

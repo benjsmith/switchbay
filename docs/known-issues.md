@@ -24,6 +24,11 @@ macOS is the exercised path (a launchd service). The Windows (Scheduled
 Task) and Linux (systemd `--user`) service paths in `service.py` are
 implemented but not yet tested — treat them as beta.
 
+On first install or first start, macOS may show **python3.13** (the
+daemon) asking to access data from other apps and/or the Keychain.
+That is expected — see [README → macOS permission prompts](../README.md#macos-permission-prompts-expected).
+Allow both for a normal install.
+
 ## Comms streams
 
 The password-tier adapters (IMAP, Telegram, Discord, GitHub, iMessage,

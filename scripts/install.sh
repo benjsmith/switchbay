@@ -100,6 +100,12 @@ else
 fi
 
 info "Registering the always-on service…"
+if [ "$(uname -s)" = "Darwin" ]; then
+  warn "macOS may ask: python3.13 wants to access data from other apps"
+  warn "  → Allow. That is this daemon looking for MLX/HF weights already"
+  warn "    on disk in other apps' caches (no re-download). Not your docs."
+  warn "  A Keychain prompt (same process) is for storing API keys — Allow."
+fi
 PYTHONPATH="$REPO/src" uv run --no-sync python -m switchbay service install
 
 ok "Installed. Open http://127.0.0.1:8765 and install it as an app (dock icon + standalone window)."

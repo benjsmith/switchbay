@@ -176,7 +176,7 @@ def ce_orchestrator_route(workspace: Path) -> tuple[str | None, str | None]:
     pid, model = _rung_route(workspace, "hard")
     if not pid:
         return None, None
-    if not llmgateway.can_execute(pid):
+    if not llmgateway.can_curate(pid):
         return None, None
     return pid, model
 

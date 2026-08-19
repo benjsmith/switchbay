@@ -13,6 +13,7 @@ without a CE-aware shell.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -284,8 +285,8 @@ register(Tool(
     name="ce_run",
     description=(
         "Run any curiosity-engine script against this workspace. Use this "
-        "instead of a shell — Copilot/HTTP providers have no CE skill in "
-        "their sandbox. " + _SCRIPT_BLURB
+        "instead of a shell — Copilot/HTTP sandboxes cannot see "
+        "~/.agents/skills. " + _SCRIPT_BLURB
     ),
     input_schema={
         "type": "object",
@@ -511,6 +512,64 @@ register(Tool(
     },
     handler=_ce_scan,
 ))
+
+MECHANICAL_SWEEP_VERBS: tuple[str, ...] = (
+    "scan",
+    "fix-index",
+    "fix-source-stubs",
+    "sync-notes",
+    "sync-todos",
+)
+
+
+def _preview_sweep_out(out: Any) -> str:
+    if not isinstance(out, dict):
+        return str(out)[:400]
+    if out.get("error"):
+        return str(out["error"])[:200]
+    for key in ("stdout", "text", "summary", "result"):
+        val = out.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()[:400]
+        if isinstance(val, dict):
+            return json.dumps(val, default=str)[:400]
+    slim = {k: v for k, v in out.items() if k not in ("ok", "note")}
+    if not slim:
+        return ""
+    return json.dumps(slim, default=str)[:400]
+
+
+def mechanical_hygiene(
+    workspace: Path,
+    *,
+    verbs: tuple[str, ...] = MECHANICAL_SWEEP_VERBS,
+) -> dict[str, Any]:
+    """Run deterministic sweep.py verbs (no LLM). Safe to call at
+    /curate start. Failures are recorded; later verbs still run."""
+    steps: list[dict[str, Any]] = []
+    for verb in verbs:
+        try:
+            out = _ce_sweep(workspace, {"verb": verb})
+        except Exception as exc:  # noqa: BLE001
+            steps.append({
+                "verb": verb, "ok": False, "error": str(exc)[:200],
+                "preview": "",
+            })
+            continue
+        err = None
+        if isinstance(out, dict):
+            err = out.get("error")
+        steps.append({
+            "verb": verb,
+            "ok": not err,
+            "error": (str(err)[:200] if err else None),
+            "preview": _preview_sweep_out(out if isinstance(out, dict) else {}),
+        })
+    return {
+        "ok": all(s["ok"] for s in steps),
+        "steps": steps,
+    }
+
 
 # Public list for tests / ALLOWED_TOOLS sync.
 CE_TOOL_NAMES = (

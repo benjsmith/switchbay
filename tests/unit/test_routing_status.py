@@ -34,6 +34,13 @@ def test_unknown_provider_cannot_execute():
     assert not llmgateway.can_execute("does-not-exist")
 
 
+def test_http_and_local_with_tools_can_curate():
+    """ce_run tools let Copilot / MLX drive CE without a shell."""
+    assert llmgateway.can_curate("github_copilot")
+    assert llmgateway.can_curate("mlx")
+    assert llmgateway.can_curate("claude-code")
+
+
 # ── weak-model heuristic ───────────────────────────────────────────
 
 
@@ -93,10 +100,9 @@ def test_unset_hard_rung_follows_picker(monkeypatch, ws):
 
 
 def test_propose_only_hard_rung_not_orchestrator_override(monkeypatch, ws):
-    # A shell-less hard rung can't orchestrate curation → falls back to
-    # the picker, so it must NOT be advertised as an orchestrator override.
+    # A tools-less hard rung can't drive ce_run → falls back to the picker.
     _set_ladder(monkeypatch, ws,
-                {"hard": {"provider": "llamacpp", "model": "qwen25_coder_7b"}})
+                {"hard": {"provider": "gemini", "model": "gemini-2.5-pro"}})
     r = routing_status.compute(ws, "claude-code", "claude-opus-4-8")
     assert all(o["kind"] != "ce-orchestrator" for o in r["overrides"])
 
