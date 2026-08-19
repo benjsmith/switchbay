@@ -3,7 +3,7 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
-## Unreleased
+## 2026-08-20 — v0.9.11 — local desks, honest watch
 
 **Migration:** none. **Breaking:** none.
 
@@ -49,6 +49,10 @@ pull a GitHub release.
   global skill reads do not raise a permission card.
 - **macOS TCC notes** — python3.13 "other apps" / Keychain prompts
   documented in the README (expected on first start).
+
+### Version
+
+0.9.11 (micro). History retained.
 
 ## 2026-08-18 — v0.9.10 — new-install pin, global skills, honest picker
 
