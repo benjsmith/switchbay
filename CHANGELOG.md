@@ -3,6 +3,29 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-20 — v0.9.12 — help versions
+
+**Migration:** none. **Breaking:** none.
+
+The Help panel (top-right ?) now shows the running Switch Bay version
+and the related curiosity-engine / curiosity-merge versions. Copy
+caught up with Power vs Zen, Library, custom tabs, and `/rescan`.
+
+### Added
+
+- **Help → versions** — Switch Bay plus installed curiosity-engine /
+  curiosity-merge. npx skill installs without a git tag fall back to
+  this release's pairing (CE v1.3.0, merge v0.7.0).
+
+### Changed
+
+- Help text: Power vs Zen, Library + custom tabs, rebuild viewer vs
+  `/rescan` for stale Browser folders.
+
+### Version
+
+0.9.12 (micro). History retained.
+
 ## 2026-08-20 — v0.9.11 — local desks, honest watch
 
 **Migration:** none. **Breaking:** none.
