@@ -168,6 +168,9 @@ export default function ProviderPicker() {
         className="sy-rail-pickbtn"
         onClick={() => setOpen((o) => !o)}
         title={routingTitle(active?.label ?? activeLabel, activeModel, overrides, warnings)}
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-label="Model picker"
       >
         <span className="sy-rail-pickbtn-text">
           {activeLabel} · <span className="sy-rail-pickmodel">{activeShort}</span>

@@ -5115,7 +5115,12 @@ body {
   border-bottom: 1px solid var(--line);
   flex-shrink: 0;
   min-width: 0;
-  overflow: hidden;
+  /* Visible so the model picker menu (position:absolute below this
+   * 34px row) is not clipped. Long labels ellipsize on
+   * .sy-rail-pickbtn-text. z-index keeps the menu above the stream. */
+  overflow: visible;
+  position: relative;
+  z-index: 6;
 }
 .sy-rail-reset {
   padding: 2px 8px;
@@ -5256,7 +5261,7 @@ body {
   position: absolute;
   top: calc(100% + 4px);
   right: 0;
-  z-index: 50;
+  z-index: 20;
   min-width: 220px;
   max-height: 380px;
   overflow-y: auto;
