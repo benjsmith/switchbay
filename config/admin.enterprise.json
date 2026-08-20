@@ -1,5 +1,9 @@
 {
   "profile": "enterprise",
+  "copilot": {
+    "host": "github.com",
+    "sso_slug": ""
+  },
   "providers": {
     "github_copilot": true,
     "llamacpp": true,

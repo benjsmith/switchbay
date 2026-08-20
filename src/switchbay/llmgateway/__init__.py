@@ -75,13 +75,12 @@ def get(provider_id: str):
 def default_provider_id() -> str:
     """Provider used when the user hasn't picked one explicitly."""
     from .. import admin_policy
-    for pid in admin_policy.preferred_provider_order():
-        if pid in PROVIDERS:
-            return pid
-    for pid in PROVIDERS:
-        if admin_policy.provider_allowed(pid):
-            return pid
-    return github_copilot.ID
+    if admin_policy.profile() == "enterprise":
+        for pid in admin_policy.preferred_provider_order():
+            if pid in PROVIDERS:
+                return pid
+        return github_copilot.ID
+    return anthropic.ID
 
 
 def reasoning_options(provider_id: str, model: str | None = None) -> list[dict]:

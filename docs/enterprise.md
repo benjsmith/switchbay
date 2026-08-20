@@ -1,21 +1,26 @@
 # Enterprise packaging
 
-This branch (`enterprise`) is Switch Bay with a machine-level **admin
-policy**. The daemon **never writes** the policy file. An MDM / company
-portal drops it; the user cannot turn providers back on from Settings.
+Switch Bay ships one codebase with two profiles:
 
-Default on this branch, even with no file: **GitHub Copilot + local
-models** (llama.cpp, MLX, Ollama). Hosted API keys and other coding
-CLIs are hidden. Runtime hooks that EDR products flag stay off.
+- **`open`** (default on git checkout / consumer install) — today's
+  product: every provider, Hugging Face downloads on.
+- **`enterprise`** (`SWITCHBAY_PROFILE=enterprise` or an admin file
+  with `"profile": "enterprise"`) — GitHub Copilot + local models;
+  EDR-noisy hooks off. **Admins can turn individual flags back on**
+  in the admin file, including **`hf_model_download`**.
+
+The daemon **never writes** the policy file. MDM / a company portal
+drops it.
 
 ## Admin policy file
 
 Search order (first existing file wins):
 
 1. `$SWITCHBAY_ADMIN_POLICY` (absolute path)
-2. `/Library/Application Support/SwitchBay/admin.json` (macOS MDM)
-3. `/etc/switchbay/admin.json`
-4. `<checkout>/admin.json` (optional drop-in; gitignored)
+2. `%ProgramData%\SwitchBay\admin.json` (Windows MDM)
+3. `/Library/Application Support/SwitchBay/admin.json` (macOS MDM)
+4. `/etc/switchbay/admin.json`
+5. `<checkout>/admin.json` (optional drop-in; gitignored)
 
 A template lives at [`config/admin.enterprise.json`](../config/admin.enterprise.json).
 Copy it to one of the paths above. Own it as root, mode `0644`.
@@ -23,6 +28,7 @@ Copy it to one of the paths above. Own it as root, mode `0644`.
 ```json
 {
   "profile": "enterprise",
+  "copilot": { "host": "github.com", "sso_slug": "" },
   "providers": {
     "github_copilot": true,
     "llamacpp": true,
@@ -37,6 +43,9 @@ Copy it to one of the paths above. Own it as root, mode `0644`.
   }
 }
 ```
+
+Set `copilot.host` to github.com or your GitHub Enterprise URL at bake.
+`hf_model_download` may be set **true** when IT wants Settings → Find & install.
 
 - **`providers`** — per gateway id, on/off. Missing keys inherit the
   profile default (enterprise = Copilot + local only; `open` = all on).
@@ -54,7 +63,7 @@ Provider ids: `github_copilot`, `llamacpp`, `mlx`, `ollama`,
 | `ce_auto_setup` | off | CE `scripts/setup.sh` + `uv venv` per workspace |
 | `uv_python_install` | off | `uv python install 3.13` (downloads a toolchain) |
 | `scan_other_app_caches` | off | Walks `~/Library/Containers/*/…/huggingface` (TCC + EDR) |
-| `hf_model_download` | off | Hugging Face GGUF/MLX fetch from Settings |
+| `hf_model_download` | off (admin may set **true**) | Hugging Face / Ollama pulls from Settings. On-disk models still work when off. |
 | `comms_streams` | off | IMAP / Gmail / Slack / … as ingest sources |
 | `github_share` | off | `gh` publish of a workspace |
 | `media_generation` | off | External image/video APIs |
@@ -142,5 +151,24 @@ SWITCHBAY_PROFILE=enterprise \
 Point `$SWITCHBAY_CE_ROOT` at the vendored skill so the daemon never
 calls `npx`.
 
-Open `http://127.0.0.1:8765` and install the PWA. Copilot sign-in is
+Open `http://127.0.0.1:8765` in Safari and install the PWA. Copilot sign-in is
 Settings → GitHub Copilot (device flow / Enterprise SSO).
+
+## Suggested portal install (Windows, Win11 x64)
+
+Release asset: `switchbay-enterprise-win11-x64.zip` (built on
+`windows-latest`, not on the employee PC).
+
+1. Extract on the **packaging builder**. Smoke with `serve.cmd`.
+2. Wrap with Intune / MSI (WiX in a later PR). Do **not** run `uv` or
+   `pnpm` on endpoints.
+3. Drop `%ProgramData%\SwitchBay\admin.json` (from the template; set
+   `copilot.host`). Optionally `"hf_model_download": true`.
+4. Stamp `SWITCHBAY_PROFILE=enterprise` in the Scheduled Task
+   environment (a `SWITCHBAY_PROFILE` file at the tree root is enough
+   for `python -m switchbay service install`).
+5. Default workspace: `%USERPROFILE%\SwitchBay\workspace`.
+6. Employees open Edge: `msedge --app=http://127.0.0.1:8765`.
+
+Stop uses `taskkill /PID` of the daemon pidfile, never
+`taskkill /IM python.exe`.

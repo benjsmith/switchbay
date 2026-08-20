@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -109,6 +110,99 @@ def _venv_python(repo: Path) -> Path:
     return repo / ".venv" / "bin" / "python"
 
 
+def _stamped_profile(repo: Path) -> str | None:
+    """Profile baked into the service environment.
+
+    Honour ``SWITCHBAY_PROFILE`` in the installer environment, else a
+    ``SWITCHBAY_PROFILE`` file at the payload/repo root (enterprise
+    payloads write this). Open/default omits the var so git checkouts
+    stay on ``DEFAULT_PROFILE``.
+    """
+    raw = (os.environ.get("SWITCHBAY_PROFILE") or "").strip().lower()
+    if raw in ("open", "enterprise"):
+        return raw
+    marker = repo / "SWITCHBAY_PROFILE"
+    try:
+        if marker.is_file():
+            lines = marker.read_text(encoding="utf-8").strip().splitlines()
+            val = (lines[0] if lines else "").strip().lower()
+            if val in ("open", "enterprise"):
+                return val
+    except OSError:
+        pass
+    return None
+
+
+def _xml_text(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+
+def _service_environment(repo: Path) -> dict[str, str]:
+    env = {
+        "PYTHONPATH": str(repo / "src"),
+        "PYTHONUNBUFFERED": "1",
+        "SWITCHBAY_SERVICE": "1",
+    }
+    profile = _stamped_profile(repo)
+    if profile:
+        env["SWITCHBAY_PROFILE"] = profile
+    return env
+
+
+def _pid_path() -> Path:
+    from . import statedir
+    return statedir.daemon_pid_path()
+
+
+def write_daemon_pid() -> None:
+    p = _pid_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(str(os.getpid()), encoding="utf-8")
+
+
+def clear_daemon_pid() -> None:
+    try:
+        _pid_path().unlink()
+    except OSError:
+        pass
+
+
+def read_daemon_pid() -> int | None:
+    try:
+        raw = _pid_path().read_text(encoding="utf-8").strip()
+        pid = int(raw)
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 0 else None
+
+
+def stop_daemon_pid() -> None:
+    """Stop the serve process recorded in the PID file.
+
+    Windows uses ``taskkill /PID /T`` so children (llama-server) die
+    too. Never ``/IM python.exe``.
+    """
+    pid = read_daemon_pid()
+    if pid is None:
+        return
+    if sys.platform == "win32":
+        subprocess.run(
+            ["taskkill", "/PID", str(pid), "/T", "/F"],
+            capture_output=True,
+        )
+    else:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            pass
+    clear_daemon_pid()
+
+
 def _require_built_frontend(repo: Path) -> None:
     if not (repo / "frontend" / "dist" / "index.html").is_file():
         raise SystemExit(
@@ -136,6 +230,12 @@ def _mac_write_plist(repo: Path) -> Path:
     log.parent.mkdir(parents=True, exist_ok=True)
     p = _mac_plist_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    env = _service_environment(repo)
+    env["PATH"] = f"/usr/bin:/bin:/usr/sbin:/sbin:{Path.home() / '.local' / 'bin'}"
+    env_xml = "\n".join(
+        f"    <key>{_xml_text(k)}</key><string>{_xml_text(v)}</string>"
+        for k, v in env.items()
+    )
     p.write_text(
         f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -144,21 +244,19 @@ def _mac_write_plist(repo: Path) -> Path:
   <key>Label</key><string>{LABEL}</string>
   <key>ProgramArguments</key>
   <array>
-    <string>{py}</string>
+    <string>{_xml_text(str(py))}</string>
     <string>-m</string><string>switchbay</string>
-    <string>serve</string><string>--workspace</string><string>{repo}</string>
+    <string>serve</string><string>--workspace</string><string>{_xml_text(str(repo))}</string>
   </array>
-  <key>WorkingDirectory</key><string>{repo}</string>
+  <key>WorkingDirectory</key><string>{_xml_text(str(repo))}</string>
   <key>EnvironmentVariables</key>
   <dict>
-    <key>PYTHONPATH</key><string>{repo / "src"}</string>
-    <key>PYTHONUNBUFFERED</key><string>1</string>
-    <key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin:{Path.home() / ".local" / "bin"}</string>
+{env_xml}
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardOutPath</key><string>{log}</string>
-  <key>StandardErrorPath</key><string>{log}</string>
+  <key>StandardOutPath</key><string>{_xml_text(str(log))}</string>
+  <key>StandardErrorPath</key><string>{_xml_text(str(log))}</string>
   <key>ProcessType</key><string>Interactive</string>
 </dict>
 </plist>
@@ -269,6 +367,9 @@ def _linux(action: str, repo: Path) -> int:
         _require_built_frontend(repo)
         u = _linux_unit_path()
         u.parent.mkdir(parents=True, exist_ok=True)
+        env_lines = "\n".join(
+            f"Environment={k}={v}" for k, v in _service_environment(repo).items()
+        )
         u.write_text(
             f"""[Unit]
 Description=switchbay daemon
@@ -277,8 +378,7 @@ After=default.target
 [Service]
 Type=simple
 WorkingDirectory={repo}
-Environment=PYTHONPATH={repo / "src"}
-Environment=PYTHONUNBUFFERED=1
+{env_lines}
 ExecStart={py} -m switchbay serve --workspace {repo}
 Restart=on-failure
 RestartSec=2
@@ -329,12 +429,14 @@ def _win(action: str, repo: Path) -> int:
         _require_built_frontend(repo)
         # schtasks can't set env/cwd, so generate a launcher .cmd that does.
         launcher = _win_launcher_path(repo)
+        env_lines = "".join(
+            f'set "{k}={v}"\r\n' for k, v in _service_environment(repo).items()
+        )
         launcher.write_text(
             "@echo off\r\n"
             f'cd /d "{repo}"\r\n'
-            f'set "PYTHONPATH={repo / "src"}"\r\n'
-            "set PYTHONUNBUFFERED=1\r\n"
-            f'"{py}" -m switchbay serve --workspace "{repo}"\r\n',
+            + env_lines
+            + f'"{py}" -m switchbay serve --workspace "{repo}"\r\n',
             encoding="utf-8",
         )
         subprocess.run(
@@ -352,7 +454,7 @@ def _win(action: str, repo: Path) -> int:
         print("uninstalled.")
     elif action in ("stop",):
         subprocess.run(["schtasks", "/End", "/TN", UNIT], capture_output=True)
-        subprocess.run(["taskkill", "/IM", "python.exe", "/F"], capture_output=True)
+        stop_daemon_pid()
         print("stopped.")
     elif action in ("start", "restart"):
         subprocess.run(["schtasks", "/End", "/TN", UNIT], capture_output=True)
@@ -422,14 +524,18 @@ def is_installed() -> bool:
 def is_managed() -> bool:
     """Best-effort: is THIS running process the installed service (rather
     than a foreground `make dev-daemon`)? A restart must act only when
-    true, or `make restart` spawns a rival daemon on the same port.
+    true, or a service restart spawns a rival daemon on the same port.
 
     macOS: launchd sets `XPC_SERVICE_NAME` to our label and reparents us
     to launchd (ppid 1). Linux systemd --user likewise reparents to the
-    manager (ppid 1). Either signal on posix is sufficient; we require
-    the service to also be installed."""
+    manager (ppid 1). Windows / all: ``SWITCHBAY_SERVICE=1`` is stamped
+    into the installed launcher. We require the service to also be
+    installed."""
     if not is_installed():
         return False
+    flag = (os.environ.get("SWITCHBAY_SERVICE") or "").strip().lower()
+    if flag in ("1", "true", "yes"):
+        return True
     if sys.platform == "darwin" and os.environ.get("XPC_SERVICE_NAME") == LABEL:
         return True
     try:
@@ -439,16 +545,25 @@ def is_managed() -> bool:
 
 
 def spawn_restart() -> None:
-    """Fire `make restart` as a fully detached process so it survives
-    this daemon's imminent death (launchd/systemd hard-restart the job).
+    """Fire ``python -m switchbay service restart`` detached so it
+    survives this process's death. No Make (Windows packaging has none).
     Caller must have checked `is_managed()`."""
     repo = _repo_root()
-    # New session so the launchctl/systemctl kick isn't killed along with
-    # us when the service manager restarts the job.
-    subprocess.Popen(
-        ["make", "restart"],
-        cwd=str(repo),
-        start_new_session=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    env = os.environ.copy()
+    env["PYTHONPATH"] = str(repo / "src")
+    argv = [sys.executable, "-m", "switchbay", "service", "restart"]
+    kwargs: dict = {
+        "cwd": str(repo),
+        "env": env,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform == "win32":
+        flags = 0
+        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        if flags:
+            kwargs["creationflags"] = flags
+        subprocess.Popen(argv, **kwargs)
+        return
+    subprocess.Popen(argv, start_new_session=True, **kwargs)

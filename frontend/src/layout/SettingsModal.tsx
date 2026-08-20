@@ -399,7 +399,11 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
               </React.Fragment>
             );
           })}
-          <LocalModelPanel open={open} onClose={onClose} />
+          <LocalModelPanel
+            open={open}
+            onClose={onClose}
+            hfDownloads={info?.policy?.features?.hf_model_download ?? true}
+          />
           <LadderPanel open={open} providers={info?.providers ?? []} />
           <PacksPanel open={open} />
           {(info?.policy?.features?.user_mcp_servers ?? true) && (
@@ -2366,7 +2370,13 @@ function cacheSourceCaption(m: LocalInstalled): string {
   return repo ? `Already on disk · ${repo}` : "Already on disk";
 }
 
-function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void }) {
+function LocalModelPanel({
+  open, onClose, hfDownloads = true,
+}: {
+  open: boolean;
+  onClose: () => void;
+  hfDownloads?: boolean;
+}) {
   const [body, setBody] = useState<LocalLlmBody | null>(null);
   const [backend, setBackend] = useState<LocalBackendId>("llamacpp");
   const [query, setQuery] = useState("");
@@ -3076,7 +3086,18 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
         </div>
       )}
 
+      {!hfDownloads && (
+        <p className="sy-settings-blurb">
+          Hugging Face / remote model downloads are disabled by admin
+          policy. Set <code>features.hf_model_download</code> to{" "}
+          <code>true</code> in the machine admin file to allow Search
+          &amp; Install. Models already on disk still work below.
+        </p>
+      )}
+
       {/* Search / install */}
+      {hfDownloads && (
+      <>
       <div className="sy-settings-blurb" style={{ fontWeight: 600, marginBottom: 6 }}>
         Find &amp; install
       </div>
@@ -3200,6 +3221,8 @@ function LocalModelPanel({ open, onClose }: { open: boolean; onClose: () => void
       )}
       {inst?.state === "error" && inst.error && (
         <p className="sy-settings-status sy-settings-status--err">{inst.error}</p>
+      )}
+      </>
       )}
 
       {/* Active server controls (current backend) */}

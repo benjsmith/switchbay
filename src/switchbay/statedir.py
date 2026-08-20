@@ -52,6 +52,12 @@ from pathlib import Path
 # ── State root (per-OS, thin branches) ──────────────────────────────
 
 
+def daemon_pid_path() -> Path:
+    """PID of the running serve process. Used by `service stop` on
+    Windows so we never `taskkill /IM python.exe`."""
+    return state_root() / "daemon.pid"
+
+
 def state_root() -> Path:
     """OS-conventional, non-synced app-state root for switchbay.
 

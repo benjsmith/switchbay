@@ -39,8 +39,8 @@ def _isolate_user_state(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     # statedir.state_root() → $SWITCHBAY_STATE_DIR
     monkeypatch.setenv("SWITCHBAY_STATE_DIR", str(state))
-    # This branch defaults to enterprise policy. Unit tests that are
-    # not about policy stay on mainline "open" unless they opt in.
+    # Pin open so a developer with SWITCHBAY_PROFILE=enterprise in the
+    # shell doesn't flip the whole suite. Policy tests opt in.
     monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
     monkeypatch.delenv("SWITCHBAY_ADMIN_POLICY", raising=False)
     from switchbay import admin_policy

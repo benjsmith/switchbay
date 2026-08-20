@@ -1,0 +1,87 @@
+# Frozen Win11 x64 + macOS darwin arm64 trees for packaging teams.
+# Does the uv/pnpm/build work on GitHub runners, not on employee PCs.
+name: Enterprise payload
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  payload:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: switchbay-enterprise-win11-x64
+            archive: zip
+          - os: macos-14
+            artifact: switchbay-enterprise-darwin-arm64
+            archive: tar
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Python 3.13
+        run: uv python install 3.13
+      - name: Sync
+        run: uv sync
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Frontend
+        run: |
+          pnpm --dir frontend install --frozen-lockfile
+          pnpm --dir frontend run build
+      - name: Stage payload
+        run: uv run --no-sync python scripts/stage_enterprise_payload.py --out dist/${{ matrix.artifact }}
+      - name: Smoke relocatable interpreter
+        shell: bash
+        run: |
+          set -euo pipefail
+          TREE="dist/${{ matrix.artifact }}"
+          PY=""
+          for cand in "$TREE"/python/cpython-*/python.exe "$TREE"/python/cpython-*/bin/python3; do
+            if [ -e "$cand" ]; then
+              PY="$cand"
+              break
+            fi
+          done
+          if [ -z "$PY" ]; then
+            echo "no interpreter in payload" >&2
+            ls -la "$TREE/python" || true
+            exit 1
+          fi
+          PYTHONPATH="$TREE/src" "$PY" -c "import switchbay, switchbay.daemon; print('import-ok', switchbay.__version__)"
+      - name: Archive (posix)
+        if: matrix.archive == 'tar'
+        run: |
+          tar -C dist -czf dist/${{ matrix.artifact }}.tar.gz ${{ matrix.artifact }}
+      - name: Archive (windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path dist/${{ matrix.artifact }} -DestinationPath dist/${{ matrix.artifact }}.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.artifact }}.*
+          if-no-files-found: error
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${{ github.ref_name }}" --title "${{ github.ref_name }}" --generate-notes || true
+          gh release upload "${{ github.ref_name }}" dist/${{ matrix.artifact }}.* --clobber

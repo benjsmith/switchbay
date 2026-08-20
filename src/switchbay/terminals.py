@@ -26,15 +26,13 @@ messages.
 from __future__ import annotations
 
 import asyncio
-import fcntl
 import json
 import logging
 import os
-import pty
 import select
 import signal
 import struct
-import termios
+import sys
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -42,6 +40,11 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 log = logging.getLogger("switchbay.terminals")
+
+
+def pty_available() -> bool:
+    """Interactive PTY rail (fork + unix pty). False on Windows v1."""
+    return sys.platform != "win32"
 
 
 # Per-line cap on what we ship back to the client in one chunk.
@@ -112,6 +115,10 @@ def spawn(
     LaunchAgent). `cwd` is required so the shell starts in the
     active workspace.
     """
+    if not pty_available():
+        raise RuntimeError("interactive PTY is not available on this platform")
+    import pty  # noqa: PLC0415 — POSIX-only; lazy so Windows can import this module
+
     if argv is None:
         login_shell = os.environ.get("SHELL", "").strip() or "/bin/bash"
         argv = [login_shell, "-l"]
@@ -221,6 +228,10 @@ def spawn(
 
 
 def _set_winsize(fd: int, rows: int, cols: int) -> None:
+    if not pty_available():
+        return
+    import fcntl  # noqa: PLC0415
+    import termios  # noqa: PLC0415
     try:
         fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
     except OSError:

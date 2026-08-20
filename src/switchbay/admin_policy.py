@@ -1,21 +1,22 @@
 """Machine-level admin policy. The daemon never writes this file.
 
-This *enterprise* branch defaults to profile ``enterprise`` even with
-no file on disk: GitHub Copilot + local models only, and the runtime
-hooks that EDR (SentinelOne et al.) flags — ``uv python install``,
-``npx skills add``, CE ``setup.sh``, in-app git/npx updates, walking
-other apps' HF caches — stay off unless an admin file turns them on.
+Default profile is ``open`` (today's product: every provider, HF
+downloads on). ``SWITCHBAY_PROFILE=enterprise`` or an admin file with
+``"profile": "enterprise"`` locks to Copilot + local models and turns
+off EDR-noisy hooks. Admins can flip individual flags back on — in
+particular ``hf_model_download`` — in the admin file at packaging
+time or via MDM overlay.
 
 Search order (first existing file wins):
 
   1. ``$SWITCHBAY_ADMIN_POLICY``
-  2. ``/Library/Application Support/SwitchBay/admin.json``  (macOS MDM)
-  3. ``/etc/switchbay/admin.json``
-  4. ``<repo>/admin.json``  (optional drop-in next to the checkout)
+  2. ``%ProgramData%\\SwitchBay\\admin.json``  (Windows MDM)
+  3. ``/Library/Application Support/SwitchBay/admin.json``  (macOS MDM)
+  4. ``/etc/switchbay/admin.json``
+  5. ``<repo>/admin.json``  (optional drop-in next to the checkout)
 
-``SWITCHBAY_PROFILE=open`` restores mainline behaviour (every
-provider, every feature) without a file. ``SWITCHBAY_PROFILE=enterprise``
-is the default on this branch.
+``SWITCHBAY_PROFILE=open`` is the default. Enterprise payloads stamp
+``SWITCHBAY_PROFILE=enterprise``.
 
 The file is admin-owned. Do not put it in ``~/.config/switchbay`` —
 that tree is user-writable and the daemon *does* write there.
@@ -32,8 +33,9 @@ from typing import Any
 
 log = logging.getLogger("switchbay.admin_policy")
 
-# This branch's baked default. mainline stays "open".
-DEFAULT_PROFILE = "enterprise"
+# Consumer / git-checkout default. Enterprise packages stamp
+# SWITCHBAY_PROFILE=enterprise (or drop an admin.json).
+DEFAULT_PROFILE = "open"
 
 ENTERPRISE_PROVIDERS: frozenset[str] = frozenset({
     "github_copilot",
@@ -87,6 +89,9 @@ def candidate_paths() -> list[Path]:
     env = (os.environ.get("SWITCHBAY_ADMIN_POLICY") or "").strip()
     if env:
         out.append(Path(env).expanduser())
+    if sys.platform == "win32":
+        pd = os.environ.get("PROGRAMDATA") or r"C:\ProgramData"
+        out.append(Path(pd) / "SwitchBay" / "admin.json")
     if sys.platform == "darwin":
         out.append(Path("/Library/Application Support/SwitchBay/admin.json"))
     out.append(Path("/etc/switchbay/admin.json"))
@@ -197,6 +202,8 @@ def feature_error(name: str) -> str:
 def provider_allowed(provider_id: str) -> bool:
     pid = (provider_id or "").strip()
     if not pid:
+        return False
+    if pid == "mlx" and sys.platform != "darwin":
         return False
     data = load()
     explicit = data["providers"]

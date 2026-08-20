@@ -7,8 +7,12 @@ on:
 
 jobs:
   python:
-    name: Python unit tests + import smoke
-    runs-on: ubuntu-latest
+    name: Python unit tests + import smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install uv
@@ -20,7 +24,9 @@ jobs:
       - name: Unit tests
         run: uv run --no-sync pytest
       - name: Import smoke (daemon must import cleanly)
-        run: PYTHONPATH=src uv run --no-sync python -c "import switchbay.daemon"
+        env:
+          PYTHONPATH: src
+        run: uv run --no-sync python -c "import switchbay.daemon"
 
   frontend:
     name: Frontend typecheck + build

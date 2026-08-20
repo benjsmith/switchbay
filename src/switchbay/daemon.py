@@ -4715,6 +4715,8 @@ async def _spawn_pty_for_thread(
     resize can reach the shell. Callers that spawn before any client
     surface exists (`!cmd`) fall back to the last size any client
     reported (`term_size_hint`), then 80×24."""
+    if not terminals.pty_available():
+        raise RuntimeError("interactive terminals are not available on this platform")
     workspace: Path = app["workspace"]
     # `cwd` override lets a shell start in a directory other than the
     # active workspace (e.g. "watch in shell" points it at an external
@@ -14970,8 +14972,11 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     # generators that don't have the app handle in scope.
     app["daemon_port"] = port
     os.environ["CSWY_DAEMON_PORT"] = str(port)
+    service.write_daemon_pid()
     try:
         web.run_app(app, host=host, port=port, print=None)
     except KeyboardInterrupt:
         pass
+    finally:
+        service.clear_daemon_pid()
     return 0

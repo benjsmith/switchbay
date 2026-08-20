@@ -35,9 +35,11 @@ New here? Read **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.
 (**Workspace → Thread → Run → Turn**), the runtime shape, and the data
 flows behind the things you do most. Provider coverage (what's
 first-class vs preview, including Muse Code) is
-**[`docs/providers.md`](docs/providers.md)**. This **enterprise** branch
-defaults to GitHub Copilot + local models and an admin-only policy
-file — see **[`docs/enterprise.md`](docs/enterprise.md)**.
+**[`docs/providers.md`](docs/providers.md)**. The default **open**
+profile is today's consumer product. An optional **enterprise** profile
+(`SWITCHBAY_PROFILE=enterprise` or a machine admin file) locks to GitHub
+Copilot + local models and turns EDR-noisy hooks off — admins can still
+enable Hugging Face downloads. See **[`docs/enterprise.md`](docs/enterprise.md)**.
 
 A workspace is any folder with a **curiosity-engine**-shaped layout
 (`vault/` raw sources + `wiki/` docs & graph); Switch Bay degrades
