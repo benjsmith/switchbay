@@ -1,4 +1,4 @@
-# Known issues (v0.9.13)
+# Known issues (v0.9.14)
 
 An honest, short list of what's rough or deferred in this release. None
 are data-loss or security issues — each is cosmetic, has a workaround,
@@ -17,6 +17,8 @@ page only keeps the one-line workarounds.
 | Packs | With many pack tabs open the tab strip scrolls; there's no overflow dropdown yet. | Scroll the strip horizontally. |
 | Codex provider | No per-call rail card (upstream has no PreToolUse). MCP works. | Claude Code or Grok Build for rail cards. Details: [`providers.md`](providers.md). |
 | Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |
+| Windows | Interactive rail terminal is Unix-only in v1. | Copilot + local HTTP still work. PTY comes later. |
+| Enterprise | Release ships frozen zip/tar payloads, not a signed MSI/PKG yet. | Packaging teams wrap the Win11 x64 / darwin arm64 assets. WiX + notarization are the next packaging PRs. |
 
 ## Platform support
 

@@ -3,6 +3,42 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-20 — v0.9.14 — enterprise profile
+
+**Migration:** none for the default **open** profile. **Breaking:** none
+on open. `SWITCHBAY_PROFILE=enterprise` (or a machine admin file) locks
+to Copilot + local and turns EDR-noisy hooks off.
+
+One codebase, two profiles. Open is today's product. Enterprise is a
+flag. Admins may set `features.hf_model_download` true. Windows stop
+no longer kills every `python.exe`. CI ships frozen Win11 x64 and
+macOS darwin arm64 trees for packaging teams.
+
+### Added
+
+- **Profiles** — `open` (default) vs `enterprise`. Machine admin file
+  at `%ProgramData%\SwitchBay\admin.json` / `/Library/Application
+  Support/SwitchBay/admin.json`. Template: `config/admin.enterprise.json`.
+- **HF downloads admin-opt-in** — enterprise default off; set
+  `features.hf_model_download` true to restore Settings → Find & install.
+  On-disk models still work when off.
+- **Enterprise payloads** — release assets
+  `switchbay-enterprise-win11-x64.zip` and
+  `switchbay-enterprise-darwin-arm64.tar.gz` (relocatable CPython +
+  `frontend/dist`). See `enterprise/packaging/README.md`.
+
+### Fixed
+
+- **Windows service stop** — `taskkill /PID` of the daemon pidfile,
+  never `/IM python.exe`.
+- **In-app restart** — `python -m switchbay service restart`, not Make.
+- **Windows import** — `terminals.py` no longer imports `pty` at
+  module level. Interactive PTY stays Unix-only.
+
+### Version
+
+0.9.14 (micro). History retained.
+
 ## 2026-08-20 — v0.9.13 — rail picker
 
 **Migration:** none. **Breaking:** none.
