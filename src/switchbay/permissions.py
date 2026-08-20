@@ -368,7 +368,8 @@ def _bash_is_skill_read(cmd: str) -> bool:
     tokens = t.split()[1:]
     paths = [
         tok.strip("'\"") for tok in tokens
-        if tok.startswith(("~", "/", "$HOME", "${HOME}")) or "/skills/" in tok
+        if tok.startswith(("~", "/", "$HOME", "${HOME}"))
+        or "/skills/" in tok.replace("\\", "/")
     ]
     if not paths:
         return False

@@ -773,24 +773,30 @@ def mlx_cache_bytes(repo: str) -> int:
     only a finished snapshot made the install bar sit at 0% then jump
     to ready.
     """
-    want = (repo or "").strip().lower()
+    want = (repo or "").strip()
     if not want:
         return 0
-    slug = "models--" + want.replace("/", "--")
+    want_slug = ("models--" + want.replace("/", "--")).lower()
     best = 0
     for cache in _hf_hub_caches():
-        d = cache / slug
-        if not d.is_dir():
-            continue
-        total = 0
         try:
-            for p in d.rglob("*"):
-                if p.is_file():
-                    total += p.stat().st_size
+            if not cache.is_dir():
+                continue
+            dirs = list(cache.iterdir())
         except OSError:
-            pass
-        if total > best:
-            best = total
+            continue
+        for d in dirs:
+            if not d.is_dir() or d.name.lower() != want_slug:
+                continue
+            total = 0
+            try:
+                for p in d.rglob("*"):
+                    if p.is_file():
+                        total += p.stat().st_size
+            except OSError:
+                pass
+            if total > best:
+                best = total
     return best
 
 

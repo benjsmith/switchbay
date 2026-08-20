@@ -744,9 +744,10 @@ async def _free_managed_port(port: int) -> None:
         if not left:
             return
         await asyncio.sleep(0.2)
+    sigkill = getattr(signal, "SIGKILL", signal.SIGTERM)
     for pid in _managed_pids_for_port(port):
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, sigkill)
         except ProcessLookupError:
             pass
 

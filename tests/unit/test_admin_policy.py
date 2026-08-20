@@ -21,9 +21,10 @@ def enterprise_env(monkeypatch):
 
 
 def test_enterprise_default_allows_copilot_and_local(enterprise_env):
+    import sys
     assert admin_policy.provider_allowed("github_copilot")
     assert admin_policy.provider_allowed("llamacpp")
-    assert admin_policy.provider_allowed("mlx")
+    assert admin_policy.provider_allowed("mlx") is (sys.platform == "darwin")
     assert admin_policy.provider_allowed("ollama")
     assert not admin_policy.provider_allowed("anthropic")
     assert not admin_policy.provider_allowed("claude-code")

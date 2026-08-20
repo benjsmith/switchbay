@@ -98,7 +98,7 @@ def test_scan_cached_mlx_finds_sandboxed_hub(tmp_path, monkeypatch):
     argv = localllm.server_args("/bin/mlx_lm.server", {
         "backend": "mlx", "port": 8888, **hit,
     })
-    assert snap.as_posix() in argv
+    assert str(snap) in argv or snap.as_posix() in argv
     assert "--model" in argv
 
 
@@ -236,7 +236,8 @@ async def test_free_managed_port_terms_then_kills(monkeypatch):
 
     def fake_kill(pid, sig):
         state["kills"].append((pid, sig))
-        if sig == signal.SIGKILL or pid in state["pids"]:
+        sigkill = getattr(signal, "SIGKILL", None)
+        if sig == sigkill or pid in state["pids"]:
             state["pids"] = [p for p in state["pids"] if p != pid]
 
     monkeypatch.setattr(localllm, "_managed_pids_for_port", fake_pids)

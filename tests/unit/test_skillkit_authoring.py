@@ -170,7 +170,7 @@ def test_discovers_agents_skills_without_claude_dir(tmp_path, monkeypatch):
                         lambda: tmp_path / "missing-ce")
     names = {s.name: s for s in skillkit.list_skills(ws)}
     assert "curiosity-engine" in names
-    assert names["curiosity-engine"].path.endswith(
+    assert names["curiosity-engine"].path.replace("\\", "/").endswith(
         "curiosity-engine/SKILL.md")
     assert not (tmp_path / "home" / ".claude" / "skills").exists()
 

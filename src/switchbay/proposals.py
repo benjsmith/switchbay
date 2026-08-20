@@ -84,7 +84,12 @@ _COMMENT_HEAD = "\n\n## Review comments\n\n"
 _COMMENT_RE = re.compile(r"\n## Review comments\n.*\Z", re.S)
 
 
+def _posix_rel(rel: str) -> str:
+    return (rel or "").replace("\\", "/").lstrip("/")
+
+
 def _writable_rel(rel: str) -> bool:
+    rel = _posix_rel(rel)
     if not rel or ".." in rel.split("/"):
         return False
     return rel.startswith("wiki/") or rel == CHARTER_REL
@@ -120,11 +125,11 @@ def add(
     kind+title; for 'edit' the caller supplies the existing page `path`
     (repo-relative, or the workspace charter)."""
     if op == "edit" and path:
-        rel = path.lstrip("/")
+        rel = _posix_rel(path)
         if rel != CHARTER_REL and not rel.startswith("wiki/"):
             rel = f"wiki/{rel}"
     else:
-        rel = str(target_path(workspace, kind, title).relative_to(workspace))
+        rel = target_path(workspace, kind, title).relative_to(workspace).as_posix()
     original: str | None = None
     written = False
     if _writable_rel(rel):
@@ -161,7 +166,7 @@ def accept(workspace: Path, pid: str) -> dict[str, Any] | None:
     e = get(workspace, pid)
     if e is None or e.get("status") != "proposed":
         return None
-    rel = str(e.get("path") or "")
+    rel = _posix_rel(str(e.get("path") or ""))
     if not _writable_rel(rel):
         return update(workspace, pid, status="dismissed",
                       error="unsafe path refused")
@@ -176,7 +181,7 @@ def dismiss(workspace: Path, pid: str) -> dict[str, Any] | None:
     e = get(workspace, pid)
     if e is None or e.get("status") != "proposed":
         return None
-    rel = str(e.get("path") or "")
+    rel = _posix_rel(str(e.get("path") or ""))
     if e.get("written") and _writable_rel(rel):
         dest = workspace / rel
         original = e.get("original")
@@ -207,7 +212,7 @@ def apply_comments(workspace: Path, pid: str, comments: str) -> dict[str, Any] |
     body = _COMMENT_RE.sub("", str(e.get("body") or "")).rstrip()
     if note:
         body = body + _COMMENT_HEAD + note + "\n"
-    rel = str(e.get("path") or "")
+    rel = _posix_rel(str(e.get("path") or ""))
     if e.get("written") and _writable_rel(rel):
         dest = workspace / rel
         try:

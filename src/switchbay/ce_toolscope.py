@@ -144,12 +144,13 @@ def _script_rules(root: Path) -> list[str]:
     pinned-root wildcard for ones added later."""
     rules: list[str] = []
     scripts = root / "scripts"
+    scripts_s = scripts.as_posix()
 
     # Pinned-root wildcards — forward-compatible catch.
-    rules.append(f"Bash(uv run python3 {scripts}/*:*)")
-    rules.append(f"Bash(uv run python {scripts}/*:*)")
-    rules.append(f"Bash(python3 {scripts}/*:*)")
-    rules.append(f"Bash(bash {scripts}/*:*)")
+    rules.append(f"Bash(uv run python3 {scripts_s}/*:*)")
+    rules.append(f"Bash(uv run python {scripts_s}/*:*)")
+    rules.append(f"Bash(python3 {scripts_s}/*:*)")
+    rules.append(f"Bash(bash {scripts_s}/*:*)")
 
     # Explicit per-script rules for what's actually installed. Tighter
     # than the wildcard for the common case, and a provider whose
@@ -163,11 +164,11 @@ def _script_rules(root: Path) -> list[str]:
         if not f.is_file():
             continue
         if f.suffix == ".py":
-            rules.append(f"Bash(uv run python3 {f}:*)")
-            rules.append(f"Bash(python3 {f}:*)")
+            rules.append(f"Bash(uv run python3 {f.as_posix()}:*)")
+            rules.append(f"Bash(python3 {f.as_posix()}:*)")
         elif f.suffix == ".sh":
-            rules.append(f"Bash(bash {f}:*)")
-            rules.append(f"Bash({f}:*)")
+            rules.append(f"Bash(bash {f.as_posix()}:*)")
+            rules.append(f"Bash({f.as_posix()}:*)")
     return rules
 
 
@@ -183,7 +184,7 @@ def bash_rules(workspace: Path) -> list[str]:
     ws = workspace.resolve()
     for base in (ws / "wiki", ws):
         for verb in _GIT_VERBS:
-            rules.append(f"Bash(git -C {base} {verb}:*)")
+            rules.append(f"Bash(git -C {base.as_posix()} {verb}:*)")
 
     # CE reads its preset from the environment and stamps activity
     # entries with the date.
@@ -196,7 +197,7 @@ def fs_rules(workspace: Path) -> list[str]:
     """File-scope rules CE + CM need: write inside the workspace, read
     the skill roots (so the agent can read its own scripts/reference
     docs), and a scratch dir. Mirrors CE's generated allowlist."""
-    ws = workspace.resolve()
+    ws = workspace.resolve().as_posix()
     rules = [
         f"Edit({ws}/**)",
         f"Write({ws}/**)",
@@ -209,7 +210,7 @@ def fs_rules(workspace: Path) -> list[str]:
         "Read(/tmp/**)",
     ]
     for root in skill_roots(workspace):
-        rules.append(f"Read({root}/**)")
+        rules.append(f"Read({root.as_posix()}/**)")
     # Any discovered skill (not just CE/CM) may be Read so a spawned
     # shell can load SKILL.md. Write/bash stay pinned to SCOPED_SKILLS.
     try:
@@ -217,7 +218,7 @@ def fs_rules(workspace: Path) -> list[str]:
         for sk in skillkit.list_skills(workspace):
             parent = Path(sk.path).parent
             for form in _root_forms(parent):
-                rules.append(f"Read({form}/**)")
+                rules.append(f"Read({form.as_posix()}/**)")
     except Exception:  # noqa: BLE001
         log.exception("skill read-scope failed")
     try:
@@ -262,18 +263,19 @@ def command_prefixes(workspace: Path) -> list[str]:
     out: list[str] = []
     for root in skill_roots(workspace):
         scripts = root / "scripts"
+        scripts_s = scripts.as_posix()
         out.extend([
-            f"uv run python3 {scripts}/",
-            f"uv run python {scripts}/",
-            f"python3 {scripts}/",
-            f"bash {scripts}/",
-            f"sh {scripts}/",
-            f"{scripts}/",
+            f"uv run python3 {scripts_s}/",
+            f"uv run python {scripts_s}/",
+            f"python3 {scripts_s}/",
+            f"bash {scripts_s}/",
+            f"sh {scripts_s}/",
+            f"{scripts_s}/",
         ])
     ws = workspace.resolve()
     for base in (ws / "wiki", ws):
         for verb in _GIT_VERBS:
-            out.append(f"git -C {base} {verb}")
+            out.append(f"git -C {base.as_posix()} {verb}")
     out.append("printenv CURATOR_PRESET")
     return _dedup(out)
 
@@ -281,12 +283,15 @@ def command_prefixes(workspace: Path) -> list[str]:
 def allows_command(workspace: Path, command: str) -> bool:
     """True iff `command` is one of the CE/CM call shapes, in a form
     safe to auto-approve (single command, no chaining or redirect)."""
-    cmd = " ".join((command or "").split())
+    cmd = " ".join((command or "").split()).replace("\\", "/")
     if not cmd:
         return False
     if any(ch in cmd for ch in _UNSAFE_SHELL_CHARS):
         return False
-    return any(cmd.startswith(p) for p in command_prefixes(workspace))
+    return any(
+        cmd.startswith(p.replace("\\", "/"))
+        for p in command_prefixes(workspace)
+    )
 
 
 def write_globs(workspace: Path) -> list[str]:
@@ -296,7 +301,7 @@ def write_globs(workspace: Path) -> list[str]:
     permission store, and session state, which curation never edits
     and which an agent should not be able to rewrite uncarded.
     Mirrors the Edit/Write scope in CE's own generated allowlist."""
-    ws = workspace.resolve()
+    ws = workspace.resolve().as_posix()
     return [f"{ws}/wiki", f"{ws}/.curator", f"{ws}/vault"]
 
 
