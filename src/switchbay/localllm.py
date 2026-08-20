@@ -306,13 +306,31 @@ def save_harness(text: str) -> None:
     p.write_text(text[:_HARNESS_HARD_CAP], encoding="utf-8")
 
 
+LOCAL_PROVIDER_IDS = frozenset({"mlx", "llamacpp", "ollama"})
+
+
+def is_local_provider(provider_id: str) -> bool:
+    """On-device HTTP backends that need the RAM-scaled tool desk.
+
+    Independent of the harness ``applies_to`` list — that list only
+    controls whether the anti-loop rules are appended. A seeded
+    harness that still says ``applies_to: llamacpp`` must not send
+    the full 65-tool rail prompt to a 4B MLX model (~15k prefill).
+    """
+    return str(provider_id or "") in LOCAL_PROVIDER_IDS
+
+
 def harness_applies_to(provider_id: str) -> bool:
     """Whether the harness targets `provider_id` (its `applies_to`
-    frontmatter — a space/comma list; default llamacpp)."""
+    frontmatter — a space/comma list; default every local backend)."""
     meta, _ = _split_frontmatter(load_harness())
-    raw = meta.get("applies_to", "llamacpp")
+    raw = meta.get("applies_to", "llamacpp mlx ollama")
     ids = {t.strip() for t in raw.replace(",", " ").split() if t.strip()}
-    return provider_id in ids
+    if provider_id in ids:
+        return True
+    # Pre-MLX seed files listed only llamacpp. Still attach the
+    # harness to the other on-device providers.
+    return ids <= {"llamacpp"} and is_local_provider(provider_id)
 
 
 def harness_body() -> str:
@@ -533,11 +551,22 @@ def server_args(binp: str, cfg: dict[str, Any]) -> list[str]:
             or cfg.get("repo")
             or cfg.get("model")
         )
+        # 4B-class Metal OOM: default prompt cache is 10 sequences with
+        # no byte cap (Watch showed 2.26 GB + weights), concurrency 8/32,
+        # thinking ON. Cap cache, batching, and the thinking default.
+        cache_bytes = str(cfg.get("prompt_cache_bytes") or "512MB")
         return [
             binp,
             "--host", "127.0.0.1",
             "--port", str(cfg.get("port") or PORT),
             "--model", str(model),
+            "--prompt-cache-size", "2",
+            "--prompt-cache-bytes", cache_bytes,
+            "--prompt-concurrency", "1",
+            "--decode-concurrency", "1",
+            "--prefill-step-size", "1024",
+            "--max-tokens", str(int(cfg.get("max_tokens") or 512)),
+            "--chat-template-args", json.dumps({"enable_thinking": False}),
         ]
     return [
         binp,

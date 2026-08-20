@@ -5457,7 +5457,7 @@ body {
 /* One Agent-Dashboard link per block (the header's) — hide the
  * redundant per-item jump arrows inside the block body, but keep the
  * distinct "↗ term" re-run-in-terminal button. */
-.sy-rail-block-body .sy-rail-jump:not(.sy-rail-jump--terminal) { display: none; }
+.sy-rail-block-body .sy-rail-jump:not(.sy-rail-jump--terminal):not(.sy-rail-jump--wiki) { display: none; }
 
 .sy-rail-lanes {
   display: flex;
@@ -5575,7 +5575,8 @@ body {
 .sy-rail-jump:hover { color: var(--accent); }
 /* The Bash "↗ term" variant is wider (icon + label). Same anchor
  * as `.sy-rail-jump` but with breathing room for the text. */
-.sy-rail-jump--terminal {
+.sy-rail-jump--terminal,
+.sy-rail-jump--wiki {
   padding: 0 6px;
   font-size: 10px;
   letter-spacing: 0.02em;

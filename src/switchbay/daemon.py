@@ -5811,19 +5811,23 @@ def _detect_shellish(text: str) -> bool:
     # Lowercase unix-ish token only — "Git log" reads as prose.
     if not _re.fullmatch(r"[a-z0-9_.~/-]+", tok):
         return False
-    # On-PATH words that are also ordinary chat replies. `yes` is the
-    # disaster case: it prints y forever in a new shell thread.
+    # On-PATH words that are also ordinary chat. `yes` prints y
+    # forever in a new shell thread; `what` is /usr/bin/what on macOS
+    # (SCCS banner) and is how people start a wiki question.
     if tok in {
         "yes", "no", "y", "n", "ok", "okay", "true", "false",
         "please", "thanks", "thank",
+        "what", "who", "where", "when", "why", "how", "which",
+        "whom", "whose",
+        "hi", "hello", "hey",
     }:
         return False
     builtins = {"cd", "export", "source", "pwd", "env", "alias", "unset", "set"}
     if tok not in builtins and _shutil.which(tok) is None:
         return False
     words = t.split()
-    # A lone on-PATH word ("date", "who", "ls") or a short invocation
-    # is confidently shell. Longer input needs shell-shaped evidence —
+    # A lone on-PATH word ("date", "ls") or a short invocation is
+    # confidently shell. Longer input needs shell-shaped evidence —
     # flags, paths, pipes, redirects, assignments — because plenty of
     # English sentences start with an on-PATH word ("man pages are…",
     # "test whether the daemon…").
@@ -9432,7 +9436,7 @@ async def _dispatch_chat(
     # that short-circuits repeated identical tool calls. Ornith is smaller
     # and tends to circle (e.g. ls/search to "find" a skill); other
     # providers are untouched.
-    is_local_model = localllm.harness_applies_to(pid)
+    is_local_model = localllm.is_local_provider(pid)
     local_palette = (tool_palette or "chat") if is_local_model else None
     local_rung = None
     cmd_only_tools: list[str] | None = None
@@ -9472,7 +9476,10 @@ async def _dispatch_chat(
             rail_default.assemble_local_prompt(
                 palette=local_palette or "chat",
                 extra_system=extra_system or "",
-                harness=localllm.harness_body(),
+                harness=(
+                    localllm.harness_body()
+                    if localllm.harness_applies_to(pid) else ""
+                ),
                 messages=messages,
                 rung=local_rung,
                 only_tools=cmd_only_tools,
@@ -9510,6 +9517,7 @@ async def _dispatch_chat(
         pass
     executed_calls: dict[str, int] = {}
     loop_hits = 0
+    wiki_cites: list[str] = []
 
     final_done: tuple[int | None, int | None, str | None] = (None, None, None)
     # Run-start fence for create_report: a capable model may render a rich
@@ -9531,6 +9539,18 @@ async def _dispatch_chat(
                 tools=tools_for_provider or None,
                 session_id=session_id,
                 workspace=str(workspace),
+                max_tokens=(
+                    1024
+                    if is_local_model and local_rung is not None
+                    and getattr(local_rung, "force_scaffold", False)
+                    else 4096
+                ),
+                reasoning=(
+                    False
+                    if is_local_model and local_rung is not None
+                    and getattr(local_rung, "force_scaffold", False)
+                    else None
+                ),
                 origin_thread=thread_id,
                 # Same loop serves interactive rail chat and micro-edits
                 # (the latter arrives with provider/model overridden), so
@@ -9689,6 +9709,19 @@ async def _dispatch_chat(
                         session_id = ev.session_id
                         sessions[thread_id] = ev.session_id
 
+            if stop_reason != "tool_use" and wiki_cites:
+                cited = _with_wiki_cites(current_text, wiki_cites)
+                if cited != current_text:
+                    extra = cited[len(current_text):]
+                    if msg_id is None:
+                        msg_id = protocol.new_message_id()
+                        await _broadcast(
+                            app, protocol.text_message_start(run_id, msg_id),
+                        )
+                    await _broadcast(
+                        app, protocol.text_message_content(run_id, msg_id, extra),
+                    )
+                    current_text = cited
             if msg_id is not None:
                 # Stream ended with prose open — close the message.
                 await _broadcast(app, protocol.text_message_end(run_id, msg_id))
@@ -9836,6 +9869,13 @@ async def _dispatch_chat(
                     output = _cap_tool_output(
                         tname, output, local=is_local_model,
                     )
+                    for cite in _wiki_cites_from_tool(tname, output):
+                        if tname == "read_wiki_page":
+                            if cite in wiki_cites:
+                                wiki_cites.remove(cite)
+                            wiki_cites.insert(0, cite)
+                        elif cite not in wiki_cites:
+                            wiki_cites.append(cite)
                     payload = json.dumps(output)
                     tool_results.append({
                         "type": "tool_result",
@@ -9909,6 +9949,18 @@ async def _dispatch_chat(
                     ))
                 break
             messages.append({"role": "user", "content": tool_results})
+            if is_local_model and local_rung is not None:
+                messages = rail_default.clip_messages_to_budget(
+                    system_prompt, tools_for_provider or [],
+                    messages, local_rung.prompt_budget,
+                )
+                log.info(
+                    "local prompt after tools tokens~%s (budget=%s, n_msg=%s)",
+                    rail_default.prompt_token_breakdown(
+                        system_prompt, tools_for_provider or [], messages,
+                    ).get("total"),
+                    local_rung.prompt_budget, len(messages),
+                )
         else:
             # Reached the last-resort safety backstop without the model
             # finishing or the loop guard firing — treat as a runaway and stop.
@@ -10004,7 +10056,7 @@ async def _dispatch_chat(
     return None
 
 
-_LOCAL_TOOL_RESULT_CAP = 6000  # chars (~1.5k tokens) fed back per tool
+_LOCAL_TOOL_RESULT_CAP = 2400  # chars (~600 tokens) — 4B dies at 15k prefill
 _TOOL_RESULT_CAP = 24_000      # strong models; still bounds RAM across turns
 
 
@@ -10013,8 +10065,15 @@ def _cap_tool_output(name: str, output: Any, *, local: bool = False) -> Any:
 
     Local models get a tighter cap. `load_skill` of a huge skill
     becomes a frontmatter peek + section hint (progressive load).
+    Wiki reads keep ``page`` / ``title`` / ``wikilink`` and clip
+    ``content`` in place — smashing the JSON into a preview string
+    made a 4B summarise a stub and drop the clickable cite.
     """
     cap = _LOCAL_TOOL_RESULT_CAP if local else _TOOL_RESULT_CAP
+    if isinstance(output, dict) and name == "read_wiki_page" and "content" in output:
+        return _cap_wiki_page_output(output, cap)
+    if isinstance(output, dict) and name == "search_wiki":
+        return _cap_wiki_search_output(output, cap)
     try:
         s = output if isinstance(output, str) else json.dumps(output)
     except (TypeError, ValueError):
@@ -10039,6 +10098,89 @@ def _cap_tool_output(name: str, output: Any, *, local: bool = False) -> Any:
         "ok": True, "truncated": True,
         "preview": s[:cap] + " …[truncated for context]",
     }
+
+
+def _cap_wiki_page_output(output: dict[str, Any], cap: int) -> dict[str, Any]:
+    out = dict(output)
+    page = str(out.get("page") or "")
+    if page and not out.get("wikilink"):
+        cite = tools.wiki_cite_target(page)
+        if cite:
+            out["wikilink"] = f"[[{cite}]]"
+    body = str(out.get("content") or "")
+    body_cap = max(1200, cap)
+    if len(body) > body_cap:
+        out["content"] = body[:body_cap] + " …[truncated for context]"
+        out["truncated"] = True
+    return out
+
+
+def _cap_wiki_search_output(output: dict[str, Any], cap: int) -> dict[str, Any]:
+    try:
+        blob = json.dumps(output)
+    except (TypeError, ValueError):
+        return output
+    if len(blob) <= cap:
+        return output
+    hits = [
+        dict(h) for h in (output.get("results") or []) if isinstance(h, dict)
+    ]
+    for h in hits:
+        page = str(h.get("page") or "")
+        if page and not h.get("wikilink"):
+            cite = tools.wiki_cite_target(page)
+            if cite:
+                h["wikilink"] = f"[[{cite}]]"
+        snip = str(h.get("snippet") or "")
+        if len(snip) > 120:
+            h["snippet"] = snip[:120] + "…"
+    kept = hits
+    while kept and len(json.dumps({"results": kept})) > cap:
+        kept = kept[:-1]
+    out = dict(output)
+    out["results"] = kept
+    out["truncated"] = True
+    return out
+
+
+def _wiki_cites_from_tool(name: str, output: Any) -> list[str]:
+    """[[wikilink]] strings the rail can turn into clicks."""
+    if not isinstance(output, dict):
+        return []
+    links: list[str] = []
+    if name == "read_wiki_page":
+        raw = output.get("wikilink") or tools.wiki_cite_target(
+            str(output.get("page") or ""),
+        )
+        if raw:
+            links.append(str(raw))
+    elif name == "search_wiki":
+        for hit in (output.get("results") or [])[:3]:
+            if not isinstance(hit, dict):
+                continue
+            raw = hit.get("wikilink") or tools.wiki_cite_target(
+                str(hit.get("page") or ""),
+            )
+            if raw:
+                links.append(str(raw))
+    out: list[str] = []
+    for raw in links:
+        link = str(raw).strip()
+        if not link:
+            continue
+        if not link.startswith("[["):
+            link = f"[[{link}]]"
+        if link not in out:
+            out.append(link)
+    return out
+
+
+def _with_wiki_cites(text: str, cites: list[str]) -> str:
+    """Append clickable [[wikilinks]] when the model forgot to cite."""
+    if not cites or "[[" in (text or ""):
+        return text
+    extra = " ".join(cites[:3])
+    return f"{text.rstrip()}\n\n{extra}" if (text or "").strip() else extra
 
 
 def _cap_local_tool_output(name: str, output: Any) -> Any:
@@ -11074,6 +11216,17 @@ def _artifact_for_tool(
             if isinstance(sid, str) and sid else None
         )
         return protocol.artifact("sketch", f"slide · {sname}", sel)
+    if name == "read_wiki_page":
+        rel = str(out.get("page") or tinput.get("page") or "").replace("\\", "/")
+        if "wiki/" in rel:
+            rel = rel[rel.find("wiki/"):]
+        if rel.startswith("wiki/") and rel.endswith(".md"):
+            page_id = rel[len("wiki/"):-len(".md")]
+            label = str(out.get("title") or page_id)
+            return protocol.artifact(
+                "markdown", f"page · {label}",
+                {"kind": "page", "id": page_id, "path": rel},
+            )
     return None
 
 

@@ -120,6 +120,22 @@ def test_llamacpp_wire_model_falls_back_to_alias():
     assert llamacpp.wire_model_id(req, {"alias": "ornith"}) == "ornith"
 
 
+def test_mlx_is_local_even_when_harness_targets_llamacpp(tmp_path, monkeypatch):
+    """A seeded harness with applies_to: llamacpp used to skip the
+    RAM desk for MLX and send the full 65-tool rail (~15k prefill)."""
+    p = tmp_path / "model-harness.md"
+    p.write_text("---\napplies_to: llamacpp\n---\n\nrules\n", encoding="utf-8")
+    monkeypatch.setattr(localllm, "harness_path", lambda: p)
+    assert localllm.is_local_provider("mlx")
+    assert localllm.is_local_provider("llamacpp")
+    assert localllm.is_local_provider("ollama")
+    assert not localllm.is_local_provider("github_copilot")
+    assert localllm.harness_applies_to("llamacpp")
+    assert localllm.harness_applies_to("mlx")
+    assert localllm.harness_applies_to("ollama")
+    assert not localllm.harness_applies_to("anthropic")
+
+
 def test_curator_profile_stays_off_the_user_prompt():
     sys_txt = daemon._curator_profile_system("Treat X as an entity.")
     assert "Treat X as an entity." in sys_txt
@@ -340,6 +356,14 @@ def test_mlx_server_args_are_mlx_lm_not_llama(tmp_path):
     assert "-m" not in argv
     assert ".gguf" not in joined
     assert "--alias" not in argv
+    # Caps that stopped the 4B Metal OOM (2.26 GB unbounded prompt cache).
+    assert argv[argv.index("--prompt-cache-size") + 1] == "2"
+    assert argv[argv.index("--prompt-cache-bytes") + 1] == "512MB"
+    assert argv[argv.index("--prompt-concurrency") + 1] == "1"
+    assert argv[argv.index("--decode-concurrency") + 1] == "1"
+    assert argv[argv.index("--prefill-step-size") + 1] == "1024"
+    tmpl = json.loads(argv[argv.index("--chat-template-args") + 1])
+    assert tmpl.get("enable_thinking") is False
 
 
 @pytest.mark.asyncio

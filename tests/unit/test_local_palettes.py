@@ -63,7 +63,13 @@ def test_small_model_on_big_mac_stays_worker():
     rung = rail_default.resolve_local_rung(128, model_hint="mlx-community/Qwen3-4B-4bit")
     assert rung.id == "ram16"
     assert rung.force_scaffold is True
+    assert rung.prompt_budget == 2800
+    assert rung.recommended_ctx == 8192
     assert "ce_sweep" not in _names(128, "Qwen3-4B-4bit")
+    chat = _names(128, "Qwen3-4B-4bit", palette="chat")
+    assert "search_wiki" in chat
+    assert "wiki_neighbors" not in chat
+    assert "recall_rail" not in chat
 
 
 def test_27b_on_48gb_is_27b_class():
@@ -149,6 +155,47 @@ def test_assemble_trims_old_messages():
     assert stats["total"] <= 2000
     assert stats["trimmed"] >= 1
     assert kept[-1]["content"] == "last"
+
+
+def test_clip_messages_keeps_tool_result_shape():
+    """A 4B + search_wiki used to stringify/overflow into a 15k prefill.
+
+    Clipping must leave a `tool_result` block so the OpenAI-compat
+    converter still emits a `tool` role, not a junk user string.
+    """
+    rung = rail_default.resolve_local_rung(16, model_hint="Qwen3-4B-4bit")
+    specs = rail_default.tools_for_provider(
+        local=True, palette="chat", rung=rung,
+    )
+    system = rail_default.LOCAL_SYSTEM_PROMPT
+    hit = "Active learning. " + ("claim " * 400)
+    messages = [
+        {"role": "user", "content": "what do we know about active learning?"},
+        {"role": "assistant", "content": [{
+            "type": "tool_use", "id": "call_1", "name": "search_wiki",
+            "input": {"query": "active learning"},
+        }]},
+        {"role": "user", "content": [{
+            "type": "tool_result", "tool_use_id": "call_1",
+            "content": __import__("json").dumps({
+                "ok": True,
+                "hits": [{"page": "active-learning", "snippet": hit}] * 12,
+            }),
+        }]},
+    ]
+    kept = rail_default.clip_messages_to_budget(
+        system, specs, messages, rung.prompt_budget,
+    )
+    stats = rail_default.prompt_token_breakdown(system, specs, kept)
+    assert stats["total"] <= rung.prompt_budget
+    assert kept[0]["content"] == "what do we know about active learning?"
+    last = kept[-1]["content"]
+    assert isinstance(last, list)
+    assert last[0]["type"] == "tool_result"
+    assert last[0]["tool_use_id"] == "call_1"
+    assert "clipped for local context" in str(last[0]["content"]) or len(
+        str(last[0]["content"]),
+    ) < 20_000
 
 
 def test_local_propose_blurb_is_scaffold():

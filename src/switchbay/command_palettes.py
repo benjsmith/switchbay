@@ -28,7 +28,7 @@ from .agents.rail_default import (
     _STRONG_ONLY_TOOLS,
     clip_tools_to_budget,
     compile_tool_specs,
-    estimate_tokens,
+    prompt_token_breakdown,
 )
 
 _WIKI_READ: tuple[str, ...] = (
@@ -308,9 +308,7 @@ def _token_view(
         system, specs, None, rung.prompt_budget,
     )
     kept = [str(s.get("name") or "") for s in clipped]
-    tokens = estimate_tokens(system) + estimate_tokens(
-        json.dumps(clipped, ensure_ascii=False),
-    )
+    tokens = prompt_token_breakdown(system, clipped, None)["total"]
     fits = tokens <= rung.prompt_budget
     return kept, dropped, tokens, fits
 

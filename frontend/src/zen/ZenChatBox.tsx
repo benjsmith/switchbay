@@ -7,6 +7,7 @@ import {
   LocalModelsCheckRow, LocalModelsDiscoveryRow,
   ReasoningRow, detectUserKind,
   mdWithWikilinks, prettyJson, summariseInput, uploadFile,
+  WikiPageJump,
 } from "../rail/Rail";
 import PtyThreadSurface, { type TerminalWsApi } from "../rail/PtyThreadSurface";
 import VoiceButton from "../rail/VoiceButton";
@@ -702,6 +703,7 @@ function ResponseItem({ entry: e }: { entry: RailEntry }) {
               → running…
             </span>
           )}
+          <WikiPageJump name={e.name} input={e.input} />
         </summary>
         <div className="sy-rail-tool-detail">
           <div className="sy-rail-tool-section">input</div>

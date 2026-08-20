@@ -317,8 +317,11 @@ per step, or a short final answer.
 You already have the tools listed in this request — use them. Do not
 ask what tools you have. Do not call tools that are not listed.
 
-Wiki answers: search_wiki → read_wiki_page on the best hit. Cite
-[[wikilinks]]. If the wiki is thin, say so; do not invent.
+Wiki answers: search_wiki → read_wiki_page on the best hit.
+Answer in 4–8 sentences from the page. Always end with the page's
+wikilink field (e.g. [[entities/graphormer]]) so the user can
+click it. If the wiki is thin, say so; do not invent. Do not
+mention clipping or tools.
 
 Writing to the wiki (only if the user asked, or this is a curate run):
   · Search first. If a page already covers it, skip or propose a
@@ -343,8 +346,10 @@ You are Switch Bay's on-device curator. One tool call per step, or a
 short final answer. You already have the tools listed in this request.
 
 Wiki answers: search_wiki or ce_graph_retrieve → read the best pages.
-Cite [[wikilinks]] and (vault:...) when you have them. If the wiki is
-thin, say so; do not invent numbers, dates, equations, or mechanisms.
+Answer from the page. Always end with [[wikilinks]] (copy each
+page's wikilink field) so the user can click through. Cite
+(vault:...) when you have them. If the wiki is thin, say so; do
+not invent numbers, dates, equations, or mechanisms.
 
 Writing: prefer sourced pages. Search first. If a page already covers
 the item, skip or propose a tiny sourced edit. Full propose_wiki_page
@@ -470,6 +475,13 @@ _LOCAL_TOOL_BLURBS: dict[str, str] = {
         "Propose a small, sourced edit to an existing page. If you "
         "would have to invent facts, skip. Keep the change short."
     ),
+    "read_wiki_page": (
+        "Read one wiki page. Answer from content. End with the "
+        "wikilink field so the user can click through to the page."
+    ),
+    "search_wiki": (
+        "Find wiki pages by keyword. Then read_wiki_page on the best hit."
+    ),
     "ce_epoch_summary": (
         "One-shot wiki health snapshot (counts, inboxes). Call once "
         "to orient, then search/read/propose scaffolds. Do not loop."
@@ -496,11 +508,11 @@ _LOCAL_TOOL_BLURBS: dict[str, str] = {
     ),
 }
 
-# ~4 chars/token. 4B-4bit on 16–18 GB unified RAM died at ~15k prompt
-# tokens; keep compiled local prompts well under that.
-_CHARS_PER_TOKEN = 4
-LOCAL_PROMPT_TOKEN_BUDGET = 3500
+# Conservative vs English prose — JSON tool schemas tokenize denser.
+_CHARS_PER_TOKEN = 3
+LOCAL_PROMPT_TOKEN_BUDGET = 2800
 _LOCAL_EXTRA_SYSTEM_CHARS = 400 * _CHARS_PER_TOKEN
+_CLIP_MARK = " …[clipped for local context]"
 
 
 def estimate_tokens(text: str) -> int:
@@ -587,13 +599,122 @@ def clip_tools_to_budget(
     return kept, dropped
 
 
+def _content_chars(content: Any) -> int:
+    if isinstance(content, str):
+        return len(content)
+    return len(json.dumps(content, ensure_ascii=False, default=str))
+
+
+def _clip_text(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    cut = max(80, max_chars)
+    return text[:cut] + _CLIP_MARK
+
+
+def _shrink_content(content: Any, max_chars: int) -> Any:
+    """Cut payload text but keep tool_result / tool_use block shape.
+
+    Stringifying a tool-result list into a user message breaks Qwen's
+    tool template (the follow-up turn no longer has a `tool` role).
+    """
+    if isinstance(content, str):
+        return _clip_text(content, max_chars)
+    if isinstance(content, list):
+        blocks: list[Any] = [
+            dict(b) if isinstance(b, dict) else b for b in content
+        ]
+        if _content_chars(blocks) <= max_chars:
+            return blocks
+        clip_kinds = ("tool_result", "text")
+        targets = [
+            b for b in blocks
+            if isinstance(b, dict) and b.get("type") in clip_kinds
+        ]
+        room = max(80, max_chars // max(1, len(targets)))
+        for b in targets:
+            if b.get("type") == "tool_result":
+                raw = b.get("content")
+                text = raw if isinstance(raw, str) else json.dumps(
+                    raw, ensure_ascii=False, default=str,
+                )
+                b["content"] = _clip_text(text, room)
+            elif b.get("type") == "text":
+                b["text"] = _clip_text(str(b.get("text") or ""), room)
+        return blocks
+    blob = json.dumps(content, ensure_ascii=False, default=str)
+    if len(blob) <= max_chars:
+        return content
+    return _clip_text(blob, max_chars)
+
+
+def _is_tool_result_msg(msg: dict[str, Any]) -> bool:
+    raw = msg.get("content")
+    return isinstance(raw, list) and any(
+        isinstance(b, dict) and b.get("type") == "tool_result" for b in raw
+    )
+
+
+def clip_messages_to_budget(
+    system: str,
+    tool_specs: list[dict[str, Any]],
+    messages: list[dict[str, Any]] | None,
+    budget: int,
+) -> list[dict[str, Any]]:
+    """Fit history into ``budget`` without dropping the user question first.
+
+    Order: shrink tool-result payloads, drop middle turns (keep first
+    user + tail), then shrink whatever is left. Used after tool results
+    re-enter the loop — a 4B must not prefill 15k tokens because
+    search_wiki JSON + history overshot the desk.
+    """
+    kept = list(messages or [])
+    if not kept:
+        return kept
+
+    def _stats() -> dict[str, int]:
+        return prompt_token_breakdown(system, tool_specs, kept)
+
+    stats = _stats()
+
+    i = len(kept) - 1
+    while stats["total"] > budget and i >= 0:
+        msg = kept[i]
+        if _is_tool_result_msg(msg):
+            overflow_tok = stats["total"] - budget
+            raw = msg.get("content")
+            target = max(400, _content_chars(raw) - overflow_tok * _CHARS_PER_TOKEN)
+            kept[i] = {**msg, "content": _shrink_content(raw, target)}
+            stats = _stats()
+        i -= 1
+
+    while stats["total"] > budget and len(kept) > 2:
+        kept = [kept[0]] + kept[2:]
+        stats = _stats()
+    while stats["total"] > budget and len(kept) > 1:
+        kept = kept[1:]
+        stats = _stats()
+
+    if stats["total"] > budget and kept:
+        last = dict(kept[-1])
+        overflow_tok = stats["total"] - budget
+        target = max(80, _content_chars(last.get("content")) - overflow_tok * _CHARS_PER_TOKEN)
+        last["content"] = _shrink_content(last.get("content"), target)
+        kept[-1] = last
+    return kept
+
+
 def prompt_token_breakdown(
     system: str,
     tool_specs: list[dict[str, Any]],
     messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, int]:
     sys_n = estimate_tokens(system)
-    tools_n = estimate_tokens(json.dumps(tool_specs, ensure_ascii=False))
+    # Chat templates wrap each schema; 1.25× covers Qwen/MLX markup
+    # without dropping the last tool on a 4B desk (2.5× ate author_slide).
+    tools_n = int(
+        estimate_tokens(json.dumps(tool_specs, ensure_ascii=False)) * 1.25
+    )
     msg_n = 0
     for m in messages or []:
         msg_n += estimate_tokens(json.dumps(m, ensure_ascii=False, default=str))
@@ -643,10 +764,8 @@ def assemble_local_prompt(
     kept = list(messages or [])
     last = kept[-1:] if kept else []
     tool_specs, clipped_tools = clip_tools_to_budget(system, tool_specs, last, cap)
+    kept = clip_messages_to_budget(system, tool_specs, kept, cap)
     stats = prompt_token_breakdown(system, tool_specs, kept)
-    while stats["total"] > cap and len(kept) > 1:
-        kept = kept[1:]
-        stats = prompt_token_breakdown(system, tool_specs, kept)
     stats["trimmed"] = max(0, len(messages or []) - len(kept))
     stats["budget"] = cap
     stats["palette"] = palette

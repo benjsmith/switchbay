@@ -41,8 +41,6 @@ LOCAL_CHAT_TOOLS: tuple[str, ...] = (
     "search_wiki",
     "read_wiki_page",
     "list_wiki_pages",
-    "wiki_neighbors",
-    "recall_rail",
     "list_skills",
     "load_skill",
     "propose_wiki_page",
@@ -126,15 +124,15 @@ class LocalRung:
 LOCAL_RUNGS: tuple[LocalRung, ...] = (
     LocalRung(
         id="ram16", min_ram_gb=16, label="16 GB worker",
-        prompt_budget=3500, extra_system_chars=1600,
-        force_scaffold=True, recommended_ctx=32768,
+        prompt_budget=2800, extra_system_chars=1200,
+        force_scaffold=True, recommended_ctx=8192,
         chat_tools=LOCAL_CHAT_TOOLS, curate_tools=LOCAL_CURATE_TOOLS,
         blurb="Classify, search, light Reviews scaffolds. Host runs mechanical sweep.",
     ),
     LocalRung(
         id="ram32", min_ram_gb=32, label="32 GB local-large",
-        prompt_budget=8000, extra_system_chars=2400,
-        force_scaffold=True, recommended_ctx=32768,
+        prompt_budget=6000, extra_system_chars=2000,
+        force_scaffold=True, recommended_ctx=16384,
         chat_tools=_uniq(LOCAL_CHAT_TOOLS, _ADD_32),
         curate_tools=_uniq(LOCAL_CURATE_TOOLS, _ADD_32),
         blurb="Worker writes + sweep/lint/planner to orient. Host already ran mechanical sweep.",

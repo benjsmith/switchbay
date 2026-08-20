@@ -993,6 +993,7 @@ export default function Rail({
                       aria-label="Re-run in terminal"
                     >↗ term</button>
                   )}
+                  <WikiPageJump name={e.name} input={e.input} />
                   {!e.result && (
                     <button
                       type="button"
@@ -2332,6 +2333,43 @@ function extractBashCommand(input: unknown): string | null {
   if (typeof cmd !== "string") return null;
   const trimmed = cmd.trim();
   return trimmed ? trimmed : null;
+}
+
+/** Wiki page path from a search_wiki / read_wiki_page tool_use. */
+export function wikiPageFromTool(
+  name: string,
+  input: Record<string, unknown>,
+): string | null {
+  if (name !== "read_wiki_page" && name !== "search_wiki") return null;
+  const p = input.page;
+  if (typeof p === "string" && p.trim()) return p.trim();
+  return null;
+}
+
+export function WikiPageJump({
+  name,
+  input,
+}: {
+  name: string;
+  input: Record<string, unknown>;
+}): ReactElement | null {
+  const page = wikiPageFromTool(name, input);
+  if (!page) return null;
+  return (
+    <button
+      type="button"
+      className="sy-rail-jump sy-rail-jump--wiki"
+      title="Open this wiki page"
+      onClick={(ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        window.dispatchEvent(new CustomEvent("sy:open-wiki-page", {
+          detail: { target: page },
+        }));
+      }}
+      aria-label="Open wiki page"
+    >↗ page</button>
+  );
 }
 
 

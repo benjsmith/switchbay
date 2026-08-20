@@ -2243,6 +2243,22 @@ _FM_TYPE = re.compile(r"^(?:type|kind):\s*(.+)$", re.M)
 _WIKILINK = re.compile(r"\[\[([^\]|#]+)")
 
 
+def wiki_cite_target(rel: str) -> str:
+    """``wiki/entities/graphormer.md`` → ``entities/graphormer``.
+
+    The rail turns ``[[entities/graphormer]]`` into a click that
+    opens the page. Empty when ``rel`` is not a wiki path.
+    """
+    s = str(rel or "").strip().replace("\\", "/")
+    if not s:
+        return ""
+    if s.startswith("wiki/"):
+        s = s[5:]
+    if s.endswith(".md"):
+        s = s[:-3]
+    return s.strip("/")
+
+
 def _page_meta(text: str) -> tuple[str | None, str | None]:
     """(title, type) from a page's frontmatter head, best-effort."""
     head = text[:800]
@@ -2317,6 +2333,7 @@ def _search_wiki(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         results.append({
             "page": rel, "title": title or Path(rel).stem,
             "type": ptype, "score": score, "snippet": snippet,
+            "wikilink": f"[[{wiki_cite_target(rel)}]]",
         })
     results.sort(key=lambda r: -r["score"])
     return {"results": results[:limit], "total_matches": len(results)}
@@ -2333,9 +2350,11 @@ def _read_wiki_page(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {"error": f"read failed: {e}"}
     title, ptype = _page_meta(text)
     truncated = len(text) > 12000
+    cite = wiki_cite_target(rel)
     return {
         "page": rel, "title": title or Path(rel).stem, "type": ptype,
         "content": text[:12000], "truncated": truncated,
+        "wikilink": f"[[{cite}]]" if cite else "",
     }
 
 
