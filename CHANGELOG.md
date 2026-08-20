@@ -3,6 +3,23 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-20 — v0.9.13 — rail picker
+
+**Migration:** none. **Breaking:** none.
+
+The rail model picker opens again. 0.9.11's long-id ellipsis set
+`overflow: hidden` on the 34px rail header, which clipped the menu
+so a click looked like a no-op.
+
+### Fixed
+
+- **Rail model picker** — menu is no longer clipped by the rail head.
+  Long labels still ellipsize on the pill.
+
+### Version
+
+0.9.13 (micro). History retained.
+
 ## 2026-08-20 — v0.9.12 — help versions
 
 **Migration:** none. **Breaking:** none.
