@@ -35,6 +35,8 @@ work-plan.md
 log.md
 docs/enterprise-windows-design.md
 docs/*-design.md
+docs/product-pilot-judge-results-*.md
+docs/product-pilot-*.md
 
 # ── machine-level admin policy drop-in (never commit a live copy) ──
 /admin.json
