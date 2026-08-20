@@ -1,4 +1,4 @@
-# Known issues (v0.9.14)
+# Known issues (v0.9.15)
 
 An honest, short list of what's rough or deferred in this release. None
 are data-loss or security issues — each is cosmetic, has a workaround,

@@ -3,6 +3,28 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-20 — v0.9.15 — Windows paths
+
+**Migration:** none. **Breaking:** none.
+
+Wiki proposals, CE script allowlist matching, and local-server stop
+work on Windows. 0.9.14's payloads still attached; wrap **this**
+tag for Win11.
+
+### Fixed
+
+- **Wiki proposals** — stored paths are posix (`wiki/concepts/…`) so
+  `_writable_rel` accepts them on Windows.
+- **CE toolscope** — command prefixes use `as_posix()`, so a Windows
+  `uv run python3 C:\…\scripts\sweep.py` matches.
+- **SIGKILL** — `getattr(signal, "SIGKILL", SIGTERM)` so Stop doesn't
+  crash on Win32.
+- **MLX cache bytes** — case-insensitive hub dir match (Linux CI).
+
+### Version
+
+0.9.15 (micro). History retained.
+
 ## 2026-08-20 — v0.9.14 — enterprise profile
 
 **Migration:** none for the default **open** profile. **Breaking:** none
