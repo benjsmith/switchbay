@@ -20,7 +20,9 @@ from pathlib import Path
 from typing import Any, Callable
 
 import json
+import os
 import re
+import sys
 
 from . import (
     agent_rules, analyses, conversations, duckdb_starters,
@@ -247,6 +249,79 @@ register(Tool(
         "required": ["path", "body"],
     },
     handler=_propose_page_edit,
+))
+
+
+def _run_command(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    """VS Code Copilot-like: run a command in the workspace (no login shell).
+
+    IT can disable via ``agent_run_command``. Home-scan hard-denies still apply.
+    """
+    import shlex
+    import subprocess
+    from . import admin_policy, permissions, workspaces
+
+    if not admin_policy.feature_enabled("agent_run_command"):
+        return {"ok": False, "error": admin_policy.feature_error("agent_run_command")}
+    raw = payload.get("command")
+    argv = payload.get("argv")
+    if isinstance(argv, list) and argv:
+        cmd = [str(a) for a in argv]
+        display = subprocess.list2cmdline(cmd) if sys.platform == "win32" else " ".join(cmd)
+    elif isinstance(raw, str) and raw.strip():
+        display = raw.strip()
+        try:
+            cmd = shlex.split(display, posix=sys.platform != "win32")
+        except ValueError as e:
+            return {"ok": False, "error": f"bad command: {e}"}
+    else:
+        return {"ok": False, "error": "command or argv required"}
+    if not cmd:
+        return {"ok": False, "error": "empty command"}
+    deny = permissions.hard_deny_reason("Bash", {"command": display})
+    if deny:
+        return {"ok": False, "error": deny}
+    cwd = workspace
+    extra = str(payload.get("cwd") or "").strip()
+    if extra:
+        cand = (workspace / extra).resolve() if not Path(extra).is_absolute() else Path(extra)
+        if not workspaces.is_within_home(cand):
+            return {"ok": False, "error": "cwd must stay under the user home"}
+        cwd = cand
+    try:
+        r = subprocess.run(
+            cmd, cwd=str(cwd), capture_output=True, text=True, timeout=120,
+            env={k: v for k, v in os.environ.items()
+                 if k not in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT")},
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return {"ok": False, "error": str(e)}
+    out = (r.stdout or "")[-8000:]
+    err = (r.stderr or "")[-4000:]
+    return {"ok": r.returncode == 0, "exit_code": r.returncode, "stdout": out, "stderr": err}
+
+
+register(Tool(
+    name="run_command",
+    description=(
+        "Run a program in the workspace (argv or a simple command string). "
+        "Use for builds, tests, git, and skill CLIs (`npx skills add`, "
+        "`uvx skills add`) the way VS Code Copilot Agent uses the terminal. "
+        "Not a login shell. Prefer Switch Bay wiki/CE tools for knowledge work."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "command": {"type": "string", "description": "Command line (split like a shell)."},
+            "argv": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Explicit argv; preferred over command when you have it.",
+            },
+            "cwd": {"type": "string", "description": "Optional cwd relative to the workspace."},
+        },
+    },
+    handler=_run_command,
 ))
 
 register(Tool(

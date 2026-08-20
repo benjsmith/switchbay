@@ -4715,6 +4715,8 @@ async def _spawn_pty_for_thread(
     resize can reach the shell. Callers that spawn before any client
     surface exists (`!cmd`) fall back to the last size any client
     reported (`term_size_hint`), then 80×24."""
+    if not admin_policy.feature_enabled("interactive_terminal"):
+        raise RuntimeError(admin_policy.feature_error("interactive_terminal"))
     if not terminals.pty_available():
         raise RuntimeError("interactive terminals are not available on this platform")
     workspace: Path = app["workspace"]
@@ -14914,17 +14916,61 @@ def build_app(workspace: Path) -> web.Application:
     return app
 
 
+def _is_install_tree_workspace(ws: Path) -> bool:
+    root = admin_policy.install_root()
+    try:
+        r = ws.resolve()
+    except OSError:
+        r = ws
+    if root:
+        try:
+            if r == Path(root).resolve():
+                return True
+        except OSError:
+            pass
+    low = str(r).lower()
+    if "program files" in low:
+        return True
+    if "/library/application support/switchbay" in low:
+        return True
+    return False
+
+
+def _boot_workspace_under_home() -> Path | None:
+    raw = admin_policy.workspaces_home_policy()
+    base = Path(os.path.expandvars(os.path.expanduser(raw))) if raw else (Path.home() / "SwitchBay")
+    if admin_policy.profile() == "enterprise" and not admin_policy.allow_synced_workspaces():
+        hint = statedir.sync_service_hint(base)
+        if hint:
+            print(f"refusing cloud-synced workspace home ({hint}); set paths.allow_synced_workspaces")
+            return None
+    dest = base / "workspace"
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"could not create workspace {dest}: {e}")
+        return None
+    return dest
+
+
 def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
     if not workspace.is_dir():
         print(f"workspace not a directory: {workspace}")
         return 2
     if not workspaces.is_within_home(workspace):
-        print(
-            f"refusing to run with workspace outside {workspaces.home_label()}: "
-            f"{workspace}"
-        )
-        return 2
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+        if _is_install_tree_workspace(workspace):
+            remapped = _boot_workspace_under_home()
+            if remapped is None:
+                return 2
+            log.info("boot: remapped install-tree cwd %s → %s", workspace, remapped)
+            workspace = remapped
+        else:
+            print(
+                f"refusing to run with workspace outside {workspaces.home_label()}: "
+                f"{workspace}"
+            )
+            return 2
     # Make the CLI-supplied workspace the active one, but DON'T add
     # it to the registry — the dropdown should only show paths the
     # user has explicitly added via `+ Add workspace…`. The active

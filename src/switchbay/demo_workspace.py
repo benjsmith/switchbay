@@ -129,6 +129,9 @@ def should_prefer(launch_workspace: Path) -> bool:
     keeps it.
     """
     try:
+        from . import admin_policy
+        if not admin_policy.feature_enabled("demo_workspace"):
+            return False
         return not has_wiki(launch_workspace)
     except OSError:
         return False

@@ -603,9 +603,10 @@ async def build(
     """
     if not has_wiki(workspace):
         return None
+    render_py = ce_root() / "scripts" / "wiki_render.py"
     script = ce_root() / "scripts" / "viewer.sh"
-    if not script.is_file():
-        log.warning("viewer.sh not found at %s", script)
+    if not render_py.is_file() and not script.is_file():
+        log.warning("wiki_render.py / viewer.sh not found under %s", ce_root())
         return None
 
     if ensure_env and not has_workspace_venv(workspace):
@@ -625,10 +626,17 @@ async def build(
     # follows system 3.14.
     env = _scrubbed_env()
 
+    if render_py.is_file():
+        import sys
+        cmd = [
+            sys.executable, str(render_py), "build",
+            str(workspace / "wiki"),
+            "--output-dir", str(output_dir(workspace)),
+        ]
+    else:
+        cmd = ["bash", str(script), "build"]
     proc = await asyncio.create_subprocess_exec(
-        "bash",
-        str(script),
-        "build",
+        *cmd,
         cwd=str(workspace),
         env=env,
         stdout=asyncio.subprocess.PIPE,

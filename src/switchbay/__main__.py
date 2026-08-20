@@ -36,7 +36,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.cmd == "serve":
-        return daemon.run(workspace=args.workspace.resolve(), host=args.host, port=args.port)
+        from . import admin_policy
+        host, port = args.host, args.port
+        if admin_policy.profile() == "enterprise":
+            host = admin_policy.bind_host() or host
+            p = admin_policy.bind_port()
+            if p:
+                port = p
+            if host not in ("127.0.0.1", "::1"):
+                print("enterprise policy forbids non-loopback bind")
+                return 2
+        return daemon.run(workspace=args.workspace.resolve(), host=host, port=port)
     if args.cmd == "service":
         from . import service
         return service.run(args.action)

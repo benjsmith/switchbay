@@ -423,6 +423,7 @@ ALLOWED_TOOLS = [
     # when covered_by tools are not enough.
     "list_skills",
     "load_skill",
+    "run_command",
     "read_workspace_plan",
     "update_work_plan",
     "append_workspace_log",

@@ -71,23 +71,25 @@ def _install_bundled_skills() -> None:
     if not admin_policy.feature_enabled("install_skills_npx"):
         print("  bundled skills: SKIPPED (admin policy install_skills_npx=false)")
         return
+    uvx = shutil.which("uvx")
     npx = shutil.which("npx")
-    if not npx:
-        print("  bundled skills: SKIPPED (npx not found). Install Node, then:")
+    if not uvx and not npx:
+        print("  bundled skills: SKIPPED (npx/uvx not found). Install Node or uv, then:")
         for ref in BUNDLED_SKILLS:
-            print(f"      npx skills add {ref}")
+            print(f"      npx skills add {ref}   # or: uvx skills add {ref}")
         return
     for ref in BUNDLED_SKILLS:
+        if not admin_policy.skills_ref_allowed(ref):
+            print(f"  bundled skill {ref}: SKIPPED (not on skills allowlist)")
+            continue
         try:
+            if uvx:
+                argv = [uvx, "skills", "add", "-g", "-y", ref]
+            else:
+                # -g = USER-GLOBAL (~/.agents/skills). -y = non-interactive.
+                argv = [npx, "-y", "skills", "add", "-g", "-y", ref]
             r = subprocess.run(
-                # -g = install USER-GLOBAL (~/.agents/skills + a
-                # ~/.claude/skills symlink) regardless of cwd. Without it
-                # the CLI installs into the nearest project's
-                # .agents/skills (would pollute the workspace/repo).
-                # -y after `add` is the skills CLI's non-interactive
-                # flag — omit it and a headless install hangs on a
-                # confirmation prompt (the new-Mac CE failure).
-                [npx, "-y", "skills", "add", "-g", "-y", ref],
+                argv,
                 capture_output=True, text=True, timeout=180,
             )
             if r.returncode == 0:

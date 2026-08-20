@@ -111,7 +111,10 @@ def _is_dotcom(host: str) -> bool:
 
 def get_host() -> str:
     """The GitHub host this install signs in against."""
-    return _normalize_host(secrets.get(_HOST_KEY) or DEFAULT_HOST)
+    from .. import admin_policy
+    if admin_policy.copilot_lock_host():
+        return _normalize_host(admin_policy.copilot_host())
+    return _normalize_host(secrets.get(_HOST_KEY) or admin_policy.copilot_host() or DEFAULT_HOST)
 
 
 def get_sso_slug() -> str | None:

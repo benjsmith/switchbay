@@ -2,7 +2,8 @@
   "profile": "enterprise",
   "copilot": {
     "host": "github.com",
-    "sso_slug": ""
+    "sso_slug": "",
+    "lock_host": true
   },
   "providers": {
     "github_copilot": true,
@@ -21,7 +22,9 @@
   },
   "features": {
     "in_app_update": false,
-    "install_skills_npx": false,
+    "install_skills_npx": true,
+    "interactive_terminal": true,
+    "agent_run_command": true,
     "ce_auto_setup": false,
     "uv_python_install": false,
     "scan_other_app_caches": false,
@@ -30,6 +33,10 @@
     "github_share": false,
     "media_generation": false,
     "user_mcp_servers": true,
-    "watch_folders": true
-  }
+    "watch_folders": true,
+    "demo_workspace": false
+  },
+  "mcp": { "allowlist": "*" },
+  "skills": { "allowlist": "*" },
+  "network": { "bind_host": "127.0.0.1", "bind_port": 8765, "egress_allowlist": [] }
 }

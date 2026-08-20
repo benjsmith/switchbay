@@ -39,6 +39,12 @@ function modelsForProvider(p: ProviderInfo | undefined): string[] {
   return out;
 }
 
+function feat(info: { policy?: { profile?: string; features?: Record<string, boolean> } } | null | undefined, name: string): boolean {
+  const v = info?.policy?.features?.[name];
+  if (typeof v === "boolean") return v;
+  return info?.policy?.profile !== "enterprise";
+}
+
 type PolicyView = {
   profile: string;
   source: string | null;
@@ -402,25 +408,25 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
           <LocalModelPanel
             open={open}
             onClose={onClose}
-            hfDownloads={info?.policy?.features?.hf_model_download ?? true}
+            hfDownloads={feat(info, "hf_model_download")}
           />
           <LadderPanel open={open} providers={info?.providers ?? []} />
           <PacksPanel open={open} />
-          {(info?.policy?.features?.user_mcp_servers ?? true) && (
+          {feat(info, "user_mcp_servers") && (
             <McpServersPanel open={open} />
           )}
           <UserTabsPanel open={open} />
           <PermissionsPanel open={open} />
           <StoragePanel open={open} />
-          {(info?.policy?.features?.media_generation ?? true) && (
+          {feat(info, "media_generation") && (
             <MediaPanel open={open} />
           )}
           <WorkspacesHomePanel open={open} />
           <CuratorPanel open={open} />
-          {(info?.policy?.features?.watch_folders ?? true) && (
+          {feat(info, "watch_folders") && (
             <WatchFoldersPanel open={open} />
           )}
-          {(info?.policy?.features?.comms_streams ?? true) && (
+          {feat(info, "comms_streams") && (
             <StreamsPanel open={open} />
           )}
           <HistoryPanel open={open} />
@@ -428,7 +434,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
         </div>
         <div className="sy-confirm-actions sy-settings-footer">
           <div className="sy-settings-power">
-            {(info?.policy?.features?.in_app_update ?? true) && (
+            {feat(info, "in_app_update") && (
             <button
               type="button"
               className="sy-confirm-btn sy-settings-update"

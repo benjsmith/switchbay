@@ -59,10 +59,12 @@ Provider ids: `github_copilot`, `llamacpp`, `mlx`, `ollama`,
 | Feature | Enterprise default | Why |
 |---|---|---|
 | `in_app_update` | off | Settings → Update runs `git pull` / `npx skills` as the user |
-| `install_skills_npx` | off | `npx skills add -g` at service install |
+| `install_skills_npx` | **on** (IT may set false) | `npx` / `uvx skills add` like VS Code. Restrict with `skills.allowlist` (`*` or a list of refs / globs). |
 | `ce_auto_setup` | off | CE `scripts/setup.sh` + `uv venv` per workspace |
 | `uv_python_install` | off | `uv python install 3.13` (downloads a toolchain) |
 | `scan_other_app_caches` | off | Walks `~/Library/Containers/*/…/huggingface` (TCC + EDR) |
+| `interactive_terminal` | **on** | Rail shell (POSIX PTY / Windows ConPTY). Same default as VS Code. |
+| `agent_run_command` | **on** | Copilot/HTTP agents may run workspace commands (approval + hard-deny still apply). |
 | `hf_model_download` | off (admin may set **true**) | Hugging Face / Ollama pulls from Settings. On-disk models still work when off. |
 | `comms_streams` | off | IMAP / Gmail / Slack / … as ingest sources |
 | `github_share` | off | `gh` publish of a workspace |

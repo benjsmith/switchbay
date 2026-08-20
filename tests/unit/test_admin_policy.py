@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
 
-from switchbay import admin_policy, daemon, llmgateway
+from switchbay import admin_policy, daemon, llmgateway, tools, watchfolders, workspaces
 
 
 @pytest.fixture
@@ -31,7 +32,9 @@ def test_enterprise_default_allows_copilot_and_local(enterprise_env):
     assert not admin_policy.feature_enabled("in_app_update")
     assert not admin_policy.feature_enabled("ce_auto_setup")
     assert not admin_policy.feature_enabled("uv_python_install")
-    assert not admin_policy.feature_enabled("install_skills_npx")
+    assert admin_policy.feature_enabled("install_skills_npx")
+    assert admin_policy.feature_enabled("interactive_terminal")
+    assert admin_policy.feature_enabled("agent_run_command")
     assert not admin_policy.feature_enabled("scan_other_app_caches")
     assert not admin_policy.feature_enabled("hf_model_download")
     assert admin_policy.feature_enabled("user_mcp_servers")
@@ -64,6 +67,39 @@ def test_windows_programdata_candidate_path(monkeypatch):
     monkeypatch.delenv("SWITCHBAY_ADMIN_POLICY", raising=False)
     joined = [str(p) for p in admin_policy.candidate_paths()]
     assert any("ProgramData" in p and "SwitchBay" in p and p.endswith("admin.json") for p in joined)
+
+
+def test_baked_overlay_cannot_reenable_update(tmp_path: Path, monkeypatch):
+    baked = tmp_path / "install" / "admin.baked.json"
+    baked.parent.mkdir()
+    baked.write_text(json.dumps({
+        "profile": "enterprise",
+        "allow_profile_override": False,
+        "features": {"in_app_update": False, "hf_model_download": False},
+    }), encoding="utf-8")
+    overlay = tmp_path / "overlay.json"
+    overlay.write_text(json.dumps({
+        "features": {"in_app_update": True, "hf_model_download": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_INSTALL_ROOT", str(baked.parent))
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(overlay))
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
+    admin_policy.reset_cache()
+    assert admin_policy.profile() == "enterprise"
+    assert not admin_policy.feature_enabled("in_app_update")
+    assert not admin_policy.feature_enabled("hf_model_download")
+
+
+def test_skills_allowlist(tmp_path: Path, monkeypatch, enterprise_env):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "skills": {"allowlist": ["benjsmith/*", "https://git.example.com/*"]},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    admin_policy.reset_cache()
+    assert admin_policy.skills_ref_allowed("benjsmith/curiosity-engine")
+    assert not admin_policy.skills_ref_allowed("evil/malware")
 
 
 def test_mlx_denied_on_non_darwin(monkeypatch, enterprise_env):
@@ -121,3 +157,17 @@ async def test_update_endpoint_403_when_locked(enterprise_env):
     import json as _json
     body = _json.loads(resp.body)
     assert "in_app_update" in body["error"]
+
+
+def test_run_command_echo(tmp_path: Path):
+    out = tools.execute("run_command", tmp_path, {"argv": [sys.executable, "-c", "print(123)"]})
+    assert out.get("ok") is True
+    assert "123" in str(out.get("stdout") or "")
+
+
+def test_watch_folder_must_be_under_home(tmp_path: Path):
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    outside = Path(r"C:\Windows") if sys.platform == "win32" else Path("/")
+    err = watchfolders.add_folder(ws, str(outside))
+    assert isinstance(err, str)

@@ -92,6 +92,9 @@ def add_folder(workspace: Path, raw: str) -> dict[str, Any] | str:
         pass
     if not d.is_dir():
         return "not a directory"
+    from . import workspaces
+    if not workspaces.is_within_home(d):
+        return f"watch folders must stay under {workspaces.home_label()}"
     ws_real = str(workspace.resolve())
     if str(d) == ws_real or str(d).startswith(ws_real + os.sep):
         return "that's inside the workspace — it's already browsable and ingestable"

@@ -72,6 +72,14 @@ def _sanitise(e: Any) -> dict[str, Any] | None:
     name = str(e.get("name") or "").strip()
     if not _NAME_RE.match(name) or name == "switchbay":
         return None
+    try:
+        from . import admin_policy
+        cmd = str(e.get("command") or "")
+        url = str(e.get("url") or "")
+        if not admin_policy.mcp_entry_allowed(name, cmd, url):
+            return None
+    except Exception:  # noqa: BLE001
+        pass
     transport = str(e.get("transport") or "stdio").strip().lower()
     if transport not in ("stdio", "http"):
         return None
@@ -201,6 +209,13 @@ async def _verify_http(server: dict[str, Any]) -> tuple[bool, str]:
 async def add(server: dict[str, Any]) -> dict[str, Any]:
     """Verify then persist a new server. Raises ValueError on a bad
     shape, duplicate name, or failed verification (rollback)."""
+    from . import admin_policy
+    name = str((server or {}).get("name") or "")
+    if not admin_policy.mcp_entry_allowed(
+        name, str((server or {}).get("command") or ""),
+        str((server or {}).get("url") or ""),
+    ):
+        raise ValueError("MCP server is not on the admin allowlist")
     s = _sanitise(server)
     if s is None:
         raise ValueError("invalid server: needs a name and a stdio command or http url")

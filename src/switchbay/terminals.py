@@ -43,8 +43,14 @@ log = logging.getLogger("switchbay.terminals")
 
 
 def pty_available() -> bool:
-    """Interactive PTY rail (fork + unix pty). False on Windows v1."""
-    return sys.platform != "win32"
+    """Interactive rail terminal. POSIX PTY, or Windows ConPTY (Win11)."""
+    if sys.platform == "win32":
+        try:
+            from . import terminals_win
+            return terminals_win.conpty_available()
+        except Exception:  # noqa: BLE001
+            return False
+    return True
 
 
 # Per-line cap on what we ship back to the client in one chunk.
@@ -79,6 +85,8 @@ class TerminalSession:
     # `terminals.py` knowing about aiohttp.
     on_output: Callable[["TerminalSession", bytes], Awaitable[None]] | None = None
     on_exit: Callable[["TerminalSession", int | None], Awaitable[None]] | None = None
+    # Windows ConPTY state (None on POSIX).
+    win: Any = None
 
 
 # Replay buffer cap — 256 KiB per session. Past this, oldest bytes
@@ -117,13 +125,20 @@ def spawn(
     """
     if not pty_available():
         raise RuntimeError("interactive PTY is not available on this platform")
-    import pty  # noqa: PLC0415 — POSIX-only; lazy so Windows can import this module
 
     if argv is None:
-        login_shell = os.environ.get("SHELL", "").strip() or "/bin/bash"
-        argv = [login_shell, "-l"]
+        if sys.platform == "win32":
+            from . import terminals_win
+            argv = terminals_win.default_shell()
+        else:
+            login_shell = os.environ.get("SHELL", "").strip() or "/bin/bash"
+            argv = [login_shell, "-l"]
     else:
         argv = list(argv)
+    if sys.platform == "win32":
+        return _spawn_win(cwd=cwd, argv=argv, name=name, rows=rows, cols=cols, extra_env=extra_env)
+
+    import pty  # noqa: PLC0415 — POSIX-only; lazy so Windows can import this module
     master_fd, slave_fd = pty.openpty()
     # Set initial winsize on the slave before fork so the child
     # sees the right TERM dimensions from the start.
@@ -227,8 +242,43 @@ def spawn(
     return session
 
 
+def _spawn_win(
+    *,
+    cwd: Path,
+    argv: list[str],
+    name: str | None,
+    rows: int,
+    cols: int,
+    extra_env: dict[str, str] | None,
+) -> TerminalSession:
+    from . import terminals_win
+    env = os.environ.copy()
+    env.setdefault("TERM", "xterm-256color")
+    env.setdefault("COLORTERM", "truecolor")
+    env.setdefault("SWITCHBAY_TERM", "1")
+    for k in ("VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"):
+        env.pop(k, None)
+    if extra_env:
+        env.update(extra_env)
+    con = terminals_win.spawn_conpty(cwd=cwd, argv=argv, env=env, rows=rows, cols=cols)
+    sid = uuid.uuid4().hex[:10]
+    session = TerminalSession(
+        id=sid,
+        pid=con.pid,
+        master_fd=-1,
+        name=name or argv[0],
+        cwd=str(cwd),
+        argv=argv,
+        rows=rows,
+        cols=cols,
+        win=con,
+    )
+    log.info("terminal spawned (conpty): id=%s pid=%d argv=%r cwd=%s", sid, con.pid, argv, cwd)
+    return session
+
+
 def _set_winsize(fd: int, rows: int, cols: int) -> None:
-    if not pty_available():
+    if sys.platform == "win32" or fd < 0:
         return
     import fcntl  # noqa: PLC0415
     import termios  # noqa: PLC0415
@@ -241,12 +291,23 @@ def _set_winsize(fd: int, rows: int, cols: int) -> None:
 def resize(session: TerminalSession, rows: int, cols: int) -> None:
     session.rows = rows
     session.cols = cols
+    if session.win is not None:
+        from . import terminals_win
+        terminals_win.resize(session.win, rows, cols)
+        return
     _set_winsize(session.master_fd, rows, cols)
 
 
 def write_input(session: TerminalSession, data: bytes) -> None:
     """Forward keystrokes from the client to the PTY."""
     if session.exited:
+        return
+    if session.win is not None:
+        from . import terminals_win
+        try:
+            terminals_win.write(session.win, data)
+        except OSError as e:
+            log.warning("terminal %s: write failed: %s", session.id, e)
         return
     try:
         os.write(session.master_fd, data)
@@ -277,6 +338,8 @@ def is_idle(session: TerminalSession, *, quiet_after: float = 8.0) -> bool:
         return True
     if time.time() - session.last_output_at < quiet_after:
         return False
+    if session.win is not None:
+        return True
     try:
         fg = os.tcgetpgrp(session.master_fd)
         if fg > 0 and fg != os.getpgid(session.pid):
@@ -326,6 +389,10 @@ def kill(session: TerminalSession, *, escalate_after: float = 2.0) -> None:
     (all daemon paths); without a loop it's fire-and-forget signals."""
     if session.exited:
         return
+    if session.win is not None:
+        from . import terminals_win
+        terminals_win.terminate(session.win)
+        return
     _signal_session(session, signal.SIGHUP)
     _signal_session(session, signal.SIGTERM)
 
@@ -373,6 +440,14 @@ def reap_pidfile(path: Path) -> int:
     except (OSError, json.JSONDecodeError):
         return 0
     reaped = 0
+    if sys.platform == "win32":
+        # Session-leader heuristic is POSIX; ConPTY children are
+        # reaped via TerminateProcess in kill().
+        try:
+            path.unlink()
+        except OSError:
+            pass
+        return 0
     for pid in recorded if isinstance(recorded, list) else []:
         try:
             pid = int(pid)
@@ -397,6 +472,11 @@ def reap_pidfile(path: Path) -> int:
 async def _reap(session: TerminalSession) -> int | None:
     """Best-effort waitpid — runs after the reader loop sees EOF
     on the master fd."""
+    if session.win is not None:
+        from . import terminals_win
+        return await asyncio.get_event_loop().run_in_executor(
+            None, terminals_win.wait_exit, session.win,
+        )
     try:
         _, status = await asyncio.get_event_loop().run_in_executor(
             None, os.waitpid, session.pid, 0,
@@ -419,21 +499,25 @@ def start_reader(session: TerminalSession) -> asyncio.Task:
     loop = asyncio.get_event_loop()
     queue: asyncio.Queue[bytes | None] = asyncio.Queue()
 
-    def _on_readable() -> None:
-        try:
-            data = os.read(session.master_fd, _READ_CHUNK)
-        except OSError:
-            data = b""
-        if not data:
-            loop.remove_reader(session.master_fd)
-            queue.put_nowait(None)
-            return
-        queue.put_nowait(data)
+    if session.win is not None:
+        from . import terminals_win
+        terminals_win.start_read_thread(session.win, loop, queue)
+    else:
+        def _on_readable() -> None:
+            try:
+                data = os.read(session.master_fd, _READ_CHUNK)
+            except OSError:
+                data = b""
+            if not data:
+                loop.remove_reader(session.master_fd)
+                queue.put_nowait(None)
+                return
+            queue.put_nowait(data)
 
-    try:
-        loop.add_reader(session.master_fd, _on_readable)
-    except (ValueError, PermissionError) as e:
-        log.warning("terminal %s: add_reader failed: %s", session.id, e)
+        try:
+            loop.add_reader(session.master_fd, _on_readable)
+        except (ValueError, PermissionError) as e:
+            log.warning("terminal %s: add_reader failed: %s", session.id, e)
 
     async def _pump() -> None:
         try:
@@ -452,10 +536,14 @@ def start_reader(session: TerminalSession) -> asyncio.Task:
         finally:
             session.exited = True
             session.exit_code = await _reap(session)
-            try:
-                os.close(session.master_fd)
-            except OSError:
-                pass
+            if session.win is not None:
+                from . import terminals_win
+                terminals_win.close(session.win)
+            else:
+                try:
+                    os.close(session.master_fd)
+                except OSError:
+                    pass
             if session.on_exit is not None:
                 try:
                     await session.on_exit(session, session.exit_code)

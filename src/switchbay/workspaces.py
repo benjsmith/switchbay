@@ -20,6 +20,7 @@ import logging
 import os
 import shlex
 import shutil
+import sys
 from pathlib import Path
 from typing import Any
 from . import atomicio
@@ -28,8 +29,34 @@ log = logging.getLogger(__name__)
 
 
 def config_dir() -> Path:
-    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    override = os.environ.get("XDG_CONFIG_HOME")
+    if override:
+        return Path(override) / "switchbay"
+    if sys.platform == "win32":
+        dest = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+        dest = dest / "switchbay" / "config"
+        _migrate_xdg_config_once(dest)
+        return dest
+    base = str(Path.home() / ".config")
     return Path(base) / "switchbay"
+
+
+def _migrate_xdg_config_once(dest: Path) -> None:
+    marker = dest / ".migrated-from-xdg"
+    if marker.is_file() or any(dest.glob("*")):
+        return
+    src = Path.home() / ".config" / "switchbay"
+    if not src.is_dir():
+        return
+    try:
+        dest.mkdir(parents=True, exist_ok=True)
+        for child in src.iterdir():
+            target = dest / child.name
+            if child.is_file() and not target.exists():
+                shutil.copy2(child, target)
+        marker.write_text("1\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def _path() -> Path:
