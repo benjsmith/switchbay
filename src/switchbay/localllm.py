@@ -437,6 +437,8 @@ async def _download_one(
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(dest.suffix + ".part")
     url = f"{_HF_BASE}/{repo}/resolve/main/{rel}"
+    from . import http as sbhttp
+    sbhttp.assert_egress(url)
     proc = await asyncio.create_subprocess_exec(
         "curl", "-L", "--fail", "-C", "-", "-o", str(part), url,
         stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL,

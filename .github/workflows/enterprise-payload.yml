@@ -63,6 +63,8 @@ jobs:
             exit 1
           fi
           PYTHONPATH="$TREE/src" "$PY" -c "import switchbay, switchbay.daemon; print('import-ok', switchbay.__version__)"
+          test -f "$TREE/admin.baked.json"
+          python "$GITHUB_WORKSPACE/enterprise/packaging/harvest.py" "$TREE"
       - name: Archive (posix)
         if: matrix.archive == 'tar'
         run: |

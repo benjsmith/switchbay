@@ -75,6 +75,8 @@ def test_stage_merges_site_packages_and_policy(tmp_path: Path):
     )
     assert sp.is_file()
     assert "hf_model_download" in (out / "PAYLOAD.txt").read_text(encoding="utf-8")
+    assert (out / "admin.baked.json").is_file()
+    assert '"profile": "enterprise"' in (out / "admin.baked.json").read_text(encoding="utf-8")
 
 
 def test_stage_requires_frontend(tmp_path: Path):

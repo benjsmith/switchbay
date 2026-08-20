@@ -19,6 +19,7 @@ Usage (from repo root, after sync + frontend build):
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -236,6 +237,12 @@ def stage(repo: Path, out: Path) -> None:
     cfg = out / "config"
     cfg.mkdir()
     shutil.copy2(repo / "config" / "admin.enterprise.json", cfg / "admin.enterprise.json")
+    baked = json.loads((repo / "config" / "admin.enterprise.json").read_text(encoding="utf-8"))
+    baked["allow_profile_override"] = False
+    baked.setdefault("copilot", {})["lock_host"] = True
+    (out / "admin.baked.json").write_text(
+        json.dumps(baked, indent=2) + "\n", encoding="utf-8",
+    )
     (out / "SWITCHBAY_PROFILE").write_text("enterprise\n", encoding="utf-8")
     docs = out / "docs"
     docs.mkdir()

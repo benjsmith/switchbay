@@ -1,0 +1,35 @@
+#include <winver.h>
+
+#define VER 0,9,15,0
+#define VER_STR "0.9.15\0"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION     VER
+PRODUCTVERSION  VER
+FILEFLAGSMASK   VS_FFI_FILEFLAGSMASK
+FILEFLAGS       0
+FILEOS          VOS_NT_WINDOWS32
+FILETYPE        VFT_APP
+FILESUBTYPE     VFT2_UNKNOWN
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904B0"
+        BEGIN
+            VALUE "CompanyName",      "Switch Bay\0"
+            VALUE "FileDescription",  "Switch Bay\0"
+            VALUE "FileVersion",      VER_STR
+            VALUE "InternalName",     "switchbay\0"
+            VALUE "LegalCopyright",   "See LICENSE (FSL-1.1-ALv2)\0"
+            VALUE "OriginalFilename", "switchbay.exe\0"
+            VALUE "ProductName",      "Switch Bay\0"
+            VALUE "ProductVersion",   VER_STR
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 1200
+    END
+END
+
+CREATEPROCESS_MANIFEST_RESOURCE_ID RT_MANIFEST "switchbay-host.manifest"

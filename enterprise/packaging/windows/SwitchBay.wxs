@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX 5 per-machine MSI. Company Authenticode-signs the built MSI.
+     Does NOT invoke `python -m switchbay service install`. -->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="Switch Bay"
+           Manufacturer="Switch Bay"
+           Version="0.9.15"
+           UpgradeCode="9e4c8b2a-1f7d-4a6e-9c31-a7b5d2c8e001"
+           Language="1033"
+           Scope="perMachine">
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Switch Bay is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLDIR" Name="SwitchBay">
+        <Directory Id="BINDIR" Name="bin" />
+      </Directory>
+    </StandardDirectory>
+    <StandardDirectory Id="CommonAppDataFolder">
+      <Directory Id="SBDATA" Name="SwitchBay" />
+    </StandardDirectory>
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="SBMENU" Name="Switch Bay" />
+    </StandardDirectory>
+
+    <ComponentGroup Id="Host" Directory="BINDIR">
+      <Component>
+        <File Source="$(var.Payload)\bin\switchbay.exe" KeyPath="yes" />
+        <File Source="$(var.Payload)\bin\SwitchBay.exe" />
+        <File Source="$(var.Payload)\bin\python313.dll" />
+        <File Source="$(var.Payload)\bin\python313.zip" />
+        <File Source="$(var.Payload)\bin\python313._pth" />
+      </Component>
+    </ComponentGroup>
+
+    <Component Directory="SBDATA">
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Active Setup\Installed Components\{A7B5D2C8-9C31-4A6E-1F7D-9E4C8B2A0001}"
+                     Name="StubPath"
+                     Value="powershell.exe -NoProfile -ExecutionPolicy Bypass -File &quot;[INSTALLDIR]enterprise\packaging\windows\register-user-task.ps1&quot; -InstallDir &quot;[INSTALLDIR]&quot;"
+                     Type="string" KeyPath="yes" />
+      <RegistryValue Root="HKLM"
+                     Key="SOFTWARE\Microsoft\Active Setup\Installed Components\{A7B5D2C8-9C31-4A6E-1F7D-9E4C8B2A0001}"
+                     Name="Version"
+                     Value="1,0,0,0"
+                     Type="string" />
+    </Component>
+
+    <Component Directory="SBMENU">
+      <Shortcut Id="StartMenu"
+                Name="Switch Bay"
+                Target="[BINDIR]SwitchBay.exe"
+                WorkingDirectory="INSTALLDIR"
+                Icon="AppIcon" />
+      <RemoveFolder Id="SBMENU" On="uninstall" />
+      <RegistryValue Root="HKCU" Key="Software\SwitchBay" Name="installed" Type="integer" Value="1" KeyPath="yes" />
+    </Component>
+
+    <Feature Id="Main" Title="Switch Bay" Level="1">
+      <ComponentGroupRef Id="Host" />
+    </Feature>
+    <Icon Id="AppIcon" SourceFile="$(var.Payload)\frontend\dist\icon.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon" />
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/benjsmith/switchbay" />
+    <Property Id="ARPSYSTEMCOMPONENT" Value="0" />
+  </Package>
+</Wix>

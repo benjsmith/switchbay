@@ -1,63 +1,40 @@
 # Enterprise packaging kit
 
-Packaging teams receive **platform payloads** (Win11 x64 and macOS
-darwin arm64) from the GitHub release, plus this kit. Endpoints must
-**not** run `uv`, `pnpm`, `npx`, or CE `setup.sh`.
+Fleet-shaped layout. **CI produces unsigned trees.** The company
+Authenticode-signs / notarizes on their bake machine.
 
-## Profiles
+## What packaging teams get
 
-| Profile | How | Behaviour |
-|---|---|---|
-| `open` | default (git checkout / consumer) | Today's product: every provider, Hugging Face downloads on |
-| `enterprise` | `SWITCHBAY_PROFILE=enterprise` and/or admin.json `"profile": "enterprise"` | Copilot + local; downloads/hooks off unless an admin flag is true |
+Release zip/tar (Win11 x64 / darwin arm64) plus this kit.
 
-## Hugging Face downloads
+| Piece | Path |
+|---|---|
+| Frozen interpreter + site-packages | `python/cpython-*/` in the payload |
+| Bake | payload `admin.baked.json` (tighten-only) |
+| Overlay | `%ProgramData%\SwitchBay\admin.json` / `/Library/Application Support/SwitchBay/admin.json` |
+| Windows host | `windows/switchbay-host.c` → `bin\switchbay.exe` |
+| Windows GUI | `windows/switchbay-gui.c` → `bin\SwitchBay.exe` (Edge `--app=`) |
+| WiX | `windows/SwitchBay.wxs` |
+| Active Setup | `windows/register-user-task.ps1` + `SwitchBay.xml.template` |
+| macOS stub | `macos/switchbay-stub.c` → Safari |
+| macOS pkg | `macos/build-package.sh` (unsigned; notarize on bake machine) |
+| Intune | `intune/win32-app.md` + `detection.ps1` |
+| SentinelOne | `sentinelone/SwitchBay-exclusions.json` (`switchbay.exe`, not `python.exe`) |
+| Harvest | `harvest.py` — fail if launchers still call uv/npx/setup.sh |
 
-Enterprise default is **off**. Admins may enable Settings → Find & install:
+## Local Mac test (no pkg)
 
-```json
-"features": { "hf_model_download": true }
-```
-
-On-disk GGUF / MLX / Ollama models work either way.
-
-## Payloads
-
-Release assets (next release and later):
-
-- `switchbay-enterprise-win11-x64.zip`
-- `switchbay-enterprise-darwin-arm64.tar.gz`
-
-Each contains:
-
-- `python/cpython-*/` — relocatable CPython 3.13 + frozen `site-packages`
-- `src/`
-- `frontend/dist/`
-- `config/admin.enterprise.json`
-- `serve.cmd` / `serve.sh` — builder smoke only
-- `SWITCHBAY_PROFILE` (contents: `enterprise`)
-
-Stamp the service environment:
+From a git checkout:
 
 ```
-SWITCHBAY_PROFILE=enterprise
+make enterprise-local   # overlay + restart; HF on so you can pull a small model
+make open-local         # back to consumer
 ```
 
-`service install` also reads a `SWITCHBAY_PROFILE` file at the tree root.
+## Signing (company bake machine)
 
-Windows overlay (MDM): `%ProgramData%\SwitchBay\admin.json`
-macOS overlay: `/Library/Application Support/SwitchBay/admin.json`
+Windows: `signtool sign /fd SHA256 /tr http://timestamp.digicert.com bin\switchbay.exe bin\SwitchBay.exe bin\python313.dll bin\*.pyd`
 
-Set `copilot.host` (github.com or your GHE URL) in that file at bake time.
+macOS: `codesign --options runtime --entitlements macos/entitlements.plist` every dylib, then `notarytool submit`.
 
-Default workspace: `%USERPROFILE%\SwitchBay\workspace` (Windows) or
-`~/SwitchBay/workspace` (macOS). IT may opt in to a cloud-synced home.
-
-Windows launcher for employees: Edge only (`msedge --app=http://127.0.0.1:8765`).
-macOS: Safari. Interactive PTY is Unix-only; Windows v1 has no rail shell.
-
-Vendor the curiosity-engine skill on the **builder**, not the endpoint.
-
-This release ships the frozen trees packaging teams wrap. WiX MSI,
-notarized PKG, and the CPython host are later packaging PRs. Public
-packaging notes: `docs/enterprise.md`.
+CI never holds the cert.

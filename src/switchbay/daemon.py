@@ -14955,6 +14955,14 @@ def _boot_workspace_under_home() -> Path | None:
 
 def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    from . import http as sbhttp
+    sbhttp.install_gates()
+    log.info(
+        "boot: profile=%s overlay=%s baked=%s",
+        admin_policy.profile(),
+        admin_policy.load().get("source"),
+        admin_policy.load().get("baked"),
+    )
     if not workspace.is_dir():
         print(f"workspace not a directory: {workspace}")
         return 2

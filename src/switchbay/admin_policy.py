@@ -446,8 +446,15 @@ def egress_allowed(url: str) -> bool:
         return True
     extra = (load().get("network") or {}).get("egress_allowlist")
     allow = set(derived_copilot_hosts())
+    if feature_enabled("hf_model_download"):
+        allow.update({
+            "huggingface.co", "hf.co", "cdn-lfs.huggingface.co",
+            "cas-bridge.xethub.hf.co",
+        })
+    if feature_enabled("in_app_update"):
+        allow.add("api.github.com")
     if isinstance(extra, list) and extra:
-        allow = {str(x).strip().lower() for x in extra if str(x).strip()}
+        allow.update({str(x).strip().lower() for x in extra if str(x).strip()})
     if host in allow:
         return True
     return any(host.endswith("." + h) for h in allow if h)

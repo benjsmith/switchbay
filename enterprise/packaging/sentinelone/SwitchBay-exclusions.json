@@ -1,0 +1,33 @@
+{
+  "name": "Switch Bay",
+  "description": "Import into SentinelOne. Exclude the signed host, not python.exe.",
+  "os": "windows",
+  "exclusions": [
+    {
+      "type": "process",
+      "path": "%ProgramFiles%\\SwitchBay\\bin\\switchbay.exe",
+      "reason": "Always-on per-user daemon (loopback 127.0.0.1:8765). Signed CPython host, not python.exe."
+    },
+    {
+      "type": "process",
+      "path": "%ProgramFiles%\\SwitchBay\\bin\\SwitchBay.exe",
+      "reason": "Start Menu GUI launcher (opens Edge --app)."
+    },
+    {
+      "type": "path",
+      "path": "%LOCALAPPDATA%\\switchbay\\**",
+      "reason": "Per-user machine-local state (pidfile, logs, sqlite). Not synced."
+    }
+  ],
+  "do_not_exclude": [
+    "python.exe",
+    "pythonw.exe",
+    "uv.exe",
+    "pnpm.exe",
+    "node.exe"
+  ],
+  "notes": [
+    "Until switchbay.exe is signed and installed, a time-boxed path exclusion on the payload python is a waiver, not this package.",
+    "Network: loopback + Copilot/GHE hosts from admin.baked.json egress list."
+  ]
+}

@@ -7,7 +7,8 @@
 
 .PHONY: install sync sync-semantic sync-semantic-torch sync-frontend \
         dev-daemon dev-frontend build-frontend install-service \
-        uninstall-service start stop restart status refresh test test-py check e2e
+        uninstall-service start stop restart status refresh test test-py check e2e \
+        enterprise-local open-local
 
 PYDIR := $(CURDIR)/src
 
@@ -89,3 +90,11 @@ status:
 #   make refresh BUILD=1      # rebuild UI + restart daemon
 refresh:
 	BUILD=$(if $(BUILD),$(BUILD),0) bash scripts/dev-refresh.sh $(if $(filter 1,$(BUILD)),--build,)
+
+# Local enterprise-mode test on a git checkout (no MSI/PKG). Writes
+# gitignored admin.json (HF downloads on so you can pull a small local
+# model), restarts the per-user service. `make open-local` reverts.
+enterprise-local:
+	bash scripts/enterprise-local.sh on
+open-local:
+	bash scripts/enterprise-local.sh off

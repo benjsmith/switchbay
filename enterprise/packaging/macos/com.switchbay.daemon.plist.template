@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.switchbay.daemon</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{PYTHON}}</string>
+    <string>-m</string><string>switchbay</string>
+    <string>serve</string>
+    <string>--workspace</string><string>{{WORKSPACE}}</string>
+  </array>
+  <key>WorkingDirectory</key><string>{{INSTALLDIR}}</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PYTHONPATH</key><string>{{INSTALLDIR}}/src</string>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>SWITCHBAY_SERVICE</key><string>1</string>
+    <key>SWITCHBAY_PROFILE</key><string>enterprise</string>
+    <key>SWITCHBAY_INSTALL_ROOT</key><string>{{INSTALLDIR}}</string>
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>StandardOutPath</key><string>{{HOME}}/Library/Logs/switchbay-daemon.log</string>
+  <key>StandardErrorPath</key><string>{{HOME}}/Library/Logs/switchbay-daemon.log</string>
+  <key>ProcessType</key><string>Interactive</string>
+</dict>
+</plist>
