@@ -119,7 +119,7 @@ The employee machine then starts Python. No `uv`, no `pnpm`, no
 | Comms streams (mail, Slack, …) | OAuth, mailbox read | Off. |
 | GitHub share (`gh repo create`) | Unapproved egress | Off. |
 | FSL-1.1 license | Legal review | Internal use is in-scope. A Competing Use (reselling Switch Bay as a product) is not. Point counsel at `LICENSE`. |
-| PWA vs signed `.app` | Portal wants a signed pkg | Out of scope here. Wrap `http://127.0.0.1:8765` in a signed helper or ship a pkg that registers the LaunchAgent + a bookmark. |
+| PWA vs signed `.app` | Portal wants a signed pkg | macOS stub + `build-package.sh` (Safari). Windows `SwitchBay.exe` (Edge `--app`). Company notarize / Authenticode on the bake machine. |
 | Agent bash / MCP | Local code execution | Unchanged: permission cards + toolscope. User MCP stays available. Tighten later if required. |
 | Localhost-only bind | Good | Unchanged (`127.0.0.1`). |
 
@@ -162,15 +162,21 @@ Release asset: `switchbay-enterprise-win11-x64.zip` (built on
 `windows-latest`, not on the employee PC).
 
 1. Extract on the **packaging builder**. Smoke with `serve.cmd`.
-2. Wrap with Intune / MSI (WiX in a later PR). Do **not** run `uv` or
-   `pnpm` on endpoints.
+2. Compile `switchbay.exe` / `SwitchBay.exe`, harvest the **full**
+   tree into WiX (`SwitchBay.wxs` is a host+Active Setup skeleton),
+   Authenticode-sign, import the Intune Win32 app. Do **not** run
+   `uv` or `pnpm` on endpoints. Playbook:
+   [`enterprise/packaging/README.md`](../enterprise/packaging/README.md).
 3. Drop `%ProgramData%\SwitchBay\admin.json` (from the template; set
-   `copilot.host`). Optionally `"hf_model_download": true`.
-4. Stamp `SWITCHBAY_PROFILE=enterprise` in the Scheduled Task
-   environment (a `SWITCHBAY_PROFILE` file at the tree root is enough
-   for `python -m switchbay service install`).
+   `copilot.host`). `hf_model_download` must be **true in
+   admin.baked.json** if IT wants that option — overlay cannot turn a
+   baked-off flag on.
+4. The payload already stamps `SWITCHBAY_PROFILE` + `admin.baked.json`
+   at the tree root. Keep that layout; Active Setup registers the
+   per-user task (not SYSTEM).
 5. Default workspace: `%USERPROFILE%\SwitchBay\workspace`.
-6. Employees open Edge: `msedge --app=http://127.0.0.1:8765`.
+6. Employees open **Edge**: `SwitchBay.exe` →
+   `msedge --app=http://127.0.0.1:8765`.
 
 Stop uses `taskkill /PID` of the daemon pidfile, never
 `taskkill /IM python.exe`.

@@ -1,6 +1,6 @@
 [project]
 name = "switchbay"
-version = "0.9.15"
+version = "0.9.16"
 description = "Local single-user workbench over knowledge bases — a driven second brain."
 requires-python = ">=3.11"
 authors = [{ name = "Benjamin Smith" }]

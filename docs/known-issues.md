@@ -1,4 +1,4 @@
-# Known issues (v0.9.15)
+# Known issues (v0.9.16)
 
 An honest, short list of what's rough or deferred in this release. None
 are data-loss or security issues — each is cosmetic, has a workaround,
@@ -17,26 +17,26 @@ page only keeps the one-line workarounds.
 | Packs | With many pack tabs open the tab strip scrolls; there's no overflow dropdown yet. | Scroll the strip horizontally. |
 | Codex provider | No per-call rail card (upstream has no PreToolUse). MCP works. | Claude Code or Grok Build for rail cards. Details: [`providers.md`](providers.md). |
 | Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |
-| Windows | Interactive rail terminal is Unix-only in v1. | Copilot + local HTTP still work. PTY comes later. |
-| Enterprise | Release ships frozen zip/tar payloads, not a signed MSI/PKG yet. | Packaging teams wrap the Win11 x64 / darwin arm64 assets. WiX + notarization are the next packaging PRs. |
+| Local 4B | Worker, not Copilot: short grounded answers + `[[wikilink]]`, not long synthesis. | Copilot for fleet agentic work; 4B for offline wiki lookup. |
+| Enterprise | CI ships **unsigned** zip/tar. WiX is a host+Active Setup skeleton (harvest the rest). No `icon.ico` in `frontend/dist`. | Company bake: compile host, harvest, Authenticode / notarize. Playbook: [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
 
 ## Platform support
 
-macOS is the exercised path (a launchd service). The Windows (Scheduled
-Task) and Linux (systemd `--user`) service paths in `service.py` are
-implemented but not yet tested — treat them as beta.
+macOS arm64 is the exercised path (launchd). Win11 x64 payloads are
+built on `windows-latest`; ConPTY is in this release but the full
+MSI path is company bake, not CI. Linux (systemd `--user`) is
+implemented, not fleet-tested.
 
 On first install or first start, macOS may show **python3.13** (the
 daemon) asking to access data from other apps and/or the Keychain.
-That is expected — see [README → macOS permission prompts](../README.md#macos-permission-prompts-expected).
-Allow both for a normal install.
+Enterprise skips `scan_other_app_caches`. Allow Keychain for Copilot
+device-flow. See [README → macOS permission prompts](../README.md#macos-permission-prompts-expected).
 
 ## Comms streams
 
-The password-tier adapters (IMAP, Telegram, Discord, GitHub, iMessage,
-RSS) verify credentials at add time and are tested end-to-end. The OAuth
-adapters (Gmail, Microsoft 365, Slack) need your own app registration and
-a browser round-trip; that path is wired but less exercised.
+Off in enterprise. In **open**: password-tier adapters (IMAP, Telegram,
+Discord, GitHub, iMessage, RSS) verify credentials at add time. OAuth
+adapters (Gmail, Microsoft 365, Slack) need your own app registration.
 
 ## Intentionally out of scope for v1
 
@@ -44,3 +44,5 @@ a browser round-trip; that path is wired but less exercised.
   single-user and localhost-only by design.
 - **A plugin marketplace** — skills and MCP servers are added locally
   (authored or entered by hand), never from a catalog.
+- **CI-held signing certs** — packaging teams sign on the bake machine.
+- **Intel Mac / Windows ARM** enterprise payloads.

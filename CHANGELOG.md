@@ -3,6 +3,46 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-21 — v0.9.16 — enterprise SOC candidate
+
+**Migration:** none for the default **open** profile. **Breaking:** none
+on open. Enterprise payloads on this tag are the ones to wrap for a
+laptop fleet.
+
+Unsigned Win11 x64 + darwin arm64 trees attach as the workflow
+finishes. Company bake Authenticode-signs / notarizes. Playbook:
+[`enterprise/packaging/README.md`](enterprise/packaging/README.md).
+
+A 4B MLX local model on a 16 GB Mac survives wiki Q&A (search → read
+→ clickable `[[wikilink]]`) without Metal OOM.
+
+### Added
+
+- **Fleet kit** — CPython host (`switchbay.exe`), Edge GUI launcher,
+  WiX skeleton + Active Setup, macOS Safari stub + pkg script,
+  Intune Win32 fields, SentinelOne exclusions (`switchbay.exe`, not
+  `python.exe`), `harvest.py`.
+- **HTTP egress gate** — enterprise allows loopback + Copilot/GHE
+  (+ HF only if baked on).
+- **Tighten-only baked policy** — MDM overlay cannot re-enable a
+  baked-off feature. Stamp `hf_model_download` / Copilot host at bake.
+- **Win11 ConPTY** — rail terminal matches VS Code's default.
+- **Wiki cite on local answers** — host appends `[[page]]` if the
+  model forgets; `read_wiki_page` keeps path/title under the token cap.
+
+### Fixed
+
+- **4B Metal OOM** — MLX is a local desk even when the harness still
+  says `applies_to: llamacpp`. Prompt-cache / concurrency caps on
+  `mlx_lm.server`. Tool JSON clipped in place, not smashed to a
+  preview string.
+- **`what` as a shell command** — `/usr/bin/what` on macOS no longer
+  hijacks "what do we know…".
+
+### Version
+
+0.9.16 (micro). History retained.
+
 ## 2026-08-20 — v0.9.15 — Windows paths
 
 **Migration:** none. **Breaking:** none.

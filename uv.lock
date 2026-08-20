@@ -2515,7 +2515,7 @@ wheels = [
 
 [[package]]
 name = "switchbay"
-version = "0.9.15"
+version = "0.9.16"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },

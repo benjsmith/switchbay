@@ -30,7 +30,7 @@ cat > "$STAGING/Applications/Switch Bay.app/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-pkgbuild --root "$STAGING" --identifier com.switchbay.pkg --version 0.9.15 \
+pkgbuild --root "$STAGING" --identifier com.switchbay.pkg --version 0.9.16 \
   --install-location / "$OUT"
 echo "unsigned pkg: $OUT"
 echo "sign+notarize on the company bake machine (not CI)."
