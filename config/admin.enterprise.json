@@ -1,0 +1,31 @@
+{
+  "profile": "enterprise",
+  "providers": {
+    "github_copilot": true,
+    "llamacpp": true,
+    "mlx": true,
+    "ollama": true,
+    "claude-code": false,
+    "grok-build": false,
+    "muse-code": false,
+    "openai-codex": false,
+    "anthropic": false,
+    "xai": false,
+    "meta": false,
+    "openai": false,
+    "gemini": false
+  },
+  "features": {
+    "in_app_update": false,
+    "install_skills_npx": false,
+    "ce_auto_setup": false,
+    "uv_python_install": false,
+    "scan_other_app_caches": false,
+    "hf_model_download": false,
+    "comms_streams": false,
+    "github_share": false,
+    "media_generation": false,
+    "user_mcp_servers": true,
+    "watch_folders": true
+  }
+}

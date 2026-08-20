@@ -33,7 +33,7 @@ from aiohttp import WSMsgType, web
 import asyncio
 import uuid
 from . import (
-    a2a, action_buttons, agent_rules, analyses, app_settings, atomicio, capture, cebridge,
+    a2a, action_buttons, admin_policy, agent_rules, analyses, app_settings, atomicio, capture, cebridge,
     ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect, deck_export,
     demo_workspace,
@@ -211,6 +211,11 @@ def _pick_default_file(workspace: Path) -> str | None:
     return None
 
 
+async def handle_admin_policy(request: web.Request) -> web.Response:
+    """GET /api/admin-policy — resolved machine policy (read-only)."""
+    return web.json_response({"ok": True, **admin_policy.public_view()})
+
+
 async def handle_health(request: web.Request) -> web.Response:
     """Cheap liveness + identity for the open PWA/dev client.
 
@@ -242,6 +247,10 @@ async def handle_health(request: web.Request) -> web.Response:
         # Absolute repo root — the offline/stopped screens cache this to
         # build `make -C "<repo>" restart`.
         "repo_root": request.app.get("repo_root", ""),
+        "policy": {
+            "profile": admin_policy.profile(),
+            "source": admin_policy.load().get("source"),
+        },
     })
 
 
@@ -895,6 +904,11 @@ async def handle_settings_post(request: web.Request) -> web.Response:
         conversations.reset_embedder()
     # Media: { media: { image?: {provider, model}|null, video?: …, voice?: … } }
     if "media" in body and isinstance(body["media"], dict):
+        if not admin_policy.feature_enabled("media_generation"):
+            return web.json_response(
+                {"error": admin_policy.feature_error("media_generation")},
+                status=403,
+            )
         for modality, rec in body["media"].items():
             if modality not in media_settings.MODALITIES:
                 return web.json_response(
@@ -3305,6 +3319,9 @@ async def handle_mcp_servers_list(request: web.Request) -> web.Response:
 async def handle_mcp_servers_add(request: web.Request) -> web.Response:
     """Verify (a real MCP `initialize` handshake) then persist a new
     user MCP server. Rollback (400) if it doesn't launch/respond."""
+    blocked = _policy_block("user_mcp_servers")
+    if blocked:
+        return blocked
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -5415,12 +5432,26 @@ def _resolve_default_provider() -> str:
     """User-set default if one is saved, else the first provider that
     has a configured key, else the gateway's static default."""
     saved = llm_config.get_default_provider()
-    if saved and saved in llmgateway.PROVIDERS:
+    if (
+        saved and saved in llmgateway.PROVIDERS
+        and admin_policy.provider_allowed(saved)
+    ):
         return saved
     for pid, provider in llmgateway.PROVIDERS.items():
+        if not admin_policy.provider_allowed(pid):
+            continue
         if provider.has_key():
             return pid
     return llmgateway.default_provider_id()
+
+
+def _policy_block(feature: str) -> web.Response | None:
+    if admin_policy.feature_enabled(feature):
+        return None
+    return web.json_response(
+        {"ok": False, "error": admin_policy.feature_error(feature)},
+        status=403,
+    )
 
 
 # Error codes that mean "try again / try elsewhere" rather than a hard
@@ -5567,6 +5598,7 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
         "default_provider": current,
         "default_model": default_model,
         "routing": routing,
+        "policy": admin_policy.public_view(),
     })
 
 
@@ -5586,6 +5618,11 @@ async def handle_llm_set_default(request: web.Request) -> web.Response:
         if pid not in llmgateway.PROVIDERS:
             return web.json_response(
                 {"error": f"unknown provider: {pid}"}, status=400,
+            )
+        if not admin_policy.provider_allowed(pid):
+            return web.json_response(
+                {"error": f"provider disabled by admin policy: {pid}"},
+                status=403,
             )
         if not llmgateway.get(pid).has_key():
             return web.json_response(
@@ -6572,6 +6609,9 @@ async def handle_streams_routing(request: web.Request) -> web.Response:
 
 
 async def handle_streams_add(request: web.Request) -> web.Response:
+    blocked = _policy_block("comms_streams")
+    if blocked:
+        return blocked
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -7121,6 +7161,9 @@ async def handle_watch_folders_add(request: web.Request) -> web.Response:
     """Register a watch folder. Body {path} — or {pick: true} to open
     the OS folder picker. Existing contents are BASELINED (only files
     arriving after this point auto-ingest)."""
+    blocked = _policy_block("watch_folders")
+    if blocked:
+        return blocked
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -8036,6 +8079,9 @@ async def handle_versions(request: web.Request) -> web.Response:
 async def handle_update_check(request: web.Request) -> web.Response:
     """GET /api/update/check — compare running versions to GitHub latest
     releases (Switch Bay, curiosity-engine, curiosity-merge). Read-only."""
+    blocked = _policy_block("in_app_update")
+    if blocked:
+        return blocked
     try:
         body = await asyncio.to_thread(updater.check)
     except Exception as e:  # noqa: BLE001
@@ -8050,6 +8096,9 @@ async def handle_update(request: web.Request) -> web.Response:
     """POST /api/update — check GitHub, apply any older components, then
     restart the managed service so the PWA reloads. Apply still runs on
     a dev daemon; only the restart is gated (same 409 as /api/restart)."""
+    blocked = _policy_block("in_app_update")
+    if blocked:
+        return blocked
     try:
         body = await asyncio.to_thread(updater.apply)
     except Exception as e:  # noqa: BLE001
@@ -11799,6 +11848,9 @@ async def handle_localllm_install(request: web.Request) -> web.Response:
       * `candidate_id` from plan_top3 / discovery — catalog install.
       * neither — legacy RAM-planned Ornith.
     """
+    blocked = _policy_block("hf_model_download")
+    if blocked:
+        return blocked
     body: dict[str, Any] = {}
     try:
         body = await request.json()
@@ -12213,6 +12265,9 @@ async def handle_local_models_search(request: web.Request) -> web.Response:
     applies the recommendation gate (trusted GGUF publishers, no
     roleplay finetunes) for the "best fits" surface.
     """
+    blocked = _policy_block("hf_model_download")
+    if blocked:
+        return blocked
     q = request.rel_url.query
     query = (q.get("q") or "").strip()
     backend = (q.get("backend") or "llamacpp").strip()
@@ -12602,6 +12657,9 @@ async def handle_share_publish(request: web.Request) -> web.Response:
     internals always excluded). Returns immediately; the dialog polls
     /api/share/status for the outcome, and a rail notice lands on
     completion either way."""
+    blocked = _policy_block("github_share")
+    if blocked:
+        return blocked
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -14227,6 +14285,7 @@ def build_app(workspace: Path) -> web.Application:
     # listening (no loop yet → can't even offload it). Deferring it keeps
     # build_app non-blocking and lets the server bind promptly.
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/admin-policy", handle_admin_policy)
     app.router.add_get("/api/versions", handle_versions)
     app.router.add_get("/api/tree", handle_tree)
     app.router.add_get("/api/file", handle_file)

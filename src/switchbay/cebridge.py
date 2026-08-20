@@ -164,8 +164,15 @@ def install_skill(*, timeout: float = 180.0) -> tuple[bool, str]:
     Best-effort. The skills CLI must get `-y` or a headless install
     hangs on a confirmation prompt (the new-Mac failure mode).
     """
+    from . import admin_policy
     if skill_is_installed():
         return True, f"curiosity-engine skill present at {ce_root()}"
+    if not admin_policy.feature_enabled("install_skills_npx"):
+        return False, (
+            "curiosity-engine skill is not installed, and admin policy "
+            "forbids `npx skills add`. Vendor the skill into the image "
+            "or set SWITCHBAY_CE_ROOT. See docs/enterprise.md."
+        )
     npx = shutil.which("npx")
     if npx is None:
         return False, (
@@ -208,6 +215,9 @@ def _write_workspace_python_pin(workspace: Path) -> None:
 
 async def _ensure_uv_python(pin: str) -> None:
     """Best-effort `uv python install <pin>` so `uv venv --python` works."""
+    from . import admin_policy
+    if not admin_policy.feature_enabled("uv_python_install"):
+        return
     if shutil.which("uv") is None:
         return
     try:
@@ -272,6 +282,13 @@ async def setup(workspace: Path) -> tuple[bool, str]:
     Returns (ok, captured_output). Same env-scrubbing rule as `build()`.
     Pins the workspace venv to Python 3.13 so kuzu can install.
     """
+    from . import admin_policy
+    if not admin_policy.feature_enabled("ce_auto_setup"):
+        return False, (
+            "CE setup.sh is disabled by admin policy. Pre-provision "
+            "workspace .venv on the builder, or enable ce_auto_setup. "
+            "See docs/enterprise.md."
+        )
     if not workspace.is_dir():
         return False, f"workspace path is not a directory: {workspace}"
     installed, skill_msg = await asyncio.to_thread(install_skill)

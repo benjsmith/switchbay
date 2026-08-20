@@ -51,10 +51,13 @@ PROVIDERS = {
 def list_providers() -> list[dict]:
     """Public list — for the Settings UI. Includes a `has_key` flag so
     the UI can show "configured" vs "needs key" without exposing the
-    key itself."""
+    key itself. Admin policy may hide providers entirely."""
+    from .. import admin_policy
     out = []
     for p in PROVIDERS.values():
         info = dict(p.PROVIDER)
+        if not admin_policy.provider_allowed(str(info.get("id") or "")):
+            continue
         info["has_key"] = p.has_key()
         installed_fn = getattr(p, "is_installed", None)
         info["installed"] = bool(installed_fn()) if callable(installed_fn) else info["has_key"]
@@ -71,7 +74,14 @@ def get(provider_id: str):
 
 def default_provider_id() -> str:
     """Provider used when the user hasn't picked one explicitly."""
-    return anthropic.ID
+    from .. import admin_policy
+    for pid in admin_policy.preferred_provider_order():
+        if pid in PROVIDERS:
+            return pid
+    for pid in PROVIDERS:
+        if admin_policy.provider_allowed(pid):
+            return pid
+    return github_copilot.ID
 
 
 def reasoning_options(provider_id: str, model: str | None = None) -> list[dict]:

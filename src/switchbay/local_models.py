@@ -620,6 +620,9 @@ def _hf_hub_caches() -> list[Path]:
     add(home / "Library" / "Caches" / "huggingface" / "hub")
     # Other Mac apps keep private HF hubs under Containers/.
     # Bound the walk — a single stuck sandbox dir must not hang boot.
+    from . import admin_policy
+    if not admin_policy.feature_enabled("scan_other_app_caches"):
+        return out
     try:
         with ThreadPoolExecutor(max_workers=1) as pool:
             fut = pool.submit(_container_hubs, home / "Library" / "Containers")

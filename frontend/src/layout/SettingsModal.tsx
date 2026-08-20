@@ -39,12 +39,19 @@ function modelsForProvider(p: ProviderInfo | undefined): string[] {
   return out;
 }
 
+type PolicyView = {
+  profile: string;
+  source: string | null;
+  features: Record<string, boolean>;
+};
+
 type ProvidersBody = {
   providers: ProviderInfo[];
   keychain_available: boolean;
   keychain_backend: string;
   default_provider: string;
   default_model?: string;
+  policy?: PolicyView;
 };
 
 type Props = {
@@ -212,6 +219,13 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             <p className="sy-settings-keychain">
               Keys stored in: <code>{info.keychain_backend}</code>. Plaintext is never written
               to disk.
+            </p>
+          )}
+          {info?.policy?.profile === "enterprise" && (
+            <p className="sy-settings-keychain">
+              Managed by your organisation. Provider list and some
+              Settings panels are locked by admin policy
+              {info.policy.source ? <> (<code>{info.policy.source}</code>)</> : null}.
             </p>
           )}
           {/* Local backends (llama.cpp / MLX / Ollama) live only in the
@@ -388,20 +402,29 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
           <LocalModelPanel open={open} onClose={onClose} />
           <LadderPanel open={open} providers={info?.providers ?? []} />
           <PacksPanel open={open} />
-          <McpServersPanel open={open} />
+          {(info?.policy?.features?.user_mcp_servers ?? true) && (
+            <McpServersPanel open={open} />
+          )}
           <UserTabsPanel open={open} />
           <PermissionsPanel open={open} />
           <StoragePanel open={open} />
-          <MediaPanel open={open} />
+          {(info?.policy?.features?.media_generation ?? true) && (
+            <MediaPanel open={open} />
+          )}
           <WorkspacesHomePanel open={open} />
           <CuratorPanel open={open} />
-          <WatchFoldersPanel open={open} />
-          <StreamsPanel open={open} />
+          {(info?.policy?.features?.watch_folders ?? true) && (
+            <WatchFoldersPanel open={open} />
+          )}
+          {(info?.policy?.features?.comms_streams ?? true) && (
+            <StreamsPanel open={open} />
+          )}
           <HistoryPanel open={open} />
           <ThrustersEgg open={open} onClose={onClose} />
         </div>
         <div className="sy-confirm-actions sy-settings-footer">
           <div className="sy-settings-power">
+            {(info?.policy?.features?.in_app_update ?? true) && (
             <button
               type="button"
               className="sy-confirm-btn sy-settings-update"
@@ -423,6 +446,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             >
               ↓ Update
             </button>
+            )}
             <button
               type="button"
               className="sy-confirm-btn sy-settings-restart"

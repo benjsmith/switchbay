@@ -42,6 +42,9 @@ def _ensure_uv() -> None:
     `uv pip install` (uv-created venvs have no pip). Best-effort: if uv
     isn't found, run the official installer; warn (don't fail) if that
     can't run."""
+    from . import admin_policy
+    if not admin_policy.feature_enabled("uv_python_install"):
+        return
     if shutil.which("uv"):
         return
     for c in (Path.home() / ".local" / "bin" / "uv", Path("/opt/homebrew/bin/uv")):
@@ -63,6 +66,10 @@ def _install_bundled_skills() -> None:
     """Install our first-party skills into ~/.claude/skills via
     `npx skills add <ref>`. Best-effort + non-fatal: warns (doesn't
     fail the service install) if npx/network is unavailable."""
+    from . import admin_policy
+    if not admin_policy.feature_enabled("install_skills_npx"):
+        print("  bundled skills: SKIPPED (admin policy install_skills_npx=false)")
+        return
     npx = shutil.which("npx")
     if not npx:
         print("  bundled skills: SKIPPED (npx not found). Install Node, then:")
