@@ -57,6 +57,9 @@ class Component:
     # order when we need a content fingerprint).
     skill_md_paths: tuple[str, ...] = ()
     sentinel: str = ""  # relative path that must survive an npx update
+    # Switch Bay release pairing. Help uses this when an npx skill
+    # install has no git tag / CHANGELOG. Bump alongside pyproject.
+    related_version: str = ""
 
 
 COMPONENTS: tuple[Component, ...] = (
@@ -69,6 +72,7 @@ COMPONENTS: tuple[Component, ...] = (
         skill_name="curiosity-engine",
         skill_md_paths=("skills/curiosity-engine/SKILL.md", "SKILL.md"),
         sentinel="scripts/setup.sh",
+        related_version="1.3.0",
     ),
     Component(
         id="curiosity-merge",
@@ -78,6 +82,7 @@ COMPONENTS: tuple[Component, ...] = (
         skill_name="curiosity-merge",
         skill_md_paths=("SKILL.md",),
         sentinel="scripts/setup.sh",
+        related_version="0.7.0",
     ),
 )
 
@@ -212,6 +217,32 @@ def fetch_remote_bytes(repo: str, tag: str, relpath: str) -> bytes | None:
     return None
 
 
+def fetch_release_tags(repo: str, *, limit: int = 20) -> list[str]:
+    """Newest GitHub release tags first. Raises UpdateError on HTTP failure."""
+    n = max(1, min(int(limit), 100))
+    status, body = http_get(f"{_GITHUB_API}/repos/{repo}/releases?per_page={n}")
+    if status == 404:
+        raise UpdateError(f"no GitHub releases for {repo}")
+    if status == 403:
+        raise UpdateError("GitHub API rate-limited the release check; try again later")
+    if status != 200:
+        raise UpdateError(f"GitHub releases for {repo}: HTTP {status}")
+    try:
+        data = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as e:
+        raise UpdateError(f"GitHub releases for {repo}: invalid JSON") from e
+    if not isinstance(data, list):
+        raise UpdateError(f"GitHub releases for {repo}: expected a list")
+    tags: list[str] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        tag = str(item.get("tag_name") or "").strip()
+        if tag:
+            tags.append(tag)
+    return tags
+
+
 # ── local discovery ─────────────────────────────────────────────────
 
 
@@ -304,6 +335,74 @@ def local_skill_version(skill_dir: Path) -> str | None:
 
 def local_switchbay_version() -> str:
     return __version__
+
+
+# npx skill installs have no git tag / CHANGELOG. Keyed by
+# (component id, local SKILL.md sha256) so a daemon restart is the
+# only thing that re-walks GitHub after an in-place skill update.
+_FP_CACHE: dict[tuple[str, str], str | None] = {}
+
+
+def match_skill_release(comp: Component, skill_dir: Path) -> str | None:
+    """GitHub tag whose SKILL.md bytes match this install, or None.
+
+    Walks recent releases newest-first. Used by the Help panel for
+    npx installs that have no local semver. Failures (network, no
+    match) return None; only a completed walk is cached.
+    """
+    local_hash = _file_sha256(skill_dir / "SKILL.md")
+    if not local_hash:
+        return None
+    cache_key = (comp.id, local_hash)
+    if cache_key in _FP_CACHE:
+        return _FP_CACHE[cache_key]
+    try:
+        tags = fetch_release_tags(comp.repo)
+    except UpdateError:
+        return None
+    found: str | None = None
+    for tag in tags:
+        try:
+            remote_hash = _remote_skill_fingerprint(comp, tag)
+        except UpdateError:
+            continue
+        if remote_hash and remote_hash == local_hash:
+            found = tag
+            break
+    _FP_CACHE[cache_key] = found
+    return found
+
+
+def installed_components() -> list[dict[str, Any]]:
+    """Running Switch Bay / skill versions. Local only — no GitHub.
+
+    Skill semver comes from git tag or CHANGELOG. npx installs often
+    have neither; Help then shows ``related_version`` (this Switch Bay
+    release's pairing) so the panel always has a number.
+    """
+    rows: list[dict[str, Any]] = []
+    for comp in COMPONENTS:
+        row: dict[str, Any] = {
+            "id": comp.id,
+            "label": comp.label,
+            "kind": comp.kind,
+            "installed": True,
+            "current": None,
+        }
+        if comp.kind == "app":
+            row["current"] = display_tag(local_switchbay_version())
+            rows.append(row)
+            continue
+        skill_dir = find_skill_dir(comp.skill_name)
+        if skill_dir is None:
+            row["installed"] = False
+            rows.append(row)
+            continue
+        current = local_skill_version(skill_dir) or comp.related_version or None
+        if current:
+            row["current"] = display_tag(current)
+        rows.append(row)
+    return rows
 
 
 def _file_sha256(path: Path) -> str | None:

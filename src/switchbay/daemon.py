@@ -8015,6 +8015,24 @@ async def handle_restart(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_versions(request: web.Request) -> web.Response:
+    """GET /api/versions — running Switch Bay / curiosity-engine /
+    curiosity-merge versions for the Help panel. Local only."""
+    try:
+        components = await asyncio.to_thread(updater.installed_components)
+    except Exception as e:  # noqa: BLE001
+        log.exception("versions lookup failed")
+        return web.json_response(
+            {
+                "ok": False,
+                "error": f"versions lookup failed: {e}",
+                "components": [],
+            },
+            status=500,
+        )
+    return web.json_response({"ok": True, "components": components})
+
+
 async def handle_update_check(request: web.Request) -> web.Response:
     """GET /api/update/check — compare running versions to GitHub latest
     releases (Switch Bay, curiosity-engine, curiosity-merge). Read-only."""
@@ -14209,6 +14227,7 @@ def build_app(workspace: Path) -> web.Application:
     # listening (no loop yet → can't even offload it). Deferring it keeps
     # build_app non-blocking and lets the server bind promptly.
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/versions", handle_versions)
     app.router.add_get("/api/tree", handle_tree)
     app.router.add_get("/api/file", handle_file)
     app.router.add_post("/api/quit", handle_quit)

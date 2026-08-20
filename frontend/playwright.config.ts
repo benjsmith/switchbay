@@ -14,7 +14,7 @@ export default defineConfig({
   retries: 0,
   reporter: [["list"]],
   use: {
-    baseURL: "http://localhost:5173",
+    baseURL: process.env.E2E_BASE_URL || "http://localhost:5173",
     viewport: { width: 1400, height: 900 },
     trace: "off",
     // Headless Chromium has no GPU by default, which would send our

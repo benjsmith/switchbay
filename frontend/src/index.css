@@ -2335,6 +2335,17 @@ body {
   border-left: 3px solid var(--accent, var(--type-fact));
   border-radius: 4px;
 }
+.sy-help-footer {
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 12px;
+}
+.sy-help-versions {
+  font-size: 11px;
+  color: var(--text-faint);
+  line-height: 1.45;
+  min-width: 0;
+}
 
 /* ── Center (tab strip) ──────────────────────────────────────────── */
 .sy-center {

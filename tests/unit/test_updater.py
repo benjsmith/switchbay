@@ -54,6 +54,85 @@ def test_local_skill_version_from_changelog_when_not_git(tmp_path):
     assert updater.local_skill_version(skill) == "0.7.0"
 
 
+def test_installed_components_local_only(tmp_path, monkeypatch):
+    skill = tmp_path / "curiosity-merge"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("x", encoding="utf-8")
+    (skill / "CHANGELOG.md").write_text("## v0.7.0\n", encoding="utf-8")
+
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.12")
+    monkeypatch.setattr(updater.skillkit, "_global_skill_roots", lambda: [tmp_path])
+    monkeypatch.setattr(updater.cebridge, "ce_root", lambda: tmp_path / "no-ce")
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda _p: None)
+
+    rows = {r["id"]: r for r in updater.installed_components()}
+    assert rows["switchbay"]["current"] == "v0.9.12"
+    assert rows["curiosity-engine"]["installed"] is False
+    assert rows["curiosity-engine"]["current"] is None
+    assert rows["curiosity-merge"]["current"] == "v0.7.0"
+
+
+def test_installed_components_uses_related_version_when_npx_has_no_semver(
+    tmp_path, monkeypatch,
+):
+    skill = tmp_path / "curiosity-engine"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("x", encoding="utf-8")
+
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.12")
+    monkeypatch.setattr(updater.skillkit, "_global_skill_roots", lambda: [tmp_path])
+    monkeypatch.setattr(updater.cebridge, "ce_root", lambda: skill)
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda _p: None)
+
+    rows = {r["id"]: r for r in updater.installed_components()}
+    assert rows["curiosity-engine"]["installed"] is True
+    assert rows["curiosity-engine"]["current"] == "v1.3.0"
+
+
+def test_match_skill_release_walks_older_tags(tmp_path, monkeypatch):
+    updater._FP_CACHE.clear()
+    skill = tmp_path / "curiosity-engine"
+    skill.mkdir()
+    body = b"ce skill v1.2.0"
+    (skill / "SKILL.md").write_bytes(body)
+
+    monkeypatch.setattr(
+        updater, "fetch_release_tags",
+        lambda _repo, **_k: ["v1.3.0", "v1.2.0"],
+    )
+
+    def fake_remote(_comp, tag):
+        if tag == "v1.3.0":
+            return hashlib.sha256(b"newer").hexdigest()
+        if tag == "v1.2.0":
+            return hashlib.sha256(body).hexdigest()
+        return None
+
+    monkeypatch.setattr(updater, "_remote_skill_fingerprint", fake_remote)
+    assert updater.match_skill_release(updater.COMPONENTS[1], skill) == "v1.2.0"
+    # Second call hits the cache — a boom here means we re-walked.
+    monkeypatch.setattr(
+        updater, "fetch_release_tags",
+        lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("uncached")),
+    )
+    assert updater.match_skill_release(updater.COMPONENTS[1], skill) == "v1.2.0"
+
+
+@pytest.mark.asyncio
+async def test_versions_endpoint(monkeypatch):
+    monkeypatch.setattr(updater, "installed_components", lambda: [
+        {"id": "switchbay", "label": "Switch Bay", "kind": "app",
+         "installed": True, "current": "v0.9.12"},
+    ])
+    req = make_mocked_request("GET", "/api/versions", app={})
+    resp = await daemon.handle_versions(req)
+    assert resp.status == 200
+    import json
+    body = json.loads(resp.body)
+    assert body["ok"] is True
+    assert body["components"][0]["current"] == "v0.9.12"
+
+
 def test_find_skill_dir_uses_global_roots(tmp_path, monkeypatch):
     root = tmp_path / "skills"
     skill = root / "curiosity-merge"

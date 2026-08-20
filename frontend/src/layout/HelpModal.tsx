@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 
 /** "How Switch Bay works" help modal, opened from the top-bar ?-button.
  *  Reuses the .sy-confirm / .sy-settings modal chrome (backdrop, dialog,
@@ -7,18 +7,49 @@ import { useEffect } from "react";
  *  particular the DuckDB-vs-Kuzu distinction, which is easy to get
  *  wrong: they do NOT interact. */
 
+type VersionRow = {
+  id: string;
+  label: string;
+  installed: boolean;
+  current: string | null;
+};
+
 type Props = {
   open: boolean;
   onClose: () => void;
 };
 
+function versionLine(row: VersionRow): string {
+  if (!row.installed) return `${row.label} not installed`;
+  if (row.current) return `${row.label} ${row.current}`;
+  return `${row.label} installed`;
+}
+
 export default function HelpModal({ open, onClose }: Props) {
+  const [versions, setVersions] = useState<VersionRow[] | null>(null);
+
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [open, onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    fetch("/api/versions")
+      .then((r) => r.json())
+      .then((body: { components?: VersionRow[] }) => {
+        if (cancelled) return;
+        const rows = Array.isArray(body.components) ? body.components : [];
+        setVersions(rows);
+      })
+      .catch(() => {
+        if (!cancelled) setVersions([]);
+      });
+    return () => { cancelled = true; };
+  }, [open]);
 
   if (!open) return null;
 
@@ -35,11 +66,15 @@ export default function HelpModal({ open, onClose }: Props) {
 
           <p>
             Switch Bay is a workbench over a <strong>curiosity-engine</strong> (CE)
-            knowledge base. Three columns: the <strong>Browser</strong> (left, your
-            files), the <strong>Tabs</strong> (centre — Graph, Editor, Table, Sheet,
-            Plot, Sketch, Projects, Agents), and the <strong>Rail</strong>
-            (right, the chat/command input). One workspace = one folder with a
-            <code> wiki/</code> of markdown pages.
+            knowledge base. <strong>Power</strong> mode is three columns: the
+            <strong> Browser</strong> (left, your files), the <strong>Tabs</strong>
+            {" "}(centre — Graph, Editor, Table, Sheet, Plot, Sketch, Library,
+            Projects, Agents, plus any custom tabs you pin), and the
+            <strong> Rail</strong> (right, chat and commands). <strong>Zen</strong> mode
+            is graph-first with one surface and floating chat — toggle the face
+            icon at the bottom of the Browser. One workspace = one folder with a
+            <code> vault/</code> of raw sources and a <code>wiki/</code> of
+            markdown pages.
           </p>
 
           <h4>The Rail — what you can type</h4>
@@ -65,7 +100,7 @@ export default function HelpModal({ open, onClose }: Props) {
               Settings → Model ladder.
             </dd>
             <dt><code>/name </code><span className="sy-help-dim">args</span></dt>
-            <dd>A slash command (e.g. <code>/plot</code>, <code>/sketch</code>, <code>/viewer</code>, <code>/curate</code>, <code>/walkthrough</code>). Type <code>/</code> to autocomplete the list.</dd>
+            <dd>A slash command (e.g. <code>/plot</code>, <code>/sketch</code>, <code>/viewer</code>, <code>/rescan</code>, <code>/curate</code>, <code>/walkthrough</code>). Type <code>/</code> to autocomplete the list.</dd>
           </dl>
 
           <h4>The Table tab — DuckDB</h4>
@@ -102,8 +137,9 @@ export default function HelpModal({ open, onClose }: Props) {
             <code> .curator/</code>), then exports it to a <code>data.json</code> of nodes +
             edges that the viewer renders. You explore it <strong>visually</strong> —
             pan, click a node to open its page. After editing the wiki, press
-            <strong> REBUILD VIEWER</strong> (or run <code>/viewer</code>) to re-run the
-            Kuzu build and refresh the graph.
+            <strong> rebuild viewer</strong> (or run <code>/viewer</code>) to re-run the
+            Kuzu build and refresh the graph. If the Browser still shows deleted
+            pages or stale folders, run <code>/rescan</code> for a cold rebuild.
           </p>
           <p className="sy-help-note">
             <strong>Kuzu and the Table tab are separate systems.</strong> Kuzu is CE's
@@ -149,7 +185,16 @@ export default function HelpModal({ open, onClose }: Props) {
           </dl>
 
         </div>
-        <div className="sy-confirm-actions">
+        <div className="sy-confirm-actions sy-help-footer">
+          <div className="sy-help-versions" aria-label="Installed versions">
+            {versions === null
+              ? <span className="sy-help-dim">versions…</span>
+              : versions.length === 0
+                ? null
+                : versions.map((row) => (
+                    <div key={row.id}>{versionLine(row)}</div>
+                  ))}
+          </div>
           <button type="button" className="sy-confirm-btn" onClick={onClose}>Close</button>
         </div>
       </div>
