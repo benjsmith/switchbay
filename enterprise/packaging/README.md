@@ -58,5 +58,6 @@ macOS: Safari. Interactive PTY is Unix-only; Windows v1 has no rail shell.
 
 Vendor the curiosity-engine skill on the **builder**, not the endpoint.
 
-Full design (WiX MSI, notarized PKG, C host): `docs/enterprise-windows-design.md`.
-This release ships the frozen trees those later packagers wrap.
+This release ships the frozen trees packaging teams wrap. WiX MSI,
+notarized PKG, and the CPython host are later packaging PRs. Public
+packaging notes: `docs/enterprise.md`.

@@ -239,7 +239,7 @@ def stage(repo: Path, out: Path) -> None:
     (out / "SWITCHBAY_PROFILE").write_text("enterprise\n", encoding="utf-8")
     docs = out / "docs"
     docs.mkdir()
-    for name in ("enterprise.md", "enterprise-windows-design.md", "providers.md"):
+    for name in ("enterprise.md", "providers.md"):
         src = repo / "docs" / name
         if src.is_file():
             shutil.copy2(src, docs / name)

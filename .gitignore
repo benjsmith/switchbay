@@ -33,6 +33,8 @@ skills-lock.json
 charter.md
 work-plan.md
 log.md
+docs/enterprise-windows-design.md
+docs/*-design.md
 
 # ── machine-level admin policy drop-in (never commit a live copy) ──
 /admin.json
