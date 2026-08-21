@@ -329,11 +329,12 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
     ]
     if kind == "windows":
         lines += [
-            "   signtool sign /fd SHA256 /tr http://timestamp.digicert.com ^",
-            "     layout\\bin\\switchbay.exe layout\\bin\\SwitchBay.exe "
-            "layout\\bin\\python313.dll",
-            "   (skip switchbay.exe if bake fell back to python.exe — "
-            "install Visual Studio Build Tools and re-run bake)",
+            "   Recommended: Azure Artifact Signing (~$10/mo) or SSL.com",
+            "   eSigner — cloud HSM, GitHub Action, no USB token.",
+            "   Sign layout\\bin\\switchbay.exe, SwitchBay.exe, python313.dll.",
+            "   See enterprise/packaging/README.md → Sign.",
+            "   (If bake fell back to python.exe, install VS Build Tools and",
+            "   re-run bake so switchbay.exe exists; EDR prefers that host.)",
             "",
             "2. Intune → Apps → Windows → Add → Windows app (Win32).",
             "   Install:   powershell.exe -ExecutionPolicy Bypass -File install.ps1",
@@ -353,10 +354,12 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
         ]
     else:
         lines += [
-            "   codesign --sign \"Developer ID Application: …\" --options runtime \\",
-            "     --entitlements <repo>/enterprise/packaging/macos/entitlements.plist \\",
-            "     --timestamp <the .app and every dylib in the payload>",
-            "   productsign the unsigned pkg, then: xcrun notarytool submit && stapler staple",
+            "   Apple Developer Program ($99/yr) + Developer ID certs.",
+            "   There is no Azure-style notarization SaaS. CI (macos runner",
+            "   + secrets) or a Mac bake machine:",
+            "   codesign --options runtime --timestamp the .app and dylibs,",
+            "   productsign the pkg, notarytool submit, stapler staple.",
+            "   See enterprise/packaging/README.md → Sign.",
             "",
             "2. Jamf / MDM: deploy the notarized pkg. LaunchAgent is",
             "   /Library/LaunchAgents/com.switchbay.daemon.plist (runs as the",

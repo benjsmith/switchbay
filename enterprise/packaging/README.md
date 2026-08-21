@@ -96,9 +96,25 @@ Useful flags:
 | `--no-skills-npx` | Disallow `npx` / `uvx skills add` |
 | `--vendor-ce DIR` | Copy the curiosity-engine skill into `vendor/` so laptops never `npx` |
 
-### 3. Read `dist/bake/NEXT.txt` and sign
+### 3. Sign (this is the only specialist step)
 
-That file is the only remaining human list: `signtool` (Windows) or `codesign` + `notarytool` (macOS), then hand the folder/pkg to IT.
+`dist/bake/NEXT.txt` lists the files. You do **not** invent a PKI. Pay a signing service, prove the company exists once, then a GitHub Action or bake-machine CLI attaches signatures.
+
+**Windows (pick one):**
+
+1. **Azure Artifact Signing** (was Trusted Signing) — signing as a service, ~**$10/month** (5 000 signatures), Microsoft-managed cert, private key stays in Azure HSM. GitHub Action / Azure DevOps / `Invoke-TrustedSigning`. Identity check is a one-time Microsoft verification of the company. This is the default recommendation.
+2. **SSL.com eSigner** — same idea (cloud HSM, GitHub Action, no USB token). Costs more; EV option if SOC insists on EV.
+3. **Classic OV/EV cert** (DigiCert, Sectigo, …) — $200–$600+/year and, since 2023, the key **must** live on an HSM or USB token. Painful in CI. Only if legal already owns one.
+
+Then sign `layout\bin\switchbay.exe`, `SwitchBay.exe`, and `python313.dll` (bake already put those files next to each other).
+
+**macOS:** there is **no** Azure-style notarization SaaS. You need:
+
+1. Apple Developer Program, **$99/year**, company account (not a personal Apple ID if the pkg is branded as the company).
+2. A **Developer ID Application** cert and a **Developer ID Installer** cert (created in the Apple developer portal, often stored as a `.p12` in CI secrets or on a Mac bake machine).
+3. `codesign` the `.app` + dylibs, `productsign` the pkg, `xcrun notarytool submit`, `stapler staple`.
+
+CI can do that (GitHub `macos-14` runner + secrets). A Mac-in-the-cloud vendor (MacStadium, Codemagic) can run the same commands if you do not want Apple certs on GitHub. Nobody else can notarize for you without *your* Developer ID.
 
 Windows without Visual Studio Build Tools still bakes; the task falls back to `python.exe` until you install Build Tools and re-run so `bin\switchbay.exe` exists (EDR prefers the signed host).
 
