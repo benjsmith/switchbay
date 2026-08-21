@@ -27,7 +27,8 @@
     "node.exe"
   ],
   "notes": [
-    "Until switchbay.exe is signed and installed, a time-boxed path exclusion on the payload python is a waiver, not this package.",
+    "Unsigned MDM path: allow %ProgramFiles%\\SwitchBay\\** by path/hash, not a global python.exe exclude.",
+    "Signed host: use the process exclusions above (switchbay.exe / SwitchBay.exe only).",
     "Network: loopback + Copilot/GHE hosts from admin.baked.json egress list."
   ]
 }

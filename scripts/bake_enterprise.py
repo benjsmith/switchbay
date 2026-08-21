@@ -325,7 +325,10 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
     lines = [
         "Switch Bay bake output — remaining HUMAN steps",
         "",
-        "1. Sign (company cert; CI cannot do this).",
+        "1. Trust model: unsigned MDM (path allow the install dir) or",
+        "   company-sign the files below. Both are supported.",
+        "",
+        "2. If signing:",
     ]
     if kind == "windows":
         lines += [
@@ -334,19 +337,19 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
             "   (If bake fell back to python.exe, install VS Build Tools and",
             "   re-run bake so switchbay.exe exists; EDR prefers that host.)",
             "",
-            "2. Intune → Apps → Windows → Add → Windows app (Win32).",
+            "3. Intune → Apps → Windows → Add → Windows app (Win32).",
             "   Install:   powershell.exe -ExecutionPolicy Bypass -File install.ps1",
             "   Uninstall: powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1",
             "   Detection: detection.ps1",
             "   Install behavior: System. Assignment: user group. Restart: no.",
             "",
-            "3. Copy admin.overlay.example.json to "
+            "4. Copy admin.overlay.example.json to "
             "%ProgramData%\\SwitchBay\\admin.json via Intune (separate",
             "   Device configuration / script) if this fleet's Copilot host",
             "   differs from baked. Overlay cannot turn ON a baked-off flag.",
             "",
-            "4. SentinelOne: import enterprise/packaging/sentinelone/"
-            "SwitchBay-exclusions.json after switchbay.exe is signed.",
+            "5. SentinelOne: unsigned → path allow %ProgramFiles%\\SwitchBay\\** ;",
+            "   signed host → SwitchBay-exclusions.json (switchbay.exe, not python.exe).",
             "",
             f"Host used: {extra.get('host', '?')}",
         ]
@@ -355,11 +358,12 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
             "   Developer ID-sign the .app and dylibs, productsign the pkg,",
             "   notarize, staple — company pipeline.",
             "",
-            "2. Jamf / MDM: deploy the notarized pkg. LaunchAgent is",
+            "3. Jamf / MDM: deploy the pkg (notarize first only if you want",
+            "   Gatekeeper-clean). LaunchAgent is",
             "   /Library/LaunchAgents/com.switchbay.daemon.plist (runs as the",
             "   logged-in user). Safari stub is /Applications/Switch Bay.app.",
             "",
-            "3. Overlay (optional): /Library/Application Support/SwitchBay/admin.json",
+            "4. Overlay (optional): /Library/Application Support/SwitchBay/admin.json",
             "   — cannot turn ON a baked-off flag.",
             "",
             f"Unsigned pkg: {extra.get('pkg', '?')}",
