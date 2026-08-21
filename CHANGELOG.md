@@ -3,6 +3,12 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## Unreleased
+
+- **Enterprise bake** — `python scripts/bake_enterprise.py --payload …`
+  stamps policy and assembles an Intune/Jamf layout. IT imports the
+  signed output (VS Code-like). They do not harvest WiX by hand.
+
 ## 2026-08-21 — v0.9.16 — enterprise SOC candidate
 
 **Migration:** none for the default **open** profile. **Breaking:** none

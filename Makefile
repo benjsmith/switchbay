@@ -8,7 +8,7 @@
 .PHONY: install sync sync-semantic sync-semantic-torch sync-frontend \
         dev-daemon dev-frontend build-frontend install-service \
         uninstall-service start stop restart status refresh test test-py check e2e \
-        enterprise-local open-local
+        enterprise-local open-local enterprise-bake
 
 PYDIR := $(CURDIR)/src
 
@@ -98,3 +98,16 @@ enterprise-local:
 	bash scripts/enterprise-local.sh on
 open-local:
 	bash scripts/enterprise-local.sh off
+
+# Company bake machine: stamp policy + assemble Intune/Jamf layout.
+# PAYLOAD= path to unzipped CI zip/tar. Then read $(or dist/bake)/NEXT.txt
+# and sign. Example:
+#   make enterprise-bake PAYLOAD=dist/switchbay-enterprise-darwin-arm64 \
+#        COPILOT_HOST=github.example.com
+PAYLOAD ?=
+COPILOT_HOST ?= github.com
+enterprise-bake:
+	@test -n "$(PAYLOAD)" || (echo "set PAYLOAD= to the unzipped CI tree or archive"; exit 1)
+	PYTHONPATH=$(PYDIR) uv run --no-sync python scripts/bake_enterprise.py \
+		--payload $(PAYLOAD) --copilot-host $(COPILOT_HOST) \
+		--out dist/bake $(if $(ALLOW_HF),--allow-hf,) $(if $(VENDOR_CE),--vendor-ce $(VENDOR_CE),)

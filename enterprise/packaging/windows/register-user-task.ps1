@@ -11,15 +11,25 @@ New-Item -ItemType Directory -Force -Path $ws | Out-Null
 $local = Join-Path $env:LOCALAPPDATA "switchbay"
 New-Item -ItemType Directory -Force -Path (Join-Path $local "logs") | Out-Null
 
-$hostExe = Join-Path $InstallDir "bin\switchbay.exe"
-if (-not (Test-Path $hostExe)) {
-    $hostExe = Join-Path $InstallDir "python\cpython-*\python.exe"
-    $hostExe = (Get-Item $hostExe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+$taskCmd = Join-Path $InstallDir "serve-task.cmd"
+if (Test-Path $taskCmd) {
+    $hostExe = $taskCmd
+} else {
+    $hostExe = Join-Path $InstallDir "bin\switchbay.exe"
+    if (-not (Test-Path $hostExe)) {
+        $hostExe = Join-Path $InstallDir "python\cpython-*\python.exe"
+        $hostExe = (Get-Item $hostExe -ErrorAction SilentlyContinue | Select-Object -First 1).FullName
+    }
 }
 $tmpl = Join-Path $InstallDir "enterprise\packaging\windows\SwitchBay.xml.template"
 $xml = Get-Content -Raw -Path $tmpl
 $xml = $xml.Replace("{{USERID}}", [System.Security.Principal.WindowsIdentity]::GetCurrent().Name)
 $xml = $xml.Replace("{{HOST}}", $hostExe)
+if ($hostExe -like "*serve-task.cmd") {
+    $xml = $xml.Replace("{{ARGS}}", "")
+} else {
+    $xml = $xml.Replace("{{ARGS}}", "-m switchbay serve --workspace `"$ws`"")
+}
 $xml = $xml.Replace("{{WORKSPACE}}", $ws)
 $xml = $xml.Replace("{{INSTALLDIR}}", $InstallDir)
 $out = Join-Path $local "SwitchBay.xml"

@@ -43,7 +43,7 @@
   <Actions Context="Author">
     <Exec>
       <Command>{{HOST}}</Command>
-      <Arguments>-m switchbay serve --workspace "{{WORKSPACE}}"</Arguments>
+      <Arguments>{{ARGS}}</Arguments>
       <WorkingDirectory>{{INSTALLDIR}}</WorkingDirectory>
     </Exec>
   </Actions>

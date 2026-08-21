@@ -161,22 +161,13 @@ Settings → GitHub Copilot (device flow / Enterprise SSO).
 Release asset: `switchbay-enterprise-win11-x64.zip` (built on
 `windows-latest`, not on the employee PC).
 
-1. Extract on the **packaging builder**. Smoke with `serve.cmd`.
-2. Compile `switchbay.exe` / `SwitchBay.exe`, harvest the **full**
-   tree into WiX (`SwitchBay.wxs` is a host+Active Setup skeleton),
-   Authenticode-sign, import the Intune Win32 app. Do **not** run
-   `uv` or `pnpm` on endpoints. Playbook:
-   [`enterprise/packaging/README.md`](../enterprise/packaging/README.md).
-3. Drop `%ProgramData%\SwitchBay\admin.json` (from the template; set
-   `copilot.host`). `hf_model_download` must be **true in
-   admin.baked.json** if IT wants that option — overlay cannot turn a
-   baked-off flag on.
-4. The payload already stamps `SWITCHBAY_PROFILE` + `admin.baked.json`
-   at the tree root. Keep that layout; Active Setup registers the
-   per-user task (not SYSTEM).
-5. Default workspace: `%USERPROFILE%\SwitchBay\workspace`.
-6. Employees open **Edge**: `SwitchBay.exe` →
-   `msedge --app=http://127.0.0.1:8765`.
+Numbered bake + Intune steps:
+[`enterprise/packaging/README.md`](../enterprise/packaging/README.md).
+
+Short version: unpack the CI zip →
+`python scripts/bake_enterprise.py --payload … --copilot-host <ghe>` →
+sign → IT imports `install.ps1` as a Win32 app (same motion as VS Code).
+Do **not** run `uv` or `pnpm` on endpoints.
 
 Stop uses `taskkill /PID` of the daemon pidfile, never
 `taskkill /IM python.exe`.

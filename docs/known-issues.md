@@ -18,7 +18,7 @@ page only keeps the one-line workarounds.
 | Codex provider | No per-call rail card (upstream has no PreToolUse). MCP works. | Claude Code or Grok Build for rail cards. Details: [`providers.md`](providers.md). |
 | Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |
 | Local 4B | Worker, not Copilot: short grounded answers + `[[wikilink]]`, not long synthesis. | Copilot for fleet agentic work; 4B for offline wiki lookup. |
-| Enterprise | CI ships **unsigned** zip/tar. WiX is a host+Active Setup skeleton (harvest the rest). No `icon.ico` in `frontend/dist`. | Company bake: compile host, harvest, Authenticode / notarize. Playbook: [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
+| Enterprise | CI ships **unsigned** zip/tar. Signing is company-side (VS Code IT never does this; Microsoft already signed theirs). | Bake machine: `python scripts/bake_enterprise.py --payload …` then sign. IT imports Intune Win32 / Jamf pkg. [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
 
 ## Platform support
 

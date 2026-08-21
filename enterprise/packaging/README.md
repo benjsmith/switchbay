@@ -1,270 +1,132 @@
-# Enterprise packaging kit
+# Enterprise packaging
 
-Fleet-shaped layout. **CI produces unsigned trees.** The company
-Authenticode-signs / notarizes on their bake machine. Endpoints never
-run `uv`, `pnpm`, `npx`, or curiosity-engine `setup.sh`.
+Two jobs. Do not mix them.
 
-## What packaging teams get
-
-On each `v*` tag, GitHub Actions attaches:
-
-| Asset | Runner | Contents |
+| Who | What they get | What they run |
 |---|---|---|
-| `switchbay-enterprise-win11-x64.zip` | `windows-latest` | Relocatable CPython + `src/` + `frontend/dist/` |
-| `switchbay-enterprise-darwin-arm64.tar.gz` | `macos-14` | Same, Apple silicon only |
+| **IT admin** (Intune / Jamf) | A **signed** MSI, `.intunewin`, or `.pkg` from your bake machine | The **IT admin** section below (same shape as deploying VS Code) |
+| **Bake machine** (company packaging, has the Authenticode / Developer ID cert) | The unsigned zip/tar from the GitHub release | **One command**, then sign, then hand the result to IT |
 
-Plus this kit inside the tree (`enterprise/packaging/`).
+This is **not** what VS Code IT admins do. VS Code ships a Microsoft-signed installer; Intune imports it. Switch Bay CI cannot hold your cert, so **one bake machine** signs. After that, fleet IT follows a VS Code-like import.
 
-| Piece | Path |
+Endpoints never run `uv`, `pnpm`, `npx`, or curiosity-engine `setup.sh`.
+
+SKUs: **Win11 x64** and **macOS darwin arm64** only.
+
+---
+
+## IT admin (after bake has signed)
+
+### Windows — Intune
+
+Same motion as a LOB Win32 app.
+
+1. Receive `dist/bake/` from packaging (signed `layout\bin\*.exe` / `.dll`).
+2. Wrap it with the Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`) if you need `.intunewin`.
+3. Intune → **Apps → Windows → Add → Windows app (Win32)**.
+
+| Field | Value |
 |---|---|
-| Frozen interpreter + site-packages | `python/cpython-*/` in the payload |
-| Bake (tighten-only) | payload `admin.baked.json` |
-| Overlay (MDM) | `%ProgramData%\SwitchBay\admin.json` / `/Library/Application Support/SwitchBay/admin.json` |
-| Windows host | `windows/switchbay-host.c` → `bin\switchbay.exe` |
-| Windows GUI | `windows/switchbay-gui.c` → `bin\SwitchBay.exe` (Edge `--app=`) |
-| WiX skeleton | `windows/SwitchBay.wxs` (host + Active Setup — **you harvest the rest**) |
-| Active Setup | `windows/register-user-task.ps1` + `SwitchBay.xml.template` |
-| macOS stub | `macos/switchbay-stub.c` → opens **Safari** |
-| macOS pkg | `macos/build-package.sh` (unsigned; notarize on bake) |
-| Intune | `intune/win32-app.md` + `detection.ps1` |
-| SentinelOne | `sentinelone/SwitchBay-exclusions.json` (`switchbay.exe`, **not** `python.exe`) |
-| Harvest | `harvest.py` — fail if launchers still call uv/npx/setup.sh |
+| Install | `powershell.exe -ExecutionPolicy Bypass -File install.ps1` |
+| Uninstall | `powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1` |
+| Detection | `detection.ps1` |
+| Install behavior | **System** |
+| Assignment | User group |
+| Restart | No |
 
-Supported SKUs this release: **Win11 x64** and **macOS darwin arm64**.
-No Intel Mac payload, no Windows ARM payload.
+4. Optional: deploy `%ProgramData%\SwitchBay\admin.json` as a separate Device configuration / script (copy `admin.overlay.example.json`). This can only **tighten** what bake already stamped (it cannot turn Hugging Face downloads on if bake left them off).
+5. SentinelOne: import `sentinelone/SwitchBay-exclusions.json` **after** `switchbay.exe` is signed. Exclude that exe, not `python.exe`.
+6. Users open **Start → Switch Bay** (Edge app window on `http://127.0.0.1:8765`). First logon registers a per-user scheduled task via Active Setup. Copilot sign-in is Settings → GitHub Copilot (device flow / SSO).
 
-## Local Mac test (no pkg)
+Uninstall leaves `%LOCALAPPDATA%\switchbay` and `%USERPROFILE%\SwitchBay` (user data), same as VS Code.
 
-From a git checkout:
+### macOS — Jamf / MDM
 
-```
-make enterprise-local   # overlay + restart; HF on so you can pull a small model
-make open-local         # back to consumer
-```
+1. Receive the **notarized** `SwitchBay-*.pkg`.
+2. Deploy the pkg. It installs:
+   - `/Library/Application Support/SwitchBay/` (payload)
+   - `/Library/LaunchAgents/com.switchbay.daemon.plist` (runs as the logged-in user)
+   - `/Applications/Switch Bay.app` (opens Safari on the loopback UI)
+3. Optional overlay: `/Library/Application Support/SwitchBay/admin.json` (tighten-only).
+4. Users open **Switch Bay**. Copilot sign-in is Settings → GitHub Copilot.
 
-## SOC posture (what to tell the review)
+---
 
-Same class as VS Code Copilot on a laptop, over a curated wiki/graph:
+## Bake machine (one command, then sign)
 
-- Per-user agent (LaunchAgent / InteractiveToken scheduled task), not a SYSTEM service.
-- Binds **127.0.0.1:8765** only. Enterprise HTTP egress is Copilot/GHE (+ HF iff baked on).
-- Copilot is device-flow OAuth (no long-lived API key in the package). HTTP tools only (`shell: false`); workspace commands still go through Switch Bay permission cards.
-- Hosted LLM keys (Anthropic/OpenAI/xAI/Gemini/Meta) and coding CLIs are off.
-- No `uv` / `pnpm` / `npx` / `setup.sh` at daemon start.
-- In-app git pull is off; fleet updates are a new MSI/PKG.
-- Interactive terminal is on (POSIX PTY / Win11 ConPTY) — same default as VS Code.
-- `npx`/`uvx skills add` is **on** by default (VS Code parity); lock with `skills.allowlist`.
-- MCP add is on; lock with `mcp.allowlist`.
-- FSL-1.1-ALv2: internal use is in-scope. Competing Use (reselling Switch Bay) is not.
+Do this on a blessed Windows 11 x64 box (for the MSI/Win32 layout) or an Apple-silicon Mac (for the pkg). Do **not** run it on employee laptops.
 
-This is **not** a claim that CI-signed binaries exist. Unsigned zip/tar
-will fail a serious SOC. The bake machine must sign.
+### 1. Download the CI tree
 
-## Bake machine playbook
+From the GitHub release (`v0.9.16` or newer):
 
-Do **all** compile/sign/harvest on a blessed builder. Never `uv sync`
-on an employee PC.
+- Windows: `switchbay-enterprise-win11-x64.zip`
+- macOS: `switchbay-enterprise-darwin-arm64.tar.gz`
 
-### 0. Smoke the CI tree first
+Unzip/untar. Smoke (optional): `serve.cmd` / `./serve.sh`, then open `http://127.0.0.1:8765`.
 
-Windows:
+### 2. Stamp policy and assemble
+
+On the bake machine, from a git checkout of Switch Bay **or** from the unpacked payload (the `scripts/` folder is in the repo; copy `scripts/bake_enterprise.py` next to the payload if you only have the zip):
 
 ```
-unzip switchbay-enterprise-win11-x64.zip
-cd switchbay-enterprise-win11-x64
-serve.cmd
-# Edge: http://127.0.0.1:8765
+python scripts/bake_enterprise.py ^
+  --payload path\to\switchbay-enterprise-win11-x64 ^
+  --copilot-host github.example.com ^
+  --out dist\bake
 ```
 
-macOS arm64:
+macOS:
 
 ```
-tar -xzf switchbay-enterprise-darwin-arm64.tar.gz
-cd switchbay-enterprise-darwin-arm64
-./serve.sh
-# Safari: http://127.0.0.1:8765
+python3 scripts/bake_enterprise.py \
+  --payload ./switchbay-enterprise-darwin-arm64 \
+  --copilot-host github.example.com \
+  --vendor-ce /path/to/curiosity-engine \
+  --out dist/bake
 ```
 
-Run `python enterprise/packaging/harvest.py .` from the payload root.
-Must print `harvest ok`.
+Useful flags:
 
-### 1. Stamp policy **before** you freeze the image
+| Flag | Effect |
+|---|---|
+| `--copilot-host` | github.com or your GitHub Enterprise host (locked in Settings) |
+| `--sso-slug` | EMU enterprise slug |
+| `--allow-hf` | Allow Settings → Find & install for local models. **If you omit this, MDM cannot turn HF on later.** |
+| `--no-skills-npx` | Disallow `npx` / `uvx skills add` |
+| `--vendor-ce DIR` | Copy the curiosity-engine skill into `vendor/` so laptops never `npx` |
 
-`admin.baked.json` is copied from `config/admin.enterprise.json` at
-stage time with `allow_profile_override: false` and `copilot.lock_host:
-true`. **MDM overlay can only tighten features/providers** (AND). It
-cannot turn a baked-off flag back on.
+### 3. Read `dist/bake/NEXT.txt` and sign
 
-Consequences that surprise people:
+That file is the only remaining human list: `signtool` (Windows) or `codesign` + `notarytool` (macOS), then hand the folder/pkg to IT.
 
-| Want | Do this at bake | Overlay cannot |
-|---|---|---|
-| Hugging Face downloads later | `"hf_model_download": true` in **baked** | enable HF if baked is false |
-| GitHub Enterprise / EMU host | `"copilot": { "host": "<ghe>", "sso_slug": "<emu>", "lock_host": true }` in baked (overlay *can* overwrite `copilot.host` today; still lock the Settings UI) | — |
-| Disable `npx`/`uvx skills add` | `"install_skills_npx": false` or `skills.allowlist: []` | — |
-| MCP allowlist | `mcp.allowlist` list of server ids | loosen a baked empty list if you AND |
+Windows without Visual Studio Build Tools still bakes; the task falls back to `python.exe` until you install Build Tools and re-run so `bin\switchbay.exe` exists (EDR prefers the signed host).
 
-Drop the MDM overlay at:
+### 4. Hand `dist/bake/` to IT
 
-- Windows: `%ProgramData%\SwitchBay\admin.json` (root/SYSTEM, `644`)
-- macOS: `/Library/Application Support/SwitchBay/admin.json` (root, `644`)
+They follow **IT admin** above. They do not compile C, harvest WiX, or convert icons.
 
-Do **not** put policy in `%LOCALAPPDATA%\switchbay` or
-`~/.config/switchbay` — the daemon writes those.
+---
 
-### 2. Windows (Win11 x64) — the unusual bits
-
-**Do not ship `python.exe` as the scheduled-task image** if you can
-avoid it. EDR will flag persistent `python.exe`. Compile the C host:
+## Local test on a Mac (no pkg)
 
 ```
-# From payload, after copying python313.dll next to the host:
-cl /nologo /O2 /Fe:bin\switchbay.exe enterprise\packaging\windows\switchbay-host.c python313.lib user32.lib
-cl /nologo /O2 /Fe:bin\SwitchBay.exe enterprise\packaging\windows\switchbay-gui.c shell32.lib wininet.lib
+make enterprise-local    # gitignored admin.json, HF on, restart
+make open-local          # back to consumer
 ```
 
-`switchbay.exe` is a CPython embeddable host (`Py_BytesMain`). Layout
-next to it **must** be:
+---
 
-```
-<INSTALLDIR>\
-  admin.baked.json
-  SWITCHBAY_PROFILE          # contents: enterprise
-  src\                       # required; _pth has ../src
-  frontend\dist\
-  python\cpython-*\          # full standalone (site-packages merged)
-  bin\
-    switchbay.exe
-    SwitchBay.exe            # GUI: Edge --app=http://127.0.0.1:8765
-    python313.dll
-    python313.zip
-    python313._pth           # from enterprise/packaging/windows/
-    Lib\                     # or whatever _pth says; usually copy from cpython-*
-  enterprise\packaging\      # Active Setup script + task XML live here
-```
+## Policy (one rule)
 
-`python313._pth` paths are **relative to `bin\`**:
+`admin.baked.json` is the floor. MDM overlay **AND**s features: overlay can turn things off, not on.
 
-```
-python313.zip
-.
-Lib
-Lib/site-packages
-../src
-import site
-```
+To allow Hugging Face downloads on any laptop in the fleet, pass `--allow-hf` at bake.
 
-If `src\` is not `INSTALLDIR\src`, or `Lib` is not beside the exe,
-the task starts and silently dies.
+Do not put policy in `%LOCALAPPDATA%\switchbay` or `~/.config/switchbay` (the daemon writes those).
 
-**WiX `SwitchBay.wxs` is a skeleton** (host files + Active Setup
-registry). You must **harvest** `src\`, `frontend\dist\`,
-`python\`, `admin.baked.json`, `SWITCHBAY_PROFILE`, and
-`enterprise\packaging\` into the MSI. The checked-in Feature does not
-do that. There is **no `icon.ico`** in `frontend/dist` — convert
-`icon-512.png` before `heat`.
+---
 
-**Active Setup, not a SYSTEM task.** The MSI is per-machine. The
-daemon is per-user (`InteractiveToken`, `LeastPrivilege`).
-`register-user-task.ps1` runs at first logon via Active Setup
-`StubPath`. Do **not** wrap `python -m switchbay service install` as
-the Intune install command. Do **not** register `schtasks` as SYSTEM.
+## What CI still does not do
 
-On every MSI that needs existing users to re-run first-logon, **bump
-the Active Setup `Version` registry value** (`1,0,0,0` → `1,0,1,0`).
-Windows skips StubPath if the version does not increase.
-
-Scheduled task exec (from the template):
-
-```
-Command:   <INSTALLDIR>\bin\switchbay.exe
-Arguments: -m switchbay serve --workspace %USERPROFILE%\SwitchBay\workspace
-WorkingDirectory: <INSTALLDIR>
-```
-
-Default workspace is `%USERPROFILE%\SwitchBay\workspace` (not synced).
-IT may point `SWITCHBAY_WORKSPACE` at a known folder, including a
-synced drive — that is an IT choice, not the default.
-
-**Edge only** on Windows. `SwitchBay.exe` calls
-`msedge --app=http://127.0.0.1:8765`. Chrome/Firefox are not the
-enterprise shell.
-
-**Sign on the bake machine** (CI never holds the cert):
-
-```
-signtool sign /fd SHA256 /tr http://timestamp.digicert.com ^
-  bin\switchbay.exe bin\SwitchBay.exe bin\python313.dll bin\*.pyd
-signtool sign /fd SHA256 /tr http://timestamp.digicert.com SwitchBay-<ver>-x64.msi
-```
-
-SentinelOne: import `sentinelone/SwitchBay-exclusions.json`. Exclude
-the **signed host**, never `python.exe`. Until the host is signed, a
-time-boxed path exclusion on the payload python is a **waiver**, not
-this package.
-
-Intune: `intune/win32-app.md`. Detection is file version of
-`%ProgramFiles%\SwitchBay\bin\switchbay.exe` (from `switchbay-host.rc`).
-Uninstall leaves `%LOCALAPPDATA%\switchbay` and `%USERPROFILE%\SwitchBay`
-(user data), same as VS Code.
-
-Stop is `taskkill /PID` of the daemon pidfile. Never
-`taskkill /IM python.exe`.
-
-### 3. macOS (darwin arm64)
-
-```
-enterprise/packaging/macos/build-package.sh \
-  path/to/switchbay-enterprise-darwin-arm64 \
-  dist/SwitchBay.pkg
-```
-
-The `.app` is a **stub**: it kickstarts `gui/$(id -u)/com.switchbay.daemon`
-and `open -a Safari http://127.0.0.1:8765`. The real process is the
-LaunchAgent running payload python `-m switchbay serve`.
-
-Vendor the **curiosity-engine** skill onto the image (copy from the
-builder). Set `SWITCHBAY_CE_ROOT` in the LaunchAgent environment so
-the daemon never `npx skills add`. With `ce_auto_setup: false`, a
-wiki without a CE `.venv` still opens; the graph is nodes-only until
-IT provisions kuzu **on the builder** (or a workspace template).
-
-**Notarize on the bake machine:**
-
-```
-codesign --sign "Developer ID Application: …" --options runtime \
-  --entitlements enterprise/packaging/macos/entitlements.plist \
-  --timestamp <every dylib and the stub>
-# then productsign the pkg, notarytool submit, stapler staple
-```
-
-Hardened runtime is on; `disable-library-validation` is **false**.
-Do not mix unsigned wheels into the payload after sign.
-
-LaunchAgent program is payload `python/cpython-*/bin/python3`, not
-`uv run`. KeepAlive is per-user, not a privileged daemon.
-
-Safari (or the PWA) is the UI. There is no signed WKWebView wrapper
-in this kit.
-
-### 4. Updates
-
-`features.in_app_update` is off. Ship a new MSI/PKG. Do not enable
-Settings → Update on the fleet (it is `git pull` / `npx` as the user).
-
-### 5. What local admins can still do
-
-A machine-local Administrator can replace `%ProgramData%` /
-`/Library/Application Support` overlay. Baked flags they try to
-*loosen* stay off (AND). They can still kill the task, replace the
-tree, or set `SWITCHBAY_ADMIN_POLICY` at process start if they control
-the task XML. **Not admin-proof** — same as VS Code user-install plus
-a system overlay. Document that for SOC; don't claim otherwise.
-
-## Signing (company bake machine)
-
-Windows: `signtool sign /fd SHA256 /tr http://timestamp.digicert.com bin\switchbay.exe bin\SwitchBay.exe bin\python313.dll bin\*.pyd`
-
-macOS: `codesign --options runtime --entitlements macos/entitlements.plist` every dylib, then `notarytool submit`.
-
-CI never holds the cert.
+CI never holds the company cert. Unsigned zip/tar will fail SOC; the bake machine must sign. There is no Intel Mac or Windows ARM payload.
