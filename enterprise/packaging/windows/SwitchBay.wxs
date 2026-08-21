@@ -5,7 +5,7 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="Switch Bay"
            Manufacturer="Switch Bay"
-           Version="0.9.17"
+           Version="0.9.18"
            UpgradeCode="9e4c8b2a-1f7d-4a6e-9c31-a7b5d2c8e001"
            Language="1033"
            Scope="perMachine">

@@ -20,7 +20,7 @@ or an Apple silicon Mac (macOS installer)—not on employee laptops.
 
 ### 1. Obtain the release archive
 
-From the GitHub release (**v0.9.17** or later):
+From the GitHub release (**v0.9.18** or later):
 
 - Windows: `switchbay-enterprise-win11-x64.zip`
 - macOS: `switchbay-enterprise-darwin-arm64.tar.gz`

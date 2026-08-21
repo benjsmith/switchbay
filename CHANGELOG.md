@@ -3,6 +3,24 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-21 — v0.9.18 — plot layout
+
+**Migration:** none. **Breaking:** none.
+
+Long axis titles wrap instead of clipping the Plot tab tiles. Packaging
+documentation lists packaging, then trust models, then endpoint
+management.
+
+### Fixed
+
+- **Plot cards** — rotated y-axis titles no longer lose their first
+  letters at the top of the tile; long x-axis titles wrap rather than
+  running off the right edge.
+
+### Version
+
+0.9.18 (micro). History retained.
+
 ## 2026-08-21 — v0.9.17 — enterprise bake
 
 **Migration:** none. **Breaking:** none.
