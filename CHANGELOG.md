@@ -3,11 +3,27 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
-## Unreleased
+## 2026-08-21 — v0.9.17 — enterprise bake
 
-- **Enterprise bake** — `python scripts/bake_enterprise.py --payload …`
-  stamps policy and assembles an Intune/Jamf layout. IT imports the
-  signed output (VS Code-like). They do not harvest WiX by hand.
+**Migration:** none. **Breaking:** none.
+
+One bake command turns the CI zip/tar into an Intune/Jamf layout. IT
+imports that. Signing is optional (unsigned MDM + path allowlist, or
+company Authenticode / Developer ID). Playbook:
+[`enterprise/packaging/README.md`](enterprise/packaging/README.md).
+
+### Added
+
+- **`scripts/bake_enterprise.py`** — stamp Copilot host / HF / skills
+  flags, assemble Windows `layout` + `install.ps1`, macOS unsigned pkg
+  + LaunchAgent. `make enterprise-bake PAYLOAD=…`.
+- **Unsigned MDM** — documented as a first-class trust model alongside
+  company-signed. SentinelOne: path-allow the install dir, or pin
+  `switchbay.exe` after it is signed.
+
+### Version
+
+0.9.17 (micro). History retained.
 
 ## 2026-08-21 — v0.9.16 — enterprise SOC candidate
 

@@ -8,10 +8,10 @@ motion: IT imports an installer; they do not compile the product.
 |---|---|
 | Name | Switch Bay |
 | Publisher | Switch Bay (company-signed) |
-| App version | 0.9.16 |
+| App version | 0.9.17 |
 | Install | `powershell.exe -ExecutionPolicy Bypass -File install.ps1` |
 | Uninstall | `powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1` |
-| Detection | `detection.ps1` — `%ProgramFiles%\SwitchBay\bin\switchbay.exe` version ≥ 0.9.16 (or `python.exe` in that folder if bake used the fallback host) |
+| Detection | `detection.ps1` — `%ProgramFiles%\SwitchBay\bin\switchbay.exe` version ≥ 0.9.17 (or `python.exe` in that folder if bake used the fallback host) |
 | Install behavior | System |
 | Assignment | Required or available, user group |
 | Restart | No |

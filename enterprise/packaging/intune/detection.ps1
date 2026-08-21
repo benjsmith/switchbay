@@ -6,5 +6,5 @@ if (-not (Test-Path $exe)) {
 if (-not (Test-Path $exe)) { exit 1 }
 if (Test-Path (Join-Path $root "src\switchbay\__init__.py")) { exit 0 }
 $v = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($exe).FileVersion
-if ($v -and [version]$v -ge [version]"0.9.16") { exit 0 }
+if ($v -and [version]$v -ge [version]"0.9.17") { exit 0 }
 exit 1

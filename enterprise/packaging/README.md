@@ -66,7 +66,7 @@ Do this on a blessed Windows 11 x64 box (for the MSI/Win32 layout) or an Apple-s
 
 ### 1. Download the CI tree
 
-From the GitHub release (`v0.9.16` or newer):
+From the GitHub release (`v0.9.17` or newer):
 
 - Windows: `switchbay-enterprise-win11-x64.zip`
 - macOS: `switchbay-enterprise-darwin-arm64.tar.gz`
