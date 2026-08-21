@@ -88,38 +88,61 @@ export function liftRowFacetHeaders(root: Spec): void {
   });
 }
 
+function wrapWords(text: string, maxCharsPerLine: number): string | string[] {
+  if (text.length <= maxCharsPerLine) return text;
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let cur = "";
+  for (const w of words) {
+    const trial = cur ? cur + " " + w : w;
+    if (trial.length > maxCharsPerLine && cur) {
+      lines.push(cur);
+      cur = w;
+    } else {
+      cur = trial;
+    }
+  }
+  if (cur) lines.push(cur);
+  return lines.length > 1 ? lines : text;
+}
+
 /** Vega draws title.text as a single line unless given an array. */
 export function wrapTitleText(title: unknown, tileCols: number): unknown {
   const maxCharsPerLine = 38 + Math.max(0, tileCols - 1) * 24;
-  const split = (text: string): string[] => {
-    if (text.length <= maxCharsPerLine) return [text];
-    const words = text.split(/\s+/);
-    const lines: string[] = [];
-    let cur = "";
-    for (const w of words) {
-      const trial = cur ? cur + " " + w : w;
-      if (trial.length > maxCharsPerLine && cur) {
-        lines.push(cur);
-        cur = w;
-      } else {
-        cur = trial;
-      }
-    }
-    if (cur) lines.push(cur);
-    return lines;
-  };
   if (typeof title === "string") {
-    const lines = split(title);
-    return lines.length > 1 ? lines : title;
+    return wrapWords(title, maxCharsPerLine);
   }
   if (title && typeof title === "object" && !Array.isArray(title)) {
     const obj = title as { text?: unknown };
     if (typeof obj.text === "string") {
-      const lines = split(obj.text);
-      if (lines.length > 1) return { ...obj, text: lines };
+      const lines = wrapWords(obj.text, maxCharsPerLine);
+      if (Array.isArray(lines)) return { ...obj, text: lines };
     }
   }
   return title;
+}
+
+function wrapAxisTitle(channel: Spec, maxChars: number): void {
+  const set = (obj: Spec, key: string) => {
+    if (typeof obj[key] === "string") {
+      obj[key] = wrapWords(obj[key] as string, maxChars);
+    }
+  };
+  set(channel, "title");
+  if (isObj(channel.axis)) set(channel.axis, "title");
+}
+
+/** Long y titles are rotated and clip the top of the card; long x
+ *  titles run off the right. Wrap to a few short lines. */
+export function wrapAxisTitles(root: Spec): void {
+  eachUnit(root, (unit) => {
+    const enc = unit.encoding;
+    if (!isObj(enc)) return;
+    if (isObj(enc.y)) wrapAxisTitle(enc.y, 22);
+    if (isObj(enc.y2)) wrapAxisTitle(enc.y2, 22);
+    if (isObj(enc.x)) wrapAxisTitle(enc.x, 32);
+    if (isObj(enc.x2)) wrapAxisTitle(enc.x2, 32);
+  });
 }
 
 export type TileSize = { cols: number; rows: number };
@@ -149,6 +172,7 @@ export function prepareSpecForEmbed(spec: Spec): Spec {
   const prepared: Spec = structuredClone(spec);
   restoreSharedColorLegend(prepared);
   liftRowFacetHeaders(prepared);
+  wrapAxisTitles(prepared);
   const composed = isComposedLayout(prepared);
   if (prepared.width === undefined) prepared.width = "container";
   // `height: container` on facet/vconcat cramps each panel and
@@ -158,7 +182,7 @@ export function prepareSpecForEmbed(spec: Spec): Spec {
     prepared.height = "container";
   }
   if (composed && prepared.padding === undefined) {
-    prepared.padding = { top: 8, right: 8, bottom: 8, left: 12 };
+    prepared.padding = { top: 20, right: 16, bottom: 24, left: 28 };
   }
   if (prepared.title !== undefined) {
     const ts = tileSizeFor(spec);

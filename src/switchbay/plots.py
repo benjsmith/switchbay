@@ -48,14 +48,43 @@ def _each_unit(spec: dict[str, Any], visit) -> None:
         _each_unit(inner, visit)
 
 
+def _wrap_words(text: str, max_chars: int) -> str | list[str]:
+    if len(text) <= max_chars:
+        return text
+    words = text.split()
+    lines: list[str] = []
+    cur = ""
+    for w in words:
+        trial = f"{cur} {w}".strip()
+        if len(trial) > max_chars and cur:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = trial
+    if cur:
+        lines.append(cur)
+    return lines if len(lines) > 1 else text
+
+
+def _wrap_axis_title(channel: dict[str, Any], max_chars: int) -> None:
+    raw = channel.get("title")
+    if isinstance(raw, str):
+        channel["title"] = _wrap_words(raw, max_chars)
+    axis = channel.get("axis")
+    if isinstance(axis, dict) and isinstance(axis.get("title"), str):
+        axis["title"] = _wrap_words(str(axis["title"]), max_chars)
+
+
 def sanitize_plot_spec(spec: dict[str, Any]) -> dict[str, Any]:
-    """Fix two common agent-authored Vega-Lite foot-guns.
+    """Fix common agent-authored Vega-Lite foot-guns.
 
     1. ``color.legend: null`` on any layer of a shared color scale
        removes the *whole* category legend (countries vanish; only
        a stroke-dash key remains).
     2. Row-facet headers default to the left and collide with the
        y-axis title when the facet values are long sentences.
+    3. Long axis titles clip the top (y, rotated) or right (x) of
+       the card — wrap to a few short lines.
     """
     colors: list[dict[str, Any]] = []
 
@@ -91,6 +120,21 @@ def sanitize_plot_spec(spec: dict[str, Any]) -> dict[str, Any]:
         }
 
     _each_unit(spec, lift_headers)
+
+    def wrap_axes(unit: dict[str, Any]) -> None:
+        enc = unit.get("encoding")
+        if not isinstance(enc, dict):
+            return
+        if isinstance(enc.get("y"), dict):
+            _wrap_axis_title(enc["y"], 22)
+        if isinstance(enc.get("y2"), dict):
+            _wrap_axis_title(enc["y2"], 22)
+        if isinstance(enc.get("x"), dict):
+            _wrap_axis_title(enc["x"], 32)
+        if isinstance(enc.get("x2"), dict):
+            _wrap_axis_title(enc["x2"], 32)
+
+    _each_unit(spec, wrap_axes)
     return spec
 
 

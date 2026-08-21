@@ -55,6 +55,30 @@ def test_lifts_row_facet_headers_to_top():
     assert header["title"] is None
 
 
+def test_wraps_long_axis_titles():
+    spec = {
+        "mark": "point",
+        "encoding": {
+            "x": {
+                "field": "a",
+                "title": "TyDiQA Multilingual Question Answering (Direct)",
+            },
+            "y": {
+                "field": "b",
+                "axis": {
+                    "title": "TyDiQA Multilingual Math (Chain-of-Thought)",
+                },
+            },
+        },
+    }
+    sanitize_plot_spec(spec)
+    xt = spec["encoding"]["x"]["title"]
+    yt = spec["encoding"]["y"]["axis"]["title"]
+    assert isinstance(xt, list) and len(xt) >= 2
+    assert isinstance(yt, list) and len(yt) >= 2
+    assert " ".join(yt).startswith("TyDiQA")
+
+
 def test_does_not_overwrite_author_header():
     spec = {
         "facet": {

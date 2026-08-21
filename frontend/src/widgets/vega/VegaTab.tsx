@@ -84,7 +84,7 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
 
   return {
     background: "transparent",
-    padding: { top: 16, right: 20, bottom: 16, left: 24 },
+    padding: { top: 28, right: 24, bottom: 32, left: 36 },
     // `fit` (both axes) pairs with the spec-level
     // `width/height: "container"` defaults injected at render
     // time — chart fills both card dimensions instead of just
@@ -99,10 +99,11 @@ function buildSwitchbayVegaConfig(): Record<string, unknown> {
       labelFontSize: 11,
       titleFontSize: 12,
       titleFontWeight: 500,
-      titlePadding: 12,
-      titleLimit: 260,
-      labelPadding: 4,
-      labelLimit: 96,
+      titlePadding: 14,
+      titleLimit: 180,
+      titleLineHeight: 14,
+      labelPadding: 6,
+      labelLimit: 88,
       domain: false,            // skip the axis line
       tickColor: tick,
       tickSize: 4,

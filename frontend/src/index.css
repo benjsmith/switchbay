@@ -2751,7 +2751,7 @@ body {
   /* Sized rows so multi-row spans (set via spec.usermeta.tile)
    * stack cleanly without one tall card dragging neighbouring
    * single-row cards into matching height. */
-  grid-auto-rows: minmax(340px, auto);
+  grid-auto-rows: minmax(368px, auto);
   gap: 16px;
   align-content: start;
 }
