@@ -161,13 +161,13 @@ Settings → GitHub Copilot (device flow / Enterprise SSO).
 Release asset: `switchbay-enterprise-win11-x64.zip` (built on
 `windows-latest`, not on the employee PC).
 
-Numbered bake + Intune steps:
+Packaging and Intune or Jamf procedure:
 [`enterprise/packaging/README.md`](../enterprise/packaging/README.md).
 
-Short version: unpack the CI zip →
-`python scripts/bake_enterprise.py --payload … --copilot-host <ghe>` →
-sign → IT imports `install.ps1` as a Win32 app (same motion as VS Code).
-Do **not** run `uv` or `pnpm` on endpoints.
+Extract the GitHub release archive, run
+`python scripts/bake_enterprise.py --payload … --copilot-host <host>`,
+optionally sign, then import `install.ps1` as a Win32 app (or deploy the
+macOS package). Endpoints must not run `uv` or `pnpm`.
 
 Stop uses `taskkill /PID` of the daemon pidfile, never
 `taskkill /IM python.exe`.

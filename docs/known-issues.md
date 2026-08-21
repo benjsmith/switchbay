@@ -18,7 +18,7 @@ page only keeps the one-line workarounds.
 | Codex provider | No per-call rail card (upstream has no PreToolUse). MCP works. | Claude Code or Grok Build for rail cards. Details: [`providers.md`](providers.md). |
 | Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |
 | Local 4B | Worker, not Copilot: short grounded answers + `[[wikilink]]`, not long synthesis. | Copilot for fleet agentic work; 4B for offline wiki lookup. |
-| Enterprise | CI ships **unsigned** zip/tar (input to bake, not the fleet package). | Bake, then either Intune/Jamf unsigned + path allowlist, or company-sign. [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
+| Enterprise | GitHub release archives are unsigned packaging inputs, not fleet installers. | Run bake, then deploy with Intune or Jamf (unsigned plus a path allowlist, or organization-signed). [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
 
 ## Platform support
 

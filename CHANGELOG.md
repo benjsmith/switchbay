@@ -7,19 +7,20 @@ Human-curated release notes. Earlier 0.9.x notes also live on the
 
 **Migration:** none. **Breaking:** none.
 
-One bake command turns the CI zip/tar into an Intune/Jamf layout. IT
-imports that. Signing is optional (unsigned MDM + path allowlist, or
-company Authenticode / Developer ID). Playbook:
+`scripts/bake_enterprise.py` builds an Intune or Jamf installer tree
+from the GitHub release archive. Endpoint management may deploy that
+tree unsigned (path allowlist on the install directory) or after the
+organization signs it. Procedure:
 [`enterprise/packaging/README.md`](enterprise/packaging/README.md).
 
 ### Added
 
-- **`scripts/bake_enterprise.py`** — stamp Copilot host / HF / skills
-  flags, assemble Windows `layout` + `install.ps1`, macOS unsigned pkg
-  + LaunchAgent. `make enterprise-bake PAYLOAD=…`.
-- **Unsigned MDM** — documented as a first-class trust model alongside
-  company-signed. SentinelOne: path-allow the install dir, or pin
-  `switchbay.exe` after it is signed.
+- **Packaging script** — applies Copilot host, Hugging Face, and skills
+  policy; writes the Windows layout and `install.ps1`, or a macOS
+  package with LaunchAgent. `make enterprise-bake PAYLOAD=…`.
+- **Deployment models** — management-deployed unsigned, or
+  organization-signed. SentinelOne: allow the install directory, or
+  pin `switchbay.exe` after it is signed.
 
 ### Version
 

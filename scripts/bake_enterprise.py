@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Turn a CI enterprise payload into a bake folder IT can import.
+"""Assemble an Intune or Jamf installer tree from a GitHub release archive.
 
-IT admins do not run this. The company bake machine does, then signs,
-then Intune/Jamf imports the output. Endpoints never run uv/pnpm.
+Run on the packaging host. Endpoints never run uv or pnpm.
 
-Usage (from repo root, after unzipping the GitHub release asset):
+Usage (from the repository root, after extracting the release archive):
 
     python scripts/bake_enterprise.py \\
       --payload dist/switchbay-enterprise-win11-x64 \\
@@ -323,19 +322,20 @@ def overlay_example(*, copilot_host: str, allow_hf: bool) -> dict:
 
 def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
     lines = [
-        "Switch Bay bake output — remaining HUMAN steps",
+        "Switch Bay packaging output",
         "",
-        "1. Trust model: unsigned MDM (path allow the install dir) or",
-        "   company-sign the files below. Both are supported.",
+        "1. Deployment: unsigned through Intune or Jamf (allow the install",
+        "   directory in endpoint detection), or sign the files below.",
         "",
         "2. If signing:",
     ]
     if kind == "windows":
         lines += [
-            "   Sign layout\\bin\\switchbay.exe, SwitchBay.exe, python313.dll",
-            "   with the company Authenticode pipeline.",
-            "   (If bake fell back to python.exe, install VS Build Tools and",
-            "   re-run bake so switchbay.exe exists; EDR prefers that host.)",
+            "   Sign layout\\bin\\switchbay.exe, SwitchBay.exe, and",
+            "   python313.dll with the organization Authenticode process.",
+            "   If this bake used python.exe as the task image, install",
+            "   Visual Studio Build Tools and re-run bake to produce",
+            "   switchbay.exe.",
             "",
             "3. Intune → Apps → Windows → Add → Windows app (Win32).",
             "   Install:   powershell.exe -ExecutionPolicy Bypass -File install.ps1",
@@ -355,11 +355,12 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
         ]
     else:
         lines += [
-            "   Developer ID-sign the .app and dylibs, productsign the pkg,",
-            "   notarize, staple — company pipeline.",
+            "   Apply Developer ID signatures to the application and libraries,",
+            "   productsign the package, then notarize and staple.",
             "",
-            "3. Jamf / MDM: deploy the pkg (notarize first only if you want",
-            "   Gatekeeper-clean). LaunchAgent is",
+            "3. Jamf (or other management): deploy the package. Notarize",
+            "   beforehand if unmanaged Macs must pass Gatekeeper without prompts.",
+            "   LaunchAgent is",
             "   /Library/LaunchAgents/com.switchbay.daemon.plist (runs as the",
             "   logged-in user). Safari stub is /Applications/Switch Bay.app.",
             "",
@@ -374,12 +375,12 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--payload", required=True, type=Path,
-                   help="Unzipped CI tree, or the .zip / .tar.gz itself")
+                   help="Extracted release tree, or the .zip / .tar.gz")
     p.add_argument("--out", type=Path, default=Path("dist/bake"))
     p.add_argument("--copilot-host", default="github.com",
                    help="github.com or your GitHub Enterprise host")
     p.add_argument("--sso-slug", default="",
-                   help="EMU enterprise slug (optional)")
+                   help="GitHub Enterprise Managed Users slug (optional)")
     p.add_argument("--allow-hf", action="store_true",
                    help="Bake Hugging Face downloads ON (overlay cannot enable later)")
     p.add_argument("--no-skills-npx", action="store_true",

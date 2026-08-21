@@ -1,81 +1,39 @@
 # Enterprise packaging
 
-Two jobs. Do not mix them.
+Switch Bay is packaged once on a build host, then deployed with Intune
+or Jamf. Endpoints do not run `uv`, `pnpm`, `npx`, or curiosity-engine
+`setup.sh`.
 
-| Who | What they get | What they run |
+Supported installers: **Windows 11 x64** and **macOS (Apple silicon)**.
+
+| Role | Input | Output |
 |---|---|---|
-| **IT admin** (Intune / Jamf) | `dist/bake/` from packaging (Win32 scripts + layout, or a `.pkg`) | The **IT admin** section below |
-| **Bake machine** | The unsigned zip/tar from the GitHub release | **One command**, then optionally sign, then hand the result to IT |
-
-After bake, the company picks a trust model (both are supported):
-
-| | Unsigned MDM (option 2) | Company-signed |
-|---|---|---|
-| What | Intune/Jamf installs to Program Files; EDR **path/hash allowlist** on that tree | Same install, plus Authenticode / Developer ID + notarize on the bake output |
-| When | No code-signing identity, or internal tools that are never user-downloaded | Want VS Code-like Gatekeeper/SmartScreen, or SOC requires signed LOB |
-| SentinelOne | Path allow `%ProgramFiles%\SwitchBay\**` (and the Mac install dir). Do **not** globally exclude `python.exe`. | After `switchbay.exe` is signed, use `sentinelone/SwitchBay-exclusions.json` (that exe, not `python.exe`). |
-
-MDM install does not go through the browser quarantine path, so unsigned often never shows a Gatekeeper/SmartScreen dialog. Signing does not change policy, Copilot, or the Intune fields.
-
-Endpoints never run `uv`, `pnpm`, `npx`, or curiosity-engine `setup.sh`.
-
-SKUs: **Win11 x64** and **macOS darwin arm64** only.
+| **Packaging** | GitHub release archive (`switchbay-enterprise-*.zip` / `.tar.gz`) | `dist/bake/` (Windows layout and install scripts, or a macOS `.pkg`) |
+| **Endpoint management** | That bake output, optionally code-signed | Intune Win32 app or Jamf package assigned to users |
 
 ---
 
-## IT admin (after bake)
+## Packaging
 
-### Windows — Intune
+Run these steps on a dedicated Windows 11 x64 host (Windows installer)
+or an Apple silicon Mac (macOS installer)—not on employee laptops.
 
-Same motion as a LOB Win32 app.
+### 1. Obtain the release archive
 
-1. Receive `dist/bake/` from packaging. Signing is optional (table above).
-2. Wrap it with the Microsoft Win32 Content Prep Tool (`IntuneWinAppUtil.exe`) if you need `.intunewin`.
-3. Intune → **Apps → Windows → Add → Windows app (Win32)**.
-
-| Field | Value |
-|---|---|
-| Install | `powershell.exe -ExecutionPolicy Bypass -File install.ps1` |
-| Uninstall | `powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1` |
-| Detection | `detection.ps1` |
-| Install behavior | **System** |
-| Assignment | User group |
-| Restart | No |
-
-4. Optional: deploy `%ProgramData%\SwitchBay\admin.json` as a separate Device configuration / script (copy `admin.overlay.example.json`). This can only **tighten** what bake already stamped (it cannot turn Hugging Face downloads on if bake left them off).
-5. SentinelOne: unsigned → path allow `%ProgramFiles%\SwitchBay\**`. Signed `switchbay.exe` → import `sentinelone/SwitchBay-exclusions.json` (that exe, not `python.exe`).
-6. Users open **Start → Switch Bay** (Edge app window on `http://127.0.0.1:8765`). First logon registers a per-user scheduled task via Active Setup. Copilot sign-in is Settings → GitHub Copilot (device flow / SSO).
-
-Uninstall leaves `%LOCALAPPDATA%\switchbay` and `%USERPROFILE%\SwitchBay` (user data), same as VS Code.
-
-### macOS — Jamf / MDM
-
-1. Receive the `.pkg` from bake (notarize first if you want Gatekeeper-clean; MDM can install it unsigned).
-2. Deploy the pkg. It installs:
-   - `/Library/Application Support/SwitchBay/` (payload)
-   - `/Library/LaunchAgents/com.switchbay.daemon.plist` (runs as the logged-in user)
-   - `/Applications/Switch Bay.app` (opens Safari on the loopback UI)
-3. Optional overlay: `/Library/Application Support/SwitchBay/admin.json` (tighten-only).
-4. Users open **Switch Bay**. Copilot sign-in is Settings → GitHub Copilot.
-
----
-
-## Bake machine (one command)
-
-Do this on a blessed Windows 11 x64 box (for the MSI/Win32 layout) or an Apple-silicon Mac (for the pkg). Do **not** run it on employee laptops.
-
-### 1. Download the CI tree
-
-From the GitHub release (`v0.9.17` or newer):
+From the GitHub release (**v0.9.17** or later):
 
 - Windows: `switchbay-enterprise-win11-x64.zip`
 - macOS: `switchbay-enterprise-darwin-arm64.tar.gz`
 
-Unzip/untar. Smoke (optional): `serve.cmd` / `./serve.sh`, then open `http://127.0.0.1:8765`.
+Extract the archive. Optional verification: `serve.cmd` or `./serve.sh`,
+then open `http://127.0.0.1:8765`.
 
-### 2. Stamp policy and assemble
+### 2. Apply policy and assemble the installer tree
 
-On the bake machine, from a git checkout of Switch Bay **or** from the unpacked payload (the `scripts/` folder is in the repo; copy `scripts/bake_enterprise.py` next to the payload if you only have the zip):
+Requires a Switch Bay checkout (for `scripts/bake_enterprise.py`) or a
+copy of that script next to the extracted archive.
+
+Windows:
 
 ```
 python scripts/bake_enterprise.py ^
@@ -94,43 +52,123 @@ python3 scripts/bake_enterprise.py \
   --out dist/bake
 ```
 
-Useful flags:
-
 | Flag | Effect |
 |---|---|
-| `--copilot-host` | github.com or your GitHub Enterprise host (locked in Settings) |
-| `--sso-slug` | EMU enterprise slug |
-| `--allow-hf` | Allow Settings → Find & install for local models. **If you omit this, MDM cannot turn HF on later.** |
+| `--copilot-host` | `github.com` or the GitHub Enterprise host (locked in Settings) |
+| `--sso-slug` | GitHub Enterprise Managed Users slug |
+| `--allow-hf` | Permit Settings → Find & install for local models. If omitted, a later management overlay cannot enable it. |
 | `--no-skills-npx` | Disallow `npx` / `uvx skills add` |
-| `--vendor-ce DIR` | Copy the curiosity-engine skill into `vendor/` so laptops never `npx` |
+| `--vendor-ce DIR` | Copy the curiosity-engine skill into `vendor/` so endpoints do not fetch it with `npx` |
 
-### 3. Optional: sign, then hand `dist/bake/` to IT
+### 3. Code signing (optional)
 
-Unsigned MDM: give IT `dist/bake/` as-is. Company-signed: Authenticode / Developer ID + notarize; `NEXT.txt` lists the files. Windows without Visual Studio Build Tools still bakes; the task falls back to `python.exe` until you re-run bake with `cl` on PATH so `bin\switchbay.exe` exists (EDR prefers that host once you sign).
+`dist/bake/NEXT.txt` lists the binaries and packages to sign. Apply the
+organization’s Authenticode process (Windows) or Developer ID and
+notarization (macOS). Skip this step when deploying unsigned through
+management (see **Trust models**).
 
-They follow **IT admin** above. They do not compile C, harvest WiX, or convert icons.
+If Visual Studio Build Tools are installed, bake produces
+`bin\switchbay.exe` as the scheduled-task image. Otherwise the task
+runs the bundled CPython interpreter. Allowlists should cover the
+install directory in either case.
+
+Hand `dist/bake/` to endpoint management. They do not compile native
+code or author Windows Installer tables.
 
 ---
 
-## Local test on a Mac (no pkg)
+## Trust models
+
+Both of the following use the same bake output and the same Intune or
+Jamf fields. Code signing does not change Copilot, admin policy, or
+loopback binding.
+
+| | Management-deployed, unsigned | Organization-signed |
+|---|---|---|
+| Deployment | Intune or Jamf writes the tree under Program Files (Windows) or `/Library/Application Support/SwitchBay` (macOS). Allow the install path (and hash, if required) in endpoint detection. | The same install, after Authenticode or Developer ID + notarization on the bake output. |
+| Typical use | Internal distribution on managed devices; no public download. | Required when security policy demands a signed line-of-business application, or when unmanaged Macs must pass Gatekeeper without prompts. |
+| SentinelOne | Allow `%ProgramFiles%\SwitchBay\**` (and the macOS install directory). Do not exclude `python.exe` globally. | After `switchbay.exe` is signed, import `sentinelone/SwitchBay-exclusions.json` (that process, not `python.exe`). |
+
+Management-installed files are not quarantined as browser downloads, so
+unsigned binaries usually launch without Gatekeeper or SmartScreen
+prompts on enrolled devices.
+
+---
+
+## Endpoint management
+
+### Windows — Intune
+
+1. Take `dist/bake/` from packaging.
+2. If the tenant requires `.intunewin`, wrap the folder with
+   `IntuneWinAppUtil.exe`.
+3. **Apps → Windows → Add → Windows app (Win32)**.
+
+| Field | Value |
+|---|---|
+| Install | `powershell.exe -ExecutionPolicy Bypass -File install.ps1` |
+| Uninstall | `powershell.exe -ExecutionPolicy Bypass -File uninstall.ps1` |
+| Detection | `detection.ps1` |
+| Install behavior | **System** |
+| Assignment | User group |
+| Restart | No |
+
+4. Optional: deploy `%ProgramData%\SwitchBay\admin.json` as a separate
+   device configuration or script (`admin.overlay.example.json`). The
+   overlay can only restrict baked policy; it cannot enable a flag that
+   bake left off (including Hugging Face downloads).
+5. SentinelOne: unsigned — allow `%ProgramFiles%\SwitchBay\**`. Signed
+   `switchbay.exe` — import `sentinelone/SwitchBay-exclusions.json`.
+6. Users start **Switch Bay** from the Start menu (Edge application
+   window on `http://127.0.0.1:8765`). Active Setup registers a
+   per-user scheduled task at first logon. Copilot authentication is
+   Settings → GitHub Copilot (device flow or single sign-on).
+
+Uninstall retains `%LOCALAPPDATA%\switchbay` and
+`%USERPROFILE%\SwitchBay` (user data), consistent with Visual Studio
+Code.
+
+### macOS — Jamf and other management
+
+1. Take the `.pkg` from bake. Notarize it if Gatekeeper-clean launch on
+   unmanaged Macs is required; management can install an unsigned
+   package on enrolled devices.
+2. Deploy the package. It installs:
+   - `/Library/Application Support/SwitchBay/` (application files)
+   - `/Library/LaunchAgents/com.switchbay.daemon.plist` (runs as the
+     logged-in user)
+   - `/Applications/Switch Bay.app` (opens Safari on the local UI)
+3. Optional overlay: `/Library/Application Support/SwitchBay/admin.json`
+   (restricts baked policy only).
+4. Users open **Switch Bay**. Copilot authentication is Settings →
+   GitHub Copilot.
+
+---
+
+## Policy
+
+`admin.baked.json` is the floor. A management overlay may turn features
+off, not on.
+
+To allow Hugging Face model downloads anywhere in the fleet, pass
+`--allow-hf` at bake.
+
+Do not store policy under `%LOCALAPPDATA%\switchbay` or
+`~/.config/switchbay`; the daemon writes those locations.
+
+---
+
+## Developer check on a Mac (no package)
 
 ```
-make enterprise-local    # gitignored admin.json, HF on, restart
-make open-local          # back to consumer
+make enterprise-local    # repository-root admin.json (gitignored); Hugging Face downloads enabled
+make open-local          # consumer profile
 ```
 
 ---
 
-## Policy (one rule)
+## Scope
 
-`admin.baked.json` is the floor. MDM overlay **AND**s features: overlay can turn things off, not on.
-
-To allow Hugging Face downloads on any laptop in the fleet, pass `--allow-hf` at bake.
-
-Do not put policy in `%LOCALAPPDATA%\switchbay` or `~/.config/switchbay` (the daemon writes those).
-
----
-
-## What CI still does not do
-
-CI never holds a company cert. The release zip/tar is the *input* to bake, not the fleet package. There is no Intel Mac or Windows ARM payload.
+GitHub Actions does not hold organization signing keys. Release archives
+are packaging inputs, not the fleet installers. Intel Mac and Windows
+ARM installers are not produced.
