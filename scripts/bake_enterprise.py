@@ -329,10 +329,8 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
     ]
     if kind == "windows":
         lines += [
-            "   Recommended: Azure Artifact Signing (~$10/mo) or SSL.com",
-            "   eSigner — cloud HSM, GitHub Action, no USB token.",
-            "   Sign layout\\bin\\switchbay.exe, SwitchBay.exe, python313.dll.",
-            "   See enterprise/packaging/README.md → Sign.",
+            "   Sign layout\\bin\\switchbay.exe, SwitchBay.exe, python313.dll",
+            "   with the company Authenticode pipeline.",
             "   (If bake fell back to python.exe, install VS Build Tools and",
             "   re-run bake so switchbay.exe exists; EDR prefers that host.)",
             "",
@@ -354,12 +352,8 @@ def write_next(out: Path, *, kind: str, extra: dict[str, str]) -> None:
         ]
     else:
         lines += [
-            "   Apple Developer Program ($99/yr) + Developer ID certs.",
-            "   There is no Azure-style notarization SaaS. CI (macos runner",
-            "   + secrets) or a Mac bake machine:",
-            "   codesign --options runtime --timestamp the .app and dylibs,",
-            "   productsign the pkg, notarytool submit, stapler staple.",
-            "   See enterprise/packaging/README.md → Sign.",
+            "   Developer ID-sign the .app and dylibs, productsign the pkg,",
+            "   notarize, staple — company pipeline.",
             "",
             "2. Jamf / MDM: deploy the notarized pkg. LaunchAgent is",
             "   /Library/LaunchAgents/com.switchbay.daemon.plist (runs as the",
