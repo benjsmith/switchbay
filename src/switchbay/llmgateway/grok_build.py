@@ -757,14 +757,11 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
                     f"Grok Build error: "
                     f"{evt.get('message') or evt.get('data') or 'unknown'}",
                     code="server")
+    except asyncio.CancelledError:
+        await base.reap_cli_process(proc)
+        raise
     finally:
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+        await base.reap_cli_process(proc)
 
     if proc.returncode and proc.returncode != 0:
         err = (await proc.stderr.read() if proc.stderr else b"").decode(errors="replace")

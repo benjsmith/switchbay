@@ -69,6 +69,20 @@ def test_supports_chat_completions_prefers_model_picker_enabled():
     })
 
 
+def test_static_model_suggestions_are_current_catalog():
+    sugg = gc.PROVIDER["model_suggestions"]
+    assert gc.DEFAULT_MODEL == "gpt-5.4"
+    assert gc.DEFAULT_MODEL in sugg
+    assert "gpt-4o" not in sugg
+    assert "o3-mini" not in sugg
+    families = {s.split("-", 1)[0] for s in sugg}
+    # Cold-cache diversity: OpenAI, Anthropic, Google, xAI.
+    assert "gpt" in families
+    assert any(s.startswith("claude") for s in sugg)
+    assert any(s.startswith("gemini") for s in sugg)
+    assert any(s.startswith("grok") for s in sugg)
+
+
 def test_dotcom_endpoints_are_unchanged():
     eps = gc._endpoints("github.com")
     assert eps["device_code"] == "https://github.com/login/device/code"

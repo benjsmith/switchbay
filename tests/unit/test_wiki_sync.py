@@ -39,6 +39,41 @@ def test_inject_caps_body_html(tmp_path: Path) -> None:
     assert len(slim["pages"]["concepts/huge"]["body_html"]) < 8_000
 
 
+def test_inject_prunes_deleted_wiki_page(tmp_path: Path) -> None:
+    _page(tmp_path, "concepts/keep.md", "[con] Keep", "Stays.")
+    gone = _page(tmp_path, "concepts/gone.md", "[con] Gone", "Delete me.")
+    data: dict = {"pages": {}, "nodes": [], "edges": []}
+    wiki_sync.inject_on_disk_pages(tmp_path, data)
+    assert "concepts/gone" in data["pages"]
+    data["edges"].append({
+        "source": "concepts/keep", "target": "concepts/gone", "type": "wikilink",
+    })
+    gone.unlink()
+    n = wiki_sync.inject_on_disk_pages(tmp_path, data)
+    assert n >= 1
+    assert "concepts/gone" not in data["pages"]
+    assert "concepts/keep" in data["pages"]
+    ids = [x["id"] for x in data["nodes"]]
+    assert "concepts/gone" not in ids
+    assert "concepts/keep" in ids
+    assert data["edges"] == []
+
+
+def test_prune_leaves_non_wiki_nodes(tmp_path: Path) -> None:
+    (tmp_path / "wiki").mkdir()
+    data = {
+        "pages": {
+            "orphan-id": {"id": "orphan-id", "path": "", "title": "Ghost"},
+        },
+        "nodes": [
+            {"id": "orphan-id", "path": "", "type": "entity", "title": "Ghost", "degree": 0},
+        ],
+        "edges": [],
+    }
+    assert wiki_sync.prune_missing_pages(tmp_path, data) == 0
+    assert "orphan-id" in data["pages"]
+
+
 def test_inject_adds_wikilink_edges(tmp_path: Path) -> None:
     _page(tmp_path, "concepts/attention.md", "[con] Attention", "See also.")
     _page(

@@ -4,9 +4,9 @@ Multi-turn knowledge-work bench (essay / article / lesson / research planning).
 
 | Doc | Role |
 |-----|------|
-| `docs/phase2-agentic-query-bench-design.md` | Design |
+| `docs/benchmark-ce-vs-rag-phase2-prereg.md` | Phase-2 preregistration |
 | `docs/ce-query-intent-taxonomy.md` | QUERY intents |
-| `docs/reorientation-review-2026-07-21.md` | External review (A1–A7) |
+| `bench/REPRODUCE.md` | End-to-end appendix runbook |
 | `judgment-charter.json` | **Canonical** rubric (schema_version 2) |
 | `preregistration.json` | Directional claims, n, arms |
 | `judge_fewshot_hard_negatives.md` | Drift/serendipity calibration |
@@ -103,3 +103,20 @@ it does not call a generator or judge. See
 | Pilot scenarios | 7 |
 | Live gen/judge run | **not run** (awaiting external code review) |
 | Intro claims | **forbidden** |
+
+## Deck appendix reproduction
+
+The later deck appendices use two additional, resumable pipelines:
+
+- `product_secondary.py` + `product_secondary_judge.py` reproduce the controlled
+  synthesis/native-crystallisation/off-leash comparison and four-judge
+  self-preference check in Appendices M–N.
+- `compounding_run.py` + `compounding_eval.py` reproduce Appendices O–Q. The
+  frozen `compounding_queries.json` supplies eight held-out eval questions;
+  `compounding_explore_queries.json` supplies sixteen distinct supplementary
+  questions for fixed-corpus depth rounds. Every checkpoint retains CE, raw-vault
+  RAG, and closed-book arms, and `--repeats 3` records three independent samples
+  per cell to reduce the noise floor.
+
+For the exact five-breadth/eight-Sonnet/four-Opus command sequence, controls,
+cost warning, and output map, see [`bench/REPRODUCE.md`](../REPRODUCE.md).

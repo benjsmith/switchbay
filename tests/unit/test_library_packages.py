@@ -7,6 +7,41 @@ from pathlib import Path
 from switchbay import library, report_html, report_packages, worksheets_store
 
 
+def test_linkify_report_html_makes_wikilinks_clickable():
+    html = (
+        "<html><body>"
+        "<p>See [[opener-oxy]] and [[oxy-protocol-fit|evidence]].</p>"
+        "<script>const s = '[[leave-me]]';</script>"
+        "<p>Also [[report:market-open-brief|brief]].</p>"
+        "</body></html>"
+    )
+    out = report_html.linkify_report_html(html)
+    assert 'data-wiki="opener-oxy"' in out
+    assert 'data-wiki="oxy-protocol-fit"' in out
+    assert ">evidence</a>" in out
+    assert "sy-open-wiki" in out
+    # Do not rewrite inside <script> or [[report:…]] library links.
+    assert "[[leave-me]]" in out
+    assert "[[report:market-open-brief|brief]]" in out
+    again = report_html.linkify_report_html(out)
+    assert again == out
+
+
+def test_linkify_report_html_noop_without_wikilinks():
+    html = "<html><body><p>no links</p></body></html>"
+    assert report_html.linkify_report_html(html) == html
+
+
+def test_linkified_html_serves_as_aiohttp_text_response():
+    from aiohttp import web
+    html = report_html.linkify_report_html(
+        "<html><body>See [[opener-oxy]].</body></html>"
+    )
+    resp = web.Response(text=html, content_type="text/html")
+    assert resp.content_type == "text/html"
+    assert b"data-wiki=" in resp.body
+
+
 def test_report_package_write_and_list(tmp_path: Path):
     html = report_html.render_report(
         title="Demo Report",

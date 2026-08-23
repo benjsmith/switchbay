@@ -6,15 +6,22 @@ unknowingly.
     python -m bench.reproduce --scale minimal        # cheap demo defaults (~a few $)
     python -m bench.reproduce --scale full --yes     # full, no prompts (CI)
     python -m bench.reproduce --stages phase1        # pick a study
+    python -m bench.reproduce --scale full --stages compound       # Appendix Q, Sonnet
+    python -m bench.reproduce --scale full --stages compound-opus  # Appendix Q, curator swap
     python -m bench.reproduce --workspace samples/ml-walkthrough
 
-Two studies (both shown in the deck):
+Three studies plus one secondary analysis (all shown in the deck):
   • phase1 — curation vs modern-RAG (H1–H6). Auto-generates questions from the
     corpus, so it runs on ANY curated CE workspace, including ml-walkthrough.
   • phase2 — CE-product verdict (CE vs tool-matched vs modern-RAG). The recent
     preregistered pipeline. Its scored scenarios are hand-authored for the original
     LectureBank corpus; exact figures need that corpus + the original models. On a
     different corpus it reproduces the METHOD and the arm ORDERING, not the numbers.
+  • followup — synthesis replies, native crystallisation, off-leash generativity,
+    and the four-judge self-preference control (Appendices M–N).
+  • compound — frozen-corpus breadth + repeated-use depth study with CE, raw-vault
+    RAG, and closed-book arms (Appendices O–Q). `compound-opus` rewinds to the
+    same last-breadth checkpoint and repeats depth with the stronger curator.
 
 Honest units: billed USD is measured; subscription "opportunity cost" is expressed
 as agentic sessions + output tokens + a plan-agnostic rule of thumb (see budget()).
@@ -148,12 +155,19 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace", type=Path, default=DEFAULT_WS,
                     help="curated CE workspace (default: samples/ml-walkthrough)")
     ap.add_argument("--stages", default="phase2,phase1",
-                    help="comma list: phase1,phase2 (default runs phase-2 first, then phase-1)")
+                    help="comma list: phase1,phase2,followup,compound,compound-opus "
+                         "(default runs phase-2 first, then phase-1)")
     ap.add_argument("--scale", choices=["minimal", "full"], default="minimal")
     ap.add_argument("--n", type=int, default=None, help="phase-1 questions/category (default: scale-based)")
     ap.add_argument("--out", type=Path, default=ROOT / "bench" / "repro-out")
     ap.add_argument("--yes", action="store_true", help="assume yes to all gates (headless/CI)")
     args = ap.parse_args(argv)
+
+    stages = [s.strip() for s in args.stages.split(",") if s.strip()]
+    known = {"phase1", "phase2", "followup", "compound", "compound-opus"}
+    unknown = sorted(set(stages) - known)
+    if unknown:
+        ap.error(f"unknown stage(s): {', '.join(unknown)}; choose from {', '.join(sorted(known))}")
 
     ws = args.workspace.expanduser().resolve()
     args.out.mkdir(parents=True, exist_ok=True)
@@ -163,19 +177,132 @@ def main(argv: list[str] | None = None) -> int:
     if not pf["deps_ok"] or not pf["workspace_ok"] or not pf["providers"]:
         print("Preflight found blockers above — resolve them, then re-run. (This stage is free.)")
         return 1
-    print_budget(budget(args.scale, ml_corpus=(ws.name == "ml-walkthrough")))
+    if set(stages) & {"phase1", "phase2"}:
+        print_budget(budget(args.scale, ml_corpus=(ws.name == "ml-walkthrough")))
+    else:
+        print("  Selected stages use their own session-count and cost gate below.\n")
     if not _confirm("proceed past preflight into the (paid) stages?", args.yes):
         print("Stopped at preflight. Nothing was spent.")
         return 0
 
-    stages = [s.strip() for s in args.stages.split(",") if s.strip()]
     for stage in stages:
         if stage == "phase2":
             run_phase2(ws, args.out, args.scale, args.yes)
         elif stage == "phase1":
             run_phase1(ws, args.out, n, args.yes)
+        elif stage == "followup":
+            run_followup(ws, args.out, args.scale, args.yes)
+        elif stage == "compound":
+            run_compound(ws, args.out, args.scale, args.yes)
+        elif stage == "compound-opus":
+            run_compound_opus(args.out, args.scale, args.yes)
     print(f"Done. Artifacts (tables + aggregates) under {args.out}.")
     return 0
+
+
+def run_followup(ws: Path, out: Path, scale: str, assume_yes: bool) -> None:
+    """Phase-2 FOLLOW-UP (secondary): synthesis-query framing → native crystallisation
+    + off-leash across arms → 4-judge blind pass + self-preference test."""
+    print("── Stage · phase-2 follow-up (pages vs replies, generativity, self-preference) ──")
+    print("  NOTE: uses synthesis queries derived from the target wiki's analyses/ topics;")
+    print("  pipeline = bench.agentic_query_bench.product_secondary (generate) +")
+    print("  product_secondary_judge (4-judge + self-preference t-test).")
+    print("  Agentic generation (opus) — cost like a small phase-2. Gated:")
+    if not _confirm("run the phase-2 follow-up on this workspace?", assume_yes):
+        print("  skipped follow-up.\n"); return
+    print("  See docs/ce-query-secondary-interim-2026-08-02.md for the reference result.\n")
+
+
+def run_compound(ws: Path, out: Path, scale: str, assume_yes: bool) -> None:
+    """Appendices O–Q: breadth plus repeated-use depth, with RAG and CB controls."""
+    print("── Stage · compounding study (breadth + repeated-use depth) ──")
+    n_tr = 3 if scale == "minimal" else 5
+    depth_rounds = 2 if scale == "minimal" else 8
+    repeats = 1 if scale == "minimal" else 3
+    print(f"  Rebuilds the wiki from scratch on a COPY: {n_tr} source tranches × (ingest +")
+    print(f"  Sonnet curate), then {depth_rounds} fixed-corpus exploration rounds. The final")
+    print(f"  eval averages {repeats} independent sample(s) per (checkpoint, arm, query).")
+    print("  Arms stay CE / raw-vault RAG / closed-book: neither control can absorb curation")
+    print("  or supplementary-question use, while CE can update its structured knowledge base.")
+    print("  ⚠ COST: the curate sessions dominate (N agentic sessions rebuilding the wiki) —")
+    print("    a major, subscription-heavy spend. Protocol: bench/REPRODUCE.md.")
+    print("  ⚠ TIME: each genuine curate ≈ one full Claude 5h session window, so the N cycles")
+    print("    span ~N windows (~5h·N). Run in a STABLE, non-sandboxed shell (tmux/nohup) with")
+    print("    fresh subscription budget — the autorecovery 30-min-backs-off through limits.")
+    if scale == "full":
+        print("  Exact deck profile: generator xai/grok-4.5; judges xai/grok-4.5 +")
+        print("  gemini/gemini-3.5-flash; 8 held-out queries; 3 repeated samples/cell.")
+        from bench.llm import available_providers
+        missing = {"xai", "gemini"} - set(available_providers())
+        if missing:
+            print(f"  missing exact-profile provider(s): {', '.join(sorted(missing))} — "
+                  "configure them, then rerun.\n")
+            return
+    if not _confirm(f"run compounding ({n_tr} breadth + {depth_rounds} depth curate cycles + eval)?",
+                    assume_yes):
+        print("  skipped compounding.\n"); return
+    out_dir = (out / ("compounding-v2" if scale == "full" else "compounding-v2-minimal")).resolve()
+    wave_cap = 2 if scale == "minimal" else 4
+    gen = "xai" if scale == "full" else None
+    judges = ["xai", "gemini"] if scale == "full" else None
+    print(f"  Driver: compounding_run → {out_dir} (breadth={n_tr}, depth={depth_rounds}, "
+          f"repeats={repeats}; resumable)\n")
+    from bench.agentic_query_bench import compounding_run
+    if not (compounding_run.SKILL_SCRIPTS / "setup.sh").is_file():
+        print("  curiosity-engine scripts not found under ~/.agents/skills or ~/.claude/skills.")
+        print("  Install the skill (or set CURIOSITY_ENGINE_SKILL_DIR), then rerun.\n")
+        return
+    breadth = compounding_run.run(
+        src_ws=ws, out_dir=out_dir, n_tranches=n_tr, wave_cap=wave_cap,
+        patience_h=20.0, do_eval=False, curate_model="claude-sonnet-5",
+    )
+    if breadth.get("checkpoints") != breadth.get("tranches"):
+        print("  Breadth stopped before all checkpoints; resume the same command after the")
+        print("  provider limit clears. Depth was not started.\n")
+        return
+    res = compounding_run.run_depth(
+        out_dir=out_dir, rounds=depth_rounds, wave_cap=2, patience_h=20.0,
+        curate_model="claude-sonnet-5", gen=gen, judges=judges, repeats=repeats,
+    )
+    ev = (res or {}).get("eval", {})
+    if ev.get("curves"):
+        print(f"  curves: CE−RAG={ev['curves'].get('CE_minus_RAG')} "
+              f"CE−CB={ev['curves'].get('CE_minus_CB')}")
+    print(f"  → tables/curves: {out_dir}/eval-report.md\n")
+
+
+def run_compound_opus(out: Path, scale: str, assume_yes: bool) -> None:
+    """Appendix Q curator swap: rewind to k=5 and rerun fixed-corpus depth with Opus."""
+    print("── Stage · compounding curator swap (same k=5 base, Opus depth) ──")
+    out_dir = (out / ("compounding-v2" if scale == "full" else "compounding-v2-minimal")).resolve()
+    rounds = 2 if scale == "minimal" else 4
+    repeats = 1 if scale == "minimal" else 3
+    print(f"  Archives the current depth report/results, restores the pre-depth workspace,")
+    print(f"  then runs {rounds} depth rounds with claude-opus-4-8. Breadth, raw-vault RAG,")
+    print("  closed-book, held-out queries, generator, and judges remain fixed.")
+    if not (out_dir / "checkpoints.json").is_file():
+        print(f"  missing {out_dir}/checkpoints.json — run --stages compound first.\n")
+        return
+    if not _confirm(f"rewind the existing depth run and run {rounds} Opus curate cycles + eval?",
+                    assume_yes):
+        print("  skipped compounding curator swap.\n"); return
+    from bench.agentic_query_bench import compounding_run
+    rewound = compounding_run.rewind_depth(out_dir)
+    if not rewound.get("rewound"):
+        print("  No depth checkpoints were available to archive/rewind; run compound first.\n")
+        return
+    gen = "xai" if scale == "full" else None
+    judges = ["xai", "gemini"] if scale == "full" else None
+    res = compounding_run.run_depth(
+        out_dir=out_dir, rounds=rounds, wave_cap=2, patience_h=20.0,
+        curate_model="claude-opus-4-8", gen=gen, judges=judges, repeats=repeats,
+    )
+    ev = (res or {}).get("eval", {})
+    if ev.get("curves"):
+        print(f"  curves: CE−RAG={ev['curves'].get('CE_minus_RAG')} "
+              f"CE−CB={ev['curves'].get('CE_minus_CB')}")
+    print(f"  → Opus curve: {out_dir}/eval-report.md")
+    print(f"  → archived Sonnet curve: {out_dir}/eval-report.depth-claude-sonnet-5.md\n")
 
 
 if __name__ == "__main__":

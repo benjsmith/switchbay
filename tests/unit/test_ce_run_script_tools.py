@@ -17,6 +17,7 @@ def test_ce_tools_registered_and_allowed():
         "ce_graph_path",
         "ce_shared_sources",
         "ce_bridge_candidates",
+        "read_source",
         *ce_tools.CE_TOOL_NAMES,
     ]
     for n in names:

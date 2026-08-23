@@ -10,6 +10,11 @@
    npx skills add -g -y benjsmith/curiosity-engine
    ```
 
+   The compounding runner detects both `~/.agents/skills/curiosity-engine` and
+   `~/.claude/skills/curiosity-engine`. For another location, set
+   `CURIOSITY_ENGINE_SKILL_DIR` to the skill root (the directory containing
+   `scripts/`).
+
 2. **Phase-2 scenarios are corpus-specific.** The shipped scenarios under
    `bench/agentic_query_bench/scenarios/` were authored for the original
    LectureBank corpus. On `samples/ml-walkthrough`, phase-2 reproduces the
@@ -20,7 +25,7 @@
 
 ---
 
-This package lets you reproduce the two studies in the intro deck
+This package lets you reproduce the three studies and the secondary analysis in the intro deck
 (`docs/intro_and_bench.html`) on the bundled, CC-licensed `samples/ml-walkthrough`
 vault — **minimal scientific-rigor reproduction**, run from a coding CLI, with
 y/n cost gates so you never incur a large bill unknowingly.
@@ -46,7 +51,11 @@ python -m bench.reproduce         # detect models → show budget → y/n per st
 
 - `--scale minimal` (default): a cheap demo that validates the method.
 - `--scale full`: matches the deck's run size (expensive — see budget).
-- `--stages phase1` / `--stages phase2`: run one study.
+- `--stages phase1` / `phase2` / `followup`: select an earlier study.
+- `--stages compound`: reproduce the five-checkpoint breadth run and the
+  eight-round Sonnet repeated-use run in Appendices O–Q.
+- `--stages compound-opus`: after `compound`, rewind to the same k=5 state and
+  reproduce the four-round Opus curator comparison in Appendix Q.
 - `--yes`: headless/CI (assumes yes to every gate — only with `--scale minimal`
   unless you really mean it).
 - `--workspace PATH`: benchmark a different curated CE workspace.
@@ -75,7 +84,7 @@ few minutes and a small slice of any plan.
 The phase-2 agentic matrix is essentially all the cost (CE/tool/RAG trajectories
 at $4–10 each) — which is why the runner **hard-gates before it**.
 
-## The two studies
+## Studies represented in the deck
 
 - **phase-1 — curation vs modern-RAG (H1–H6).** Auto-generates questions from the
   corpus, so it runs on `ml-walkthrough` out of the box. Produces the correctness /
@@ -87,6 +96,97 @@ at $4–10 each) — which is why the runner **hard-gates before it**.
   phase-2 meaningfully on a different corpus, supply corpus-matched scenarios**
   (same JSON shape — gold themes, an absent topic, an optional poison fixture); the
   shipped ones reproduce exactly only on the original LectureBank corpus.
+- **followup — controlled secondary analysis (Appendices M–N).** Poses identical
+  synthesis and off-the-leash questions to all three product arms, records CE's
+  native crystallisation behavior, and runs a four-judge self-preference control.
+- **compounding — breadth and repeated-use depth (Appendices O–Q).** Rebuilds the
+  bundled 15-paper corpus in five chronological tranches, then holds the corpus
+  fixed while supplementary questions drive eight additional CE curation rounds.
+  Every checkpoint is evaluated against both raw-vault RAG and closed-book (CB).
+  Those controls cannot absorb curation or use; CE can update its structured wiki.
+
+## Exact Appendix O–Q reproduction
+
+Run from the repository root. These commands are resumable, but expensive: the
+full sequence performs five breadth curation sessions, eight Sonnet depth sessions,
+and four Opus depth sessions, plus repeated generation and judging.
+
+```bash
+# 1. Five breadth checkpoints, then eight fixed-corpus Sonnet depth checkpoints.
+#    The eval uses 8 held-out questions × CE/RAG/CB × 13 checkpoints × 3 repeats.
+python -m bench.reproduce --scale full --stages compound
+
+# 2. Archive the Sonnet curve, rewind to the identical k=5 workspace, and run
+#    four fixed-corpus depth rounds with claude-opus-4-8.
+python -m bench.reproduce --scale full --stages compound-opus
+```
+
+The exact direct commands used by those two stages are:
+
+```bash
+PYTHONPATH=src:. python -m bench.agentic_query_bench.compounding_run \
+  --src-ws samples/ml-walkthrough \
+  --out-dir bench/repro-out/compounding-v2 \
+  --tranches 5 --wave-cap 4 --patience-h 20 \
+  --curate-model claude-sonnet-5 --no-eval
+
+PYTHONPATH=src:. python -m bench.agentic_query_bench.compounding_run \
+  --out-dir bench/repro-out/compounding-v2 \
+  --depth --depth-rounds 8 --wave-cap 2 --patience-h 20 \
+  --curate-model claude-sonnet-5 \
+  --generator xai --judges xai,gemini --repeats 3
+
+PYTHONPATH=src:. python -m bench.agentic_query_bench.compounding_run \
+  --out-dir bench/repro-out/compounding-v2 --rewind
+
+PYTHONPATH=src:. python -m bench.agentic_query_bench.compounding_run \
+  --out-dir bench/repro-out/compounding-v2 \
+  --depth --depth-rounds 4 --wave-cap 2 --patience-h 20 \
+  --curate-model claude-opus-4-8 \
+  --generator xai --judges xai,gemini --repeats 3
+```
+
+Frozen inputs:
+
+- `compounding_queries.json`: eight held-out evaluation questions, never shown to
+  the curator.
+- `compounding_explore_queries.json`: sixteen supplementary questions split into
+  eight contiguous rounds for Sonnet, or four rounds for Opus. They are a proxy
+  for repeated use and are distinct from the held-out questions; adjacency is
+  explicitly annotated in the file.
+- one fixed generator (`xai`, grok-4.5 in the reported run) and two fixed judges
+  (`xai`/grok-4.5 and `gemini`/gemini-3.5-flash) across CE, RAG, CB, and checkpoints.
+
+Key artifacts under `bench/repro-out/compounding-v2/`:
+
+- `checkpoints.json` and `wiki-snapshots/k*/`: the auditable state at every k;
+- `eval-results.json`: raw per-cell answers, judges, repeated samples, and means;
+- `eval-report.md`: current per-checkpoint CE/RAG/CB table and difference curves;
+- `eval-results.depth-claude-sonnet-5.json` and the matching report: automatically
+  archived by `--rewind` before the Opus rerun.
+
+The CB arm is not optional bookkeeping: it shows the no-retrieval capability
+floor, while RAG shows what the same raw sources provide without curation. Neither
+can improve through the supplementary-question rounds. CE combines model knowledge,
+retrieval, and its persistent structured wiki, so only CE can compound through use.
+Three repeats reduce the generation/judge noise floor enough to assess changes above
+that noise; they do not turn the small held-out set into a broad population claim.
+
+## Appendix M–N secondary-analysis commands
+
+After producing the frozen phase-2 workspace, modern-RAG index, and calibration:
+
+```bash
+PYTHONPATH=src:. python -m bench.agentic_query_bench.product_secondary \
+  --workspace ~/.cache/sy-phase2-bench/ws \
+  --out-dir bench/results/product-secondary-v1 \
+  --calibration bench/results/rag-modern-calibration/calibration.json \
+  --index-dir bench/results/rag-modern-index
+
+PYTHONPATH=src:. python -m bench.agentic_query_bench.product_secondary_judge all \
+  --units-dir bench/results/product-secondary-v1/units \
+  --out-dir bench/results/product-secondary-judge
+```
 
 ## Pitfall guards (baked in — from hard-won experience)
 

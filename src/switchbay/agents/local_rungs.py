@@ -63,7 +63,8 @@ _ADD_32 = (
     "wiki_path", "wiki_shared_sources",
 )
 _ADD_48 = (
-    "ce_graph_retrieve", "ce_vault_search", "ce_graph_neighbors",
+    "ce_graph_retrieve", "ce_vault_search", "read_source",
+    "ce_graph_neighbors",
     "ce_graph_path", "ce_scan", "ce_query", "ce_ingest",
     "ce_bridge_candidates", "wiki_related_by_sources",
 )

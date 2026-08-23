@@ -1,4 +1,4 @@
-# Known issues (v0.9.18)
+# Known issues (v0.10.0)
 
 An honest, short list of what's rough or deferred in this release. None
 are data-loss or security issues — each is cosmetic, has a workaround,
@@ -19,6 +19,7 @@ page only keeps the one-line workarounds.
 | Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |
 | Local 4B | Worker, not Copilot: short grounded answers + `[[wikilink]]`, not long synthesis. | Copilot for fleet agentic work; 4B for offline wiki lookup. |
 | Enterprise | GitHub release archives are unsigned packaging inputs, not fleet installers. | Run bake, then deploy with Intune or Jamf (unsigned plus a path allowlist, or organization-signed). [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
+| Ingest | CE still UTF-8-prefixes large tagged HTML at 200 KiB. Switch Bay stages visible text first; tagged-fact extraction (iXBRL, JATS) is a future CE change. | Use `ce_ingest` (file or directory). Re-read old snippet-capped extracts with `read_source`. |
 
 ## Platform support
 

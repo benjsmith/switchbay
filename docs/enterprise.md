@@ -49,6 +49,13 @@ Set `copilot.host` to github.com or your GitHub Enterprise URL at bake.
 
 - **`providers`** — per gateway id, on/off. Missing keys inherit the
   profile default (enterprise = Copilot + local only; `open` = all on).
+- **Auto orchestration** — independent investigators do **not** require
+  extra BYOK providers. On Copilot they are assigned distinct models
+  from the subscription catalog (`GET /models`, cached). If that list
+  is cold, static suggestions are the current Copilot chat ids
+  (gpt-5.4, claude-sonnet-4.6, gemini-3.x, grok-4.6 — not gpt-4o).
+  Admin-disallowed providers are never used, even if a workspace
+  ladder still names them.
 - **`features`** — see table below. Missing keys inherit the profile.
 - **`SWITCHBAY_PROFILE=open`** restores mainline behaviour without a file.
 

@@ -27,7 +27,7 @@ Everything serves one compounding loop:
         │                                      ▼
   the graph gets richer            you and agents work OVER
   and the next session      ◀─────  the graph (chat, tools,
-  is smarter                        fan-out, capture)
+  is smarter                        Auto orchestration, capture)
 ```
 
 You **curate and direct**; agents do the legwork; the **knowledge graph**
@@ -192,7 +192,12 @@ Key points:
   model — **your choice, your keys, your machine**. A per-rung **model
   ladder** mixes providers by difficulty: the lead/orchestrator model
   follows your picker, while worker and trivial tiers route to cheaper
-  rungs, so one fan-out can span several providers.
+  rungs, so one Auto orchestration or fan-out can span several providers.
+  When only one provider is configured — GitHub Copilot in the enterprise
+  profile is the usual case — independent workers use **different models
+  from that provider's catalog** (for Copilot: GPT vs Claude vs Gemini vs
+  o-series) rather than repeating the same id. The ladder and admin
+  policy still decide what is allowed.
 - **Local model harness**: for the local model only, a small, editable,
   self-tuning operating-rules block is appended to the system prompt and
   a loop-guard breaks repeated identical tool calls (Settings → Local
@@ -238,21 +243,128 @@ flowchart LR
 
 ---
 
-## Data flow 3 — fan-out (parallel agents)
+## Data flow 3 — Auto orchestration (and fan-out)
 
-Ask for parallelism (a `+N` dial) and one run becomes many:
+The default for ordinary rail chat is **Auto orchestration**. You pick a
+cost/performance preference (Economy → Balanced → Maximum). That app-wide
+preference sets **utility weights** (how much extra expected quality is
+worth in cost and latency). It does **not** set N. Switch Bay scores a small
+set of candidate policies and runs the highest-utility one; N is an observed
+output. Auto may legitimately choose **one agent**. Extra workers only
+appear when their marginal utility is positive. This is not a swarm:
+investigators do not chat with each other. Extra workers may run on
+other keyed providers (a second evidence path); the rail announces
+that probe and remembers outages so it does not keep retrying a
+weekly-limited or down channel. Provider health is not mixed into
+the policy bandit. Learned recipe weights (which DAG to buy for similar
+tasks) and last-good provider roster are **per workspace** — one workspace
+does not train another. The learner's quality proxy rewards
+completed, source-diverse, verifier-supported work, wiki/report artifacts
+that landed, and desk pages retrieved again later; it does not use Reviews
+clicks. Reviews stays an undo backlog. Buckets already split research /
+finance / code / science; Settings' **Reset learned policy** clears only the
+focused vault's bandit statistics, not its desk artifacts. Roles stay
+computational kinds (investigate / verify /
+synthesize / execute), not a user-built standing org. Recurring Auto
+prompts live in the **Schedules** tab (per workspace; the daemon
+fires due items even when that vault is not focused). A desk may
+keep `.orchestrator/APPROACH.md` as the overnight problem-solving
+sequence.
 
 ```
-  planner run ──▶ N subprocess workers ──▶ merger run
-   (decompose)     (isolated, killable,      (concat/synthesize)
-                    per-worker permissions)
+  Auto policy
+      │
+      ├─ N=1 ── ordinary Run (_dispatch_chat)
+      │
+      └─ sparse DAG of ordinary Runs
+            investigate…  (independent slices + distinct retrieval;
+                           no planner LLM; read-only wiki/graph tools)
+            execute?      (orthogonal; parallel with investigators)
+                 │
+            evidence blackboard  (typed claims + provenance; compact views)
+                 │
+              verify  (evidence, not consensus; fresh context)
+                 │
+            optional targeted expansion  (new model family / method)
+                 │
+            synthesize → rail reply + optional create_report
+                 │
+            propose_wiki_page → Reviews  (durable wiki; same CE path)
+                 │
+            .orchestrator/  (desk artifacts: watchlist, briefs, cache)
 ```
 
-Workers are **subprocesses** (crash isolation, OS-level kill, per-worker
-permission scope); their state lives in `.workbench/runs/<run_id>/`
-(machine-local). Every worker still emits AG-UI lifecycle events, so the
-**Agent Dashboard** shows all runs across all threads and workspaces in
-one place.
+Each DAG node is a Switch Bay **Run** (`parent_run_id`, optional
+`orchestration_id` / `node_id`). Historical Runs without those fields
+stay valid. Child tools are a **narrower** subset of the parent
+allowlist — investigators get read-only retrieval, never wiki writes or
+shell. A single **execute** node may inherit `run_command` / SQL the
+parent already has; it runs in parallel with investigators as an
+independent measurement path, not a second chat.
+
+Downstream nodes receive a **compact blackboard view** (claims,
+evidence, verdicts), never worker transcripts. Reducers see only their
+sibling pair. Verifiers see unclassified candidates, not prior
+verdicts. The synthesizer sees one classified row per claim and keeps
+minority / unsupported findings.
+
+Auto decomposes with method-specific retrieval queries rather than a
+planner LLM, so parallel workers do not inherit one correlated framing.
+Explicit `n≥2` fan-out still uses the historical planner.
+
+**Fan-out** (explicit `n≥2` on the wire, `/route`, saved route-skills)
+is the compatibility strategy: planner → N independent workers → concat
+merge. Same executor, same bounds. The primary UI is Auto + preference,
+not a worker-count dial.
+
+Intra-run coordination is the **evidence blackboard**, not a shared
+chat and not a pile of sibling markdown. A workspace-local
+**`.orchestrator/`** folder (like CE's `.curator/`) holds *desk*
+artifacts across runs: optional `watchlist.csv`, dated unreviewed
+`briefs/`, download `cache/`, last-run timestamps. Investigators may
+*read* the watchlist as shared input; they do not write conclusions
+there. The synthesizer may `propose_wiki_page` so verified findings
+enter the knowledge graph through the existing Reviews path. When it
+names concrete recommendations (tickers, people, trades), it must
+also emit per-item analysis and evidence wiki pages and link them
+from the report so a user can check for unsourced leaps.
+
+Run checkpoints still live under the machine-local `runs/<orchestration_id>/`
+directory (`plan.json`, `results.json`, `blackboard.json`, per-node artifacts). A
+crash or daemon restart can **resume** the DAG and skip finished nodes;
+a user cancel is stored as cancelled and is not auto-resumed. The parent
+Run is the **chief of staff** and is **not** capped at 15 minutes: it
+keeps spawning investigators / verifiers / synthesizers until the
+synthesizer emits `OBJECTIVE_MET: yes`, marginal utility drops to zero
+(idle stop), a wave produces no new evidence, or you kill the run. A
+missing `OBJECTIVE_MET` line also stops safely instead of idling
+indefinitely. Per-child workers still have a stuck timeout (~15 min).
+If every usable provider is in cooldown (weekly limit, dead local server,
+empty API credits) the chief **pauses**
+(`waiting_limits`) and **auto-resumes** when a window reopens, unless
+you cancelled. A local model server that is configured but down is
+started only after an Approve card; spending BYOK API credits after
+subscriptions are exhausted is the same kind of prompt, and credit
+exhaustion is reported instead of retried.
+
+Every node still emits AG-UI lifecycle events, so the **Agent Dashboard**
+shows the graph: an agent-space projection of the live DAG, handoff
+pulses, stages, models, verification conflicts, expansions, token cost.
+Click the chief of staff for the team overview; click a worker for that
+node's transcript. Handoffs are typed findings and compact views, not a
+group chat.
+
+### Vocabulary (orchestration)
+
+| Concept | What it is |
+|---|---|
+| **Ordinary Run** | One agent execution inside a Thread. Auto's usual choice. |
+| **Fan-out** | Explicit fixed parallelism (compatibility / advanced N). |
+| **Auto orchestration** | Default adaptive sparse computation from task, evidence, resources, and the user's cost/performance preference. |
+| **Evidence blackboard** | Transient orchestration-local claims + provenance. Not the wiki. |
+| **Knowledge graph** | Durable accepted knowledge (`wiki/` + graph). Writes still go through propose → reviewer. |
+| **A2A** | Agent/thread interoperability (`message/send`). Not the orchestration algorithm. |
+| **Model ladder** | Available model/provider capability and cost hierarchy. The orchestrator may use it; it must not bypass it. |
 
 ---
 
@@ -309,7 +421,7 @@ pick in one surface is actionable in another.
 |---|---|---|
 | Wiki docs, figures, sketches, plots, analyses, small config JSON | `<workspace>/.workbench/` (+ `wiki/`) | Yes — roams across machines |
 | Rail history (`conversations.db`) | Machine-local by default (off cloud-sync — a live WAL DB corrupts there); Settings toggle to roam with the workspace | Default no |
-| Fan-out `runs/`, caches, the local model + its log | OS app-state root (`statedir.state_root()`) | Never |
+| Fan-out / orchestration `runs/`, caches, the local model + its log | OS app-state root (`statedir.state_root()`) | Never |
 | API keys | Daemon-owned (`~/.config/switchbay/secrets.json` 0600, or OS keychain) | Never |
 
 Cloud-sync services dehydrate files; the daemon reads everything

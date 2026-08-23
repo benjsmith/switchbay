@@ -54,7 +54,7 @@ type Props = {
   artifact: ZenArtifact | null;
   onJumpArtifact: () => void;
   entries: RailEntry[];
-  onSubmit: (text: string, opts: { n: number }) => void;
+  onSubmit: (text: string, opts: { n: number; preference?: number }) => void;
   focusedThread: string | null;
   focusedThreadKind: string | null;
   onSwitchThread: (threadId: string, kind: string) => void;

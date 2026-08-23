@@ -25,6 +25,12 @@ from pathlib import Path
 
 from switchbay import tools
 
+# Persistent fastembed cache. The default is $TMPDIR/fastembed_cache, which macOS
+# purges — wiping the ONNX model between runs and breaking CE / wiki-vector retrieval
+# (retrieve_bprime → empty context → RETRIEVAL-FAILURE). Pin it to a stable location so
+# the model survives; set before any TextEmbedding() is instantiated (lazy, on first use).
+os.environ.setdefault("FASTEMBED_CACHE_PATH", str(Path.home() / ".cache" / "fastembed"))
+
 CTX_BUDGET = 6000          # chars of context per arm (comparable)
 PER_PAGE_CAP = 1800        # chars read per page/source
 

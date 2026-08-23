@@ -291,7 +291,7 @@ def bake_macos_pkg(payload: Path, out: Path) -> Path:
 """,
         encoding="utf-8",
     )
-    ver = "0.9.18"
+    ver = "0.10.0"
     init = payload / "src" / "switchbay" / "__init__.py"
     if init.is_file():
         for line in init.read_text(encoding="utf-8").splitlines():

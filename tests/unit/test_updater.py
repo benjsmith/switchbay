@@ -408,8 +408,8 @@ async def test_update_endpoint_restarts_when_managed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_update_endpoint_applies_but_does_not_restart_dev_daemon(monkeypatch):
-    spawned = []
+async def test_update_endpoint_reexecs_unmanaged_after_apply(monkeypatch):
+    spawned: list[str] = []
     monkeypatch.setattr(updater, "apply", lambda: {
         "ok": True,
         "updated": True,
@@ -417,17 +417,17 @@ async def test_update_endpoint_applies_but_does_not_restart_dev_daemon(monkeypat
         "components": [],
         "error": None,
     })
-    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append(True))
-    monkeypatch.setattr(daemon.service, "is_installed", lambda: True)
+    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append("svc"))
+    monkeypatch.setattr(daemon.service, "spawn_self_reexec", lambda: spawned.append("self"))
+    monkeypatch.setattr(daemon, "_schedule_daemon_exit", lambda app, **kw: spawned.append("exit"))
 
     req = make_mocked_request("POST", "/api/update", app={"service_managed": False})
     resp = await daemon.handle_update(req)
     assert resp.status == 200
-    assert spawned == []
+    assert spawned == ["self", "exit"]
     import json
     body = json.loads(resp.body)
-    assert body["restarted"] is False
-    assert "development daemon" in body["restart_error"]
+    assert body["restarted"] is True
 
 
 @pytest.mark.asyncio

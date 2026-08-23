@@ -21,6 +21,7 @@ trusting them.
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import signal
 import subprocess
@@ -544,6 +545,52 @@ def is_managed() -> bool:
         return os.name == "posix" and os.getppid() == 1
     except Exception:  # noqa: BLE001
         return False
+
+
+def _serve_reexec_argv() -> list[str]:
+    """Argv that re-launches this process as `python -m switchbay …`.
+
+    `python -m switchbay serve …` sets ``sys.argv[0]`` to ``__main__.py``,
+    so copying argv blindly would exec the file instead of the module."""
+    if sys.argv and Path(sys.argv[0]).name in ("__main__.py", "switchbay"):
+        return [sys.executable, "-m", "switchbay", *sys.argv[1:]]
+    return [sys.executable, *sys.argv]
+
+
+def spawn_self_reexec(*, delay_s: float = 0.8) -> None:
+    """Re-launch this foreground ``serve`` after a short delay so the
+    current bind can release the port. Used by Settings → Restart when
+    this process is not the installed launchd/systemd job — calling
+    ``service restart`` in that case would start a *second* daemon."""
+    argv = _serve_reexec_argv()
+    env = os.environ.copy()
+    repo = _repo_root()
+    env["PYTHONPATH"] = str(repo / "src")
+    kwargs: dict = {
+        "cwd": os.getcwd(),
+        "env": env,
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+    }
+    if sys.platform == "win32":
+        flags = 0
+        flags |= getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        flags |= getattr(subprocess, "DETACHED_PROCESS", 0)
+        if flags:
+            kwargs["creationflags"] = flags
+        inner = subprocess.list2cmdline(argv)
+        wait = max(1, int(delay_s))
+        subprocess.Popen(
+            ["cmd", "/c", f"timeout /t {wait} /nobreak >nul & {inner}"],
+            **kwargs,
+        )
+        return
+    quoted = " ".join(shlex.quote(a) for a in argv)
+    subprocess.Popen(
+        ["/bin/sh", "-c", f"sleep {delay_s:.1f}; exec {quoted}"],
+        start_new_session=True,
+        **kwargs,
+    )
 
 
 def spawn_restart() -> None:

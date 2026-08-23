@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cebridge
+from . import cebridge, ingest_prep
 from .tools import Tool, register
 
 # Scripts CE's SKILL.md names on the bash allowlist, plus the rest of
@@ -90,10 +90,18 @@ def _ce_run(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     require_json = payload.get("json", True)
     if isinstance(require_json, str):
         require_json = require_json.lower() not in ("0", "false", "no")
-    return cebridge.run_script(
+    prep_meta: dict[str, Any] | None = None
+    if script == "local_ingest.py":
+        args, prep_meta = _with_ingest_prep(workspace, path="", extra=args)
+        if args is None:
+            return prep_meta
+    out = cebridge.run_script(
         script, args, cwd=workspace, timeout=timeout,
         require_json=bool(require_json),
     )
+    if prep_meta is not None and isinstance(out, dict):
+        out["ingest_prep"] = prep_meta
+    return out
 
 
 def _ce_graph_rebuild(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -160,17 +168,71 @@ def _ce_vault_index(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     return cebridge.run_script("vault_index.py", args, cwd=workspace, timeout=180.0)
 
 
+_INGEST_VALUE_FLAGS = ("--exts", "--max-files", "--projects")
+
+
+def _split_ingest_cli(args: list[str]) -> tuple[str, list[str]]:
+    """Pull a path out of local_ingest CLI args. Rest is flags."""
+    path = ""
+    rest: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--file" and i + 1 < len(args):
+            path = args[i + 1]
+            i += 2
+            continue
+        if a.startswith("-"):
+            rest.append(a)
+            if a in _INGEST_VALUE_FLAGS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                rest.append(args[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+        if not path:
+            path = a
+        else:
+            rest.append(a)
+        i += 1
+    return path, rest
+
+
+def _with_ingest_prep(
+    workspace: Path,
+    *,
+    path: str,
+    extra: list[str],
+    source_path_only: bool = False,
+) -> tuple[list[str] | None, dict[str, Any]]:
+    cli_path, rest = _split_ingest_cli(extra)
+    target_path = path or cli_path
+    prep = ingest_prep.prepare(workspace, target_path)
+    if prep.error:
+        return None, {"error": prep.error}
+    args = list(prep.ce_args) + rest
+    if source_path_only and "--source-path-only" not in args:
+        args.append("--source-path-only")
+    return args, prep.as_meta()
+
+
 def _ce_ingest(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     extra, err = _safe_args(payload.get("args"))
     if err:
         return {"error": err}
     path = str(payload.get("path") or payload.get("directory") or "").strip()
-    args: list[str] = list(extra)
-    if path:
-        args.insert(0, path)
-    if payload.get("source_path_only"):
-        args.append("--source-path-only")
-    return cebridge.run_script("local_ingest.py", args, cwd=workspace, timeout=300.0)
+    args, meta = _with_ingest_prep(
+        workspace,
+        path=path,
+        extra=extra,
+        source_path_only=bool(payload.get("source_path_only")),
+    )
+    if args is None:
+        return meta
+    out = cebridge.run_script("local_ingest.py", args, cwd=workspace, timeout=300.0)
+    if isinstance(out, dict):
+        out["ingest_prep"] = meta
+    return out
 
 
 def _ce_query(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -388,7 +450,10 @@ register(Tool(
     name="ce_ingest",
     description=(
         "Ingest files into the vault (local_ingest.py). Drop-folder: no "
-        "path (vault/raw/). External dir or file: pass `path`."
+        "path (vault/raw/). File or directory: pass `path` (a file is "
+        "accepted). Large HTML/XML/JSON is staged as readable text so "
+        "CE's extract cap indexes content rather than schema; originals "
+        "are unchanged."
     ),
     input_schema={
         "type": "object",
@@ -399,6 +464,30 @@ register(Tool(
         },
     },
     handler=_ce_ingest,
+))
+
+register(Tool(
+    name="read_source",
+    description=(
+        "Read a workspace source file as readable text. Use when a vault "
+        "hit is `extraction: snippet`, when you need the original at "
+        "`source_path`, or before quoting a cache file. HTML/XML/JSON "
+        "are converted the same way as ce_ingest (visible text / "
+        "compacted JSON). Path must stay inside the workspace. Never "
+        "quote extract frontmatter (extraction, max_extract_bytes, "
+        "sha256, ingested_at) as evidence."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Workspace-relative file (vault extract, cache original, or staged text).",
+            },
+        },
+    },
+    handler=ingest_prep.read_source,
 ))
 
 register(Tool(

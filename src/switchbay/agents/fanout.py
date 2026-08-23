@@ -1,21 +1,26 @@
-"""Fan-out orchestration: planner → N parallel workers → merger.
+"""Fixed-N parallel strategy: planner → N independent workers → merger.
 
-Triggered when the user dials the rail's +/- counter to N≥2 and
-submits a prompt. The dispatch path (`_dispatch_fanout` in
-daemon.py) calls into this module:
+This is the **compatibility** orchestration strategy. Auto
+orchestration (see `orchestration.py`) is the default user path;
+explicit `n≥2` on the wire, `/route`, and saved route-skills still
+land here.
+
+Workers are ordinary child Runs (`parent_run_id`). The DAG executor
+in `orchestration.py` reuses `plan` / `run_worker` / `merge` as
+primitives; `_dispatch_fanout` now builds a fixed-fanout plan and
+runs it through that executor so both paths share bounds, persistence,
+and failure handling.
 
   1. plan(text, n)     — single LLM turn that returns N task
                           descriptions with optional difficulty
                           ratings (trivial / normal / hard).
-  2. run_workers(...)  — spawns N concurrent worker tasks. Each
-                          gets its own run_id so the Agent
-                          Dashboard's Running panel shows live
-                          progress per worker. State streams to
-                          all WS clients via the same agent_*
-                          message shapes a single-agent run uses.
-  3. merge(results)    — concat-with-headers (default; spec's
-                          fallback merger). Returns one final
-                          assistant string for the rail.
+  2. run_workers(...)  — N concurrent no-tool workers (historical
+                          isolation). The DAG executor uses the
+                          same Run registry + AG-UI events.
+  3. merge(results)    — concat-with-headers. The fixed-fanout
+                          synthesizer node uses this contract
+                          (`output_contract: concat`) rather than
+                          an extra LLM call, preserving +N semantics.
 
 Per-worker output is also written to disk at
 `<state-root>/workspaces/<ws>/runs/<parent_run_id>/worker-<i>.md` plus

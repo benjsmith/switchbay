@@ -1,6 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReasoningRow } from "../../rail/Rail";
 import SkillsPanel from "./SkillsPanel";
+import AgentSpace, {
+  CHIEF_ID,
+  isOrchestrationRun,
+  type OrchHandoff,
+  type PlanNodeView,
+  type SpaceRun,
+} from "./AgentSpace";
 
 /**
  * Agent Dashboard — primary purpose: live monitoring of running
@@ -21,7 +28,10 @@ const RUNS_POLL_MS = 2000;
 /** How long a completed run stays inspectable after leaving /active. */
 const RECENT_FINISHED_TTL_S = 15 * 60;
 const RECENT_FINISHED_MAX = 10;
-const LIVE_RUN_STATUSES = new Set(["running", "planning", "merging"]);
+const LIVE_RUN_STATUSES = new Set([
+  "running", "planning", "merging", "verifying", "expanding", "synthesizing",
+  "waiting_limits",
+]);
 
 type Tool = {
   name: string;
@@ -116,6 +126,34 @@ type Run = {
   /** Set in fanout.py's finally block — flips workers from "running"
    *  to "done" so the lingered row reads as completed. */
   finished_at?: number | null;
+  orchestration_id?: string | null;
+  orchestration_strategy?: string | null;
+  node_id?: string | null;
+  node_kind?: string | null;
+  node_role?: string | null;
+  independence?: string | null;
+  decision_reason?: string | null;
+  arm_reason?: string | null;
+  org_summary?: string | null;
+  expansions?: number | null;
+  continuations?: number | null;
+  expansion_reason?: string | null;
+  verification_conflicts?: number | null;
+  verifier_confidence?: number | null;
+  unsupported_rejected?: number | null;
+  preference?: number | null;
+  tokens?: number | null;
+  tokens_in?: number | null;
+  tokens_out?: number | null;
+  io_mode?: "read" | "write" | "idle" | string | null;
+  plan_nodes?: PlanNodeView[] | null;
+  orchestration_messages?: OrchHandoff[] | null;
+  blackboard_n?: number | null;
+  candidate_findings_n?: number | null;
+  unique_sources?: number | null;
+  objective?: string | null;
+  orchestration_stage?: string | null;
+  step?: string | null;
 };
 
 // The currently-focused workspace, read from the snapshot App.tsx
@@ -153,6 +191,15 @@ export default function AgentDashboardTab() {
   const [palettes, setPalettes] = useState<PalettesPayload | null>(null);
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [interrupted, setInterrupted] = useState<{
+    orchestration_id: string;
+    objective?: string;
+    elapsed_s?: number;
+    completed?: string[];
+    phase?: string;
+    resume_at?: number | null;
+    stop_reason?: string;
+  }[]>([]);
 
   // Running-runs poll loop. We keep this separate from the static
   // panels' reloadAll so it ticks fast (every 2s) without re-fetching
@@ -165,6 +212,13 @@ export default function AgentDashboardTab() {
         const r = await fetch("/api/runs/active");
         if (!r.ok) return;
         const body = (await r.json()) as { runs: Run[] };
+        try {
+          const ir = await fetch("/api/orchestration/interrupted");
+          if (ir.ok && !cancelled) {
+            const ib = (await ir.json()) as { runs?: { orchestration_id: string; objective?: string; elapsed_s?: number; completed?: string[]; phase?: string; resume_at?: number | null; stop_reason?: string }[] };
+            setInterrupted(ib.runs ?? []);
+          }
+        } catch { /* older daemon */ }
         if (!cancelled) {
           const list = body.runs ?? [];
           // Detect runs that left the active registry → "Recently finished".
@@ -251,6 +305,92 @@ export default function AgentDashboardTab() {
   // start expanded; cleared after one consumption so a manual
   // collapse afterwards isn't undone on the next poll tick.
   const [pendingExpand, setPendingExpand] = useState<string | null>(null);
+  const [spaceSel, setSpaceSel] = useState<string>(CHIEF_ID);
+  const [deskOrg, setDeskOrg] = useState<{
+    org: {
+      orchestration_id?: string;
+      strategy?: string;
+      objective?: string;
+      decision_reason?: string | null;
+      nodes?: PlanNodeView[];
+      blackboard_n?: number;
+      candidate_findings_n?: number;
+      unique_sources?: number;
+      updated_at?: number;
+    } | null;
+    workspace?: string;
+    workspace_name?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const q = focusedWs ? `?workspace=${encodeURIComponent(focusedWs)}` : "";
+        const r = await fetch(`/api/orchestration/org${q}`);
+        if (!r.ok || cancelled) return;
+        const body = await r.json() as typeof deskOrg;
+        if (!cancelled) setDeskOrg(body);
+      } catch { /* older daemon */ }
+    };
+    void tick();
+    const id = window.setInterval(() => { void tick(); }, 8000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, [focusedWs]);
+
+  const featured = useMemo(() => {
+    // Prefer live registry rows; keep recently-finished workers so the
+    // DAG doesn't collapse as they retire from /api/runs/active.
+    const seen = new Set<string>();
+    const pool: Run[] = [];
+    for (const r of [...(runs ?? []), ...recentFinished]) {
+      if (seen.has(r.run_id)) continue;
+      seen.add(r.run_id);
+      pool.push(r);
+    }
+    if (pool.length === 0) return null;
+    const groups = groupRuns(pool);
+    const orch = groups.filter(
+      (g) => isOrchestrationRun(g.parent, g.workers.length) && g.parent.provider !== "pty",
+    );
+    if (orch.length === 0) return null;
+    const live = orch.filter(
+      (g) => isLiveRun(g.parent) || g.workers.some(isLiveRun),
+    );
+    const pick = live[0];
+    if (!pick) return null;
+    return { chief: pick.parent as SpaceRun, workers: pick.workers as SpaceRun[], idle: false };
+  }, [runs, recentFinished]);
+
+  const standing = useMemo(() => {
+    const org = deskOrg?.org;
+    if (!org?.nodes?.length) return null;
+    const chief: SpaceRun = {
+      run_id: org.orchestration_id || "desk",
+      provider: "auto",
+      status: "idle",
+      started_at: org.updated_at,
+      last_chunk_at: org.updated_at,
+      tool_count: 0,
+      input_excerpt: org.objective || "standing desk",
+      objective: org.objective,
+      orchestration_strategy: org.strategy,
+      decision_reason: org.decision_reason || "Last effective desk roster",
+      plan_nodes: org.nodes.map((n) => ({ ...n, status: "idle" })),
+      blackboard_n: org.blackboard_n,
+      candidate_findings_n: org.candidate_findings_n,
+      unique_sources: org.unique_sources,
+      workspace: deskOrg?.workspace,
+      workspace_name: deskOrg?.workspace_name,
+    };
+    return { chief, workers: [] as SpaceRun[], idle: true };
+  }, [deskOrg]);
+
+  const space = featured ?? standing;
+
+  useEffect(() => {
+    setSpaceSel(CHIEF_ID);
+  }, [space?.chief.run_id]);
   useEffect(() => {
     const onExpand = (ev: Event) => {
       const detail = (ev as CustomEvent<{ run_id: string }>).detail;
@@ -292,6 +432,19 @@ export default function AgentDashboardTab() {
         <div className="sy-vega-banner sy-vega-banner--err">{error}</div>
       )}
 
+      {space && (
+        <AgentSpace
+          chief={space.chief}
+          workers={space.workers}
+          selectedId={spaceSel}
+          idle={space.idle}
+          onSelect={(id, runId) => {
+            setSpaceSel(id);
+            if (runId && id !== CHIEF_ID) setPendingExpand(runId);
+          }}
+        />
+      )}
+
       <Section
         title="Running"
         // Dormant shells (status "idle" — a pty at its prompt / a TUI
@@ -318,11 +471,54 @@ export default function AgentDashboardTab() {
                 onForceOpenAck={() => setPendingExpand(null)}
                 autoExpandId={soloAutoExpandId(runs)}
                 focusedWs={focusedWs}
+                onInspect={(run) => {
+                  if (!run.parent_run_id) setSpaceSel(CHIEF_ID);
+                  else setSpaceSel(run.node_id || run.run_id);
+                }}
               />
             ))}
           </ul>
         )}
       </Section>
+
+      {interrupted.length > 0 && (
+        <Section
+          title="Interrupted"
+          count={interrupted.length}
+          subtitle="crash, restart, or waiting on provider limits — resume skips finished nodes"
+        >
+          <ul className="sy-agents-list">
+            {interrupted.map((row) => (
+              <li key={row.orchestration_id} className="sy-agents-run-wrap">
+                <div className="sy-agents-row sy-agents-run">
+                  <code className="sy-agents-name">{row.orchestration_id}</code>
+                  <span className="sy-agents-run-input" title={row.objective}>
+                    {row.objective || "orchestration"}
+                  </span>
+                  <span className="sy-agents-run-reason">
+                    {row.phase === "waiting_limits"
+                      ? "waiting for provider limits"
+                      : `${(row.completed ?? []).length} node${(row.completed ?? []).length === 1 ? "" : "s"} done`}
+                  </span>
+                  <button
+                    type="button"
+                    className="sy-agents-row-btn"
+                    onClick={() => {
+                      void fetch(
+                        `/api/orchestration/${encodeURIComponent(row.orchestration_id)}/resume`,
+                        { method: "POST" },
+                      );
+                    }}
+                    title="Resume without re-running finished nodes"
+                  >
+                    resume
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
 
       {recentFinished.length > 0 && (
         <Section
@@ -743,12 +939,17 @@ function RunGroup(props: {
   /** Currently-focused workspace path — rows in another workspace get
    *  a "↗ <name>" chip so the cross-workspace nature is visible. */
   focusedWs?: string;
+  onInspect?: (run: Run) => void;
 }) {
   const {
     parent, workers, onCancel, onBackground,
-    forceOpenId, onForceOpenAck, autoExpandId, focusedWs,
+    forceOpenId, onForceOpenAck, autoExpandId, focusedWs, onInspect,
   } = props;
-  const isFanout = typeof parent.fanout_n === "number" && parent.fanout_n > 1;
+  const isFanout = (
+    (typeof parent.fanout_n === "number" && parent.fanout_n > 1)
+    || (typeof parent.orchestration_strategy === "string"
+      && parent.orchestration_strategy !== "single")
+  );
   const hasWorkers = workers.length > 0;
   // Default expanded for fan-out parents so the user can see what
   // each worker is doing — that's the whole point of dialling N up.
@@ -779,6 +980,7 @@ function RunGroup(props: {
         onToggleWorkers={
           isFanout || hasWorkers ? () => setShowWorkers((v) => !v) : undefined
         }
+        onInspect={onInspect}
       />
       {hasWorkers && showWorkers && (
         <ul className="sy-agents-list sy-agents-list--workers">
@@ -793,6 +995,7 @@ function RunGroup(props: {
               autoExpand={autoExpandId === w.run_id}
               focusedWs={focusedWs}
               indented
+              onInspect={onInspect}
             />
           ))}
         </ul>
@@ -826,11 +1029,12 @@ function RunRow(props: {
   focusedWs?: string;
   /** Row from "Recently finished" — no kill/bg, transcript not live. */
   finished?: boolean;
+  onInspect?: (run: Run) => void;
 }) {
   const {
     run, onCancel, onBackground, forceOpen, onForceOpenAck, autoExpand,
     workerCount, workersRunning, workersExpanded, onToggleWorkers, indented,
-    focusedWs, finished,
+    focusedWs, finished, onInspect,
   } = props;
   // Cross-workspace flag: this run belongs to a workspace other than the
   // one currently focused. We never hide it (the dashboard is global) —
@@ -885,7 +1089,10 @@ function RunRow(props: {
         className="sy-agents-row sy-agents-run"
         role="button"
         tabIndex={0}
-        onClick={() => setExpandedUser((v) => !v)}
+        onClick={() => {
+          onInspect?.(run);
+          setExpandedUser((v) => !v);
+        }}
         onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") {
             e.preventDefault();
@@ -957,6 +1164,29 @@ function RunRow(props: {
         <span className="sy-agents-run-input" title={run.input_excerpt}>
           “{run.input_excerpt}”
         </span>
+        {run.decision_reason && (
+          <span className="sy-agents-run-reason" title={run.decision_reason}>
+            {run.decision_reason}
+          </span>
+        )}
+        {typeof run.verification_conflicts === "number" && run.verification_conflicts > 0 && (
+          <span className="sy-agents-run-reason" title="Verification found disagreement">
+            {run.verification_conflicts} conflict{run.verification_conflicts === 1 ? "" : "s"}
+          </span>
+        )}
+        {typeof run.expansions === "number" && run.expansions > 0 && (
+          <span className="sy-agents-run-reason" title={run.expansion_reason || "targeted expansion"}>
+            expanded ×{run.expansions}
+          </span>
+        )}
+        {run.node_kind && run.parent_run_id && (
+          <span className="sy-agents-run-reason">{run.node_kind}</span>
+        )}
+        {typeof run.tokens === "number" && run.tokens > 0 && !run.parent_run_id && (
+          <span className="sy-agents-run-reason" title="Prompt + completion tokens">
+            {run.tokens} tok
+          </span>
+        )}
         {typeof workerCount === "number" && workerCount > 0 && (
           <button
             type="button"
@@ -969,12 +1199,15 @@ function RunRow(props: {
             onClick={(e) => { e.stopPropagation(); onToggleWorkers?.(); }}
             title={
               workersExpanded
-                ? "Hide fan-out workers"
-                : `Show ${workerCount} fan-out worker${workerCount === 1 ? "" : "s"}`
+                ? "Hide child runs"
+                : `Show ${workerCount} child run${workerCount === 1 ? "" : "s"}`
             }
             aria-expanded={workersExpanded}
           >
-            {workersExpanded ? "▾" : "▸"} fan-out{" "}
+            {workersExpanded ? "▾" : "▸"}{" "}
+            {run.orchestration_strategy && run.orchestration_strategy !== "fixed_fanout"
+              ? run.orchestration_strategy.replace(/_/g, " ")
+              : "fan-out"}{" "}
             {typeof workersRunning === "number"
               ? `· ${workersRunning} of ${workerCount} running`
               : `· ${workerCount}`}
@@ -1040,6 +1273,13 @@ function RunRow(props: {
           runId={run.run_id}
           live={!finished && isLiveRun(run)}
           isPty={run.provider === "pty"}
+          liveSnapshot={{
+            toolCount: run.tool_count,
+            activity: run.activity,
+            currentTool: run.current_tool,
+            provider: run.provider,
+            model: run.model,
+          }}
         />
       )}
     </li>
@@ -1052,9 +1292,17 @@ function RunRow(props: {
  *  When the run completes the parent unmounts this whole row, so we
  *  don't need to detect transition-to-done ourselves. Exported —
  *  the bottom DashboardPanel's expandable rows reuse it. */
+export type TranscriptSnapshot = {
+  toolCount?: number;
+  activity?: string;
+  currentTool?: string;
+  provider?: string;
+  model?: string;
+};
+
 export function RunTranscript(
-  { runId, live, isPty = false }:
-  { runId: string; live: boolean; isPty?: boolean },
+  { runId, live, isPty = false, liveSnapshot }:
+  { runId: string; live: boolean; isPty?: boolean; liveSnapshot?: TranscriptSnapshot },
 ) {
   const [events, setEvents] = useState<RunEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1096,6 +1344,27 @@ export function RunTranscript(
     // xterm surface, not the rail event log — so this transcript is
     // always empty for them. Say where the output actually is instead
     // of "Waiting for the first chunk…" (which never arrives).
+    const tools = liveSnapshot?.toolCount ?? 0;
+    const act = (liveSnapshot?.currentTool
+      ? `⚙ ${liveSnapshot.currentTool}`
+      : liveSnapshot?.activity || "").trim();
+    if (!isPty && live && (tools > 0 || act)) {
+      return (
+        <div className="sy-agents-transcript sy-agents-transcript--live">
+          {tools > 0 && (
+            <div>
+              {tools} tool{tools === 1 ? "" : "s"} this run
+              {liveSnapshot?.provider ? ` · ${liveSnapshot.provider}` : ""}
+              {liveSnapshot?.model ? `/${liveSnapshot.model}` : ""}
+            </div>
+          )}
+          {act && <div className="sy-agents-tx-summary">{act}</div>}
+          <div className="sy-agents-subtitle">
+            Live snapshot — persisted steps appear here as they land.
+          </div>
+        </div>
+      );
+    }
     return (
       <div className="sy-agents-transcript sy-agents-transcript--empty">
         {isPty

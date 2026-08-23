@@ -99,16 +99,23 @@ class Hello(TypedDict):
 class UserInput(TypedDict, total=False):
     type: Literal["user_input"]
     text: str
-    # Optional fan-out count. When >1, the daemon's _dispatch_fanout
-    # path runs: planner → N parallel workers → merger. 0 / 1 / unset
-    # all mean "ordinary single-agent chat".
+    # Optional explicit worker count. When >1, the daemon's
+    # _dispatch_fanout path runs the fixed-N compatibility strategy
+    # (planner → N parallel workers → concat merge). 0 / 1 / unset
+    # mean Auto orchestration, which may still choose a single Run.
     n: int
+    # Cost/performance preference in [0, 1]: 0 Economy, 0.5 Balanced,
+    # 1 Maximum. Influences Auto topology, not a direct agent count.
+    preference: float
 
 
 class Notice(TypedDict, total=False):
     type: Literal["notice"]
     text: str
     kind: str | None
+    workspace: str
+    run_id: str
+    thread_id: str
 
 
 # ── CUSTOM wrapper ───────────────────────────────────────────────────
@@ -147,8 +154,48 @@ def hello(
     })
 
 
-def notice(text: str, kind: str | None = None) -> dict[str, Any]:
-    return custom({"type": "notice", "text": text, "kind": kind})
+def orchestration_handoff(
+    orchestration_id: str,
+    *,
+    src: str,
+    dst: str,
+    kind: str,
+    text: str,
+    ts: float,
+) -> dict[str, Any]:
+    """Structured DAG handoff for the Agent Dashboard space view.
+
+    Not a conversational message — a typed edge (spawn / findings /
+    compact / verification / synthesis). Kept tiny so the live poll
+    and the WS pulse stay cheap.
+    """
+    return custom({
+        "type": "orchestration_handoff",
+        "orchestration_id": orchestration_id,
+        "from": src,
+        "to": dst,
+        "kind": kind,
+        "text": (text or "")[:360],
+        "ts": ts,
+    })
+
+
+def notice(
+    text: str,
+    kind: str | None = None,
+    *,
+    workspace: str | None = None,
+    run_id: str | None = None,
+    thread_id: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {"type": "notice", "text": text, "kind": kind}
+    if workspace:
+        payload["workspace"] = workspace
+    if run_id:
+        payload["run_id"] = run_id
+    if thread_id:
+        payload["thread_id"] = thread_id
+    return custom(payload)
 
 
 def selection_state(selection: dict[str, Any] | None) -> dict[str, Any]:
@@ -236,14 +283,25 @@ def permission_request(
     })
 
 
-def thread_focused(thread_id: str, kind: str = "structured-agent") -> dict[str, Any]:
+def thread_focused(
+    thread_id: str,
+    kind: str = "structured-agent",
+    workspace: str | None = None,
+) -> dict[str, Any]:
     """The daemon's focused thread changed (switcher click, + New
     thread, a `!cmd` spawning a shell thread, or a dispatch that
     lazily created one). Clients move their rail to this thread —
     `kind` tells them which surface to render (transcript vs xterm)
     without a round-trip. Other clients of the same daemon follow in
-    lock-step, mirroring how workspace switches broadcast `hello`."""
-    return custom({"type": "thread_focused", "thread_id": thread_id, "kind": kind})
+    lock-step, mirroring how workspace switches broadcast `hello`.
+    `workspace` lets a client ignore a focus event that belongs to a
+    workspace it is not showing."""
+    payload: dict[str, Any] = {
+        "type": "thread_focused", "thread_id": thread_id, "kind": kind,
+    }
+    if workspace:
+        payload["workspace"] = workspace
+    return custom(payload)
 
 
 def thread_project_changed(thread_id: str, project: str | None) -> dict[str, Any]:

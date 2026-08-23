@@ -92,12 +92,9 @@ export default function HelpModal({ open, onClose }: Props) {
             <dd>Drop a spreadsheet formula into the active cell of the <strong>Sheet</strong> tab (<code>!exc</code> is a legacy alias). The rail agent can also write formulas via <code>sheet_set_formula</code> (same path) when you ask in natural language.</dd>
             <dt><code>/micro-edits</code></dt>
             <dd>
-              Small Sheet / Sketch / Table / Plot edits use a faster ladder
-              rung (default <code>trivial</code>). Status:{" "}
-              <code>/micro-edits</code>. Set rung:{" "}
-              <code>/micro-edits trivial|normal|hard</code> or{" "}
-              <code>/micro-edits global normal</code>. Models per rung:
-              Settings → Model ladder.
+              Small Sheet / Sketch / Table / Plot edits can use a cheaper
+              fast model. Status: <code>/micro-edits</code>. Set it under
+              Settings → Task models.
             </dd>
             <dt><code>/name </code><span className="sy-help-dim">args</span></dt>
             <dd>A slash command (e.g. <code>/plot</code>, <code>/sketch</code>, <code>/viewer</code>, <code>/rescan</code>, <code>/curate</code>, <code>/walkthrough</code>). Type <code>/</code> to autocomplete the list.</dd>

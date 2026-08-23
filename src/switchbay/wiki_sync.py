@@ -5,8 +5,9 @@ there immediately. The wiki browser (CE sidebar) and graph read
 ``data.json`` nodes/edges, which stay stale until a viewer rebuild and
 have no WikiLink edges until ``graph.py rebuild``. This module:
 
-  1. Injects every on-disk ``wiki/**/*.md`` into a viewer bundle so the
-     wiki browser lists the page before the next curate/rescan.
+  1. Injects every on-disk ``wiki/**/*.md`` into a viewer bundle (and
+     drops pages whose ``.md`` was deleted) so the wiki browser matches
+     the file browser before the next curate/rescan.
   2. Adds ``[[wikilink]]`` edges parsed from the pages themselves.
   3. Wraps title/stem mentions on a newly written page (and reciprocal
      mentions on existing pages) so the graph has real edges without
@@ -171,12 +172,86 @@ def _wikilink_targets(text: str) -> list[str]:
     return [m.group(1).strip() for m in _WIKILINK.finditer(text)]
 
 
+def _expected_wiki_md(wiki: Path, pid: str, path: Any) -> Path | None:
+    """Wiki-relative ``.md`` this page/node should occupy, or None if
+    it does not look like a wiki doc (vault extracts, graph-only ids)."""
+    rel = str(path or "").strip()
+    if rel.startswith("wiki/"):
+        rel = rel[5:]
+    if not rel:
+        if "/" not in (pid or ""):
+            return None
+        rel = f"{pid}.md"
+    if not rel.endswith(".md"):
+        rel = f"{rel}.md"
+    first = rel.split("/", 1)[0]
+    if first in {"vault", "uploads", "data", ".workbench"}:
+        return None
+    return wiki / rel
+
+
+def prune_missing_pages(workspace: Path, data: dict[str, Any]) -> int:
+    """Drop pages/nodes/edges whose wiki ``.md`` is gone.
+
+    Dual of ``inject_on_disk_pages``: the file browser walks the FS, so
+    a delete shows there immediately, but the wiki browser reads this
+    bundle. Mutates ``data``. Returns how many page ids were removed.
+    """
+    if not isinstance(data, dict):
+        return 0
+    wiki = workspace / "wiki"
+    if not wiki.is_dir():
+        return 0
+    pages = data.get("pages")
+    nodes = data.get("nodes")
+    edges = data.get("edges")
+    drop: set[str] = set()
+
+    def _missing(pid: str, path: Any) -> bool:
+        md = _expected_wiki_md(wiki, pid, path)
+        return md is not None and not md.is_file()
+
+    if isinstance(pages, dict):
+        for pid, page in list(pages.items()):
+            rec = page if isinstance(page, dict) else {}
+            if _missing(str(pid), rec.get("path")):
+                pages.pop(pid, None)
+                drop.add(str(pid))
+    if isinstance(nodes, list):
+        keep = []
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            nid = str(n.get("id") or "")
+            if nid in drop or (nid and _missing(nid, n.get("path"))):
+                drop.add(nid)
+                continue
+            keep.append(n)
+        if len(keep) != len(nodes):
+            data["nodes"] = keep
+    if drop and isinstance(edges, list):
+        data["edges"] = [
+            e for e in edges
+            if not (
+                isinstance(e, dict)
+                and (
+                    str(e.get("source") or "") in drop
+                    or str(e.get("target") or "") in drop
+                )
+            )
+        ]
+    if drop:
+        log.info("prune_missing_pages: dropped %d gone wiki docs", len(drop))
+    return len(drop)
+
+
 def inject_on_disk_pages(workspace: Path, data: dict[str, Any]) -> int:
-    """Ensure every on-disk wiki page is in ``pages`` + ``nodes``.
+    """Ensure every on-disk wiki page is in ``pages`` + ``nodes``, and
+    drop entries whose ``.md`` has been deleted.
 
     Also adds filesystem-derived wikilink edges so the graph shows
     connections before kuzu has been rebuilt. Mutates ``data``.
-    Returns the number of nodes/pages/edges added or updated.
+    Returns the number of nodes/pages/edges added, updated, or removed.
     """
     if not isinstance(data, dict):
         return 0
@@ -279,6 +354,7 @@ def inject_on_disk_pages(workspace: Path, data: dict[str, Any]) -> int:
             if isinstance(dst_n, dict):
                 dst_n["degree"] = int(dst_n.get("degree") or 0) + 1
 
+    changed += prune_missing_pages(workspace, data)
     if changed:
         log.info("inject_on_disk_pages: %d page/node/edge updates", changed)
     return changed

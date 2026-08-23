@@ -1,0 +1,25 @@
+{
+  "corpus": "ml-walkthrough",
+  "note": "DEPTH-study exploration questions. Posed to CE (fixed corpus, no new sources) to drive new analysis docs; the wiki accumulates syntheses RAG structurally cannot. Authored to be DISTINCT from the held-out eval set (compounding_queries.json) — they probe facets the eval never asks (evaluation, data, limitations, terminology, disclosure) plus a few theme-adjacent angles (flagged), so they do NOT pre-answer any eval query. Analyses are full native CE (including CE's model-knowledge/further-directions section — the closed-book arm controls for that). Frozen; a hash is recorded per run.",
+  "frozen_at": "2026-08-16",
+  "approved_by": "user 2026-08-16",
+  "queries": [
+    {"id": "x1-eval", "q": "What evaluation benchmarks and metrics recur across the papers, and where do they agree or differ on what counts as progress?", "eval_adjacency": "none"},
+    {"id": "x2-data", "q": "How do the papers differ in training-data strategy — sources, filtering, and mixture?", "eval_adjacency": "none"},
+    {"id": "x3-limits", "q": "What limitations or open problems do the authors acknowledge in their own work?", "eval_adjacency": "none"},
+    {"id": "x4-terms", "q": "What recurring terms are defined differently or inconsistently across the papers?", "eval_adjacency": "none"},
+    {"id": "x5-disclosure", "q": "What does each open-weight release disclose versus withhold (weights, data, code, training recipe)?", "eval_adjacency": "q5 open-weight (low)"},
+    {"id": "x6-genealogy", "q": "What genealogy of ideas connects the papers — which build on or react to which?", "eval_adjacency": "q3 throughline (med)"},
+    {"id": "x7-reasoning", "q": "How do the reasoning-and-acting methods differ in their use of feedback, search, and memory?", "eval_adjacency": "q3 agents (med)"},
+    {"id": "x8-compute", "q": "How do the papers describe the compute/hardware regimes they target (training vs inference)?", "eval_adjacency": "q2/q6 efficiency (med)"},
+
+    {"id": "x9-ablations", "q": "What ablation studies appear across the corpus, and which components do they identify as load-bearing?", "eval_adjacency": "none", "batch": 2},
+    {"id": "x10-deploy", "q": "How do the papers address deployment, serving, or productionization concerns?", "eval_adjacency": "none", "batch": 2},
+    {"id": "x11-safety", "q": "What safety and governance considerations recur, and what mitigations do the authors propose?", "eval_adjacency": "q7 constitutional-AI (med)", "batch": 2},
+    {"id": "x12-baselines", "q": "Which baselines do the papers compare against, and how are their headline improvements framed?", "eval_adjacency": "none", "batch": 2},
+    {"id": "x13-tokenization", "q": "What assumptions about tokenization and input representation do the papers share or differ on?", "eval_adjacency": "q4 attention (low-med)", "batch": 2},
+    {"id": "x14-success", "q": "How do the papers define and measure task success or helpfulness?", "eval_adjacency": "none", "batch": 2},
+    {"id": "x15-transfer", "q": "What claims do the papers make about transfer or generalization beyond their training tasks?", "eval_adjacency": "none", "batch": 2},
+    {"id": "x16-positioning", "q": "How do the papers position their contribution relative to the broader research landscape at the time?", "eval_adjacency": "q5 open-weight (low)", "batch": 2}
+  ]
+}

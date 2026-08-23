@@ -294,7 +294,7 @@ SKILL_TOOL_COVERAGE: dict[str, tuple[str, ...]] = {
         "ce_epoch_summary", "ce_planner", "ce_sweep", "ce_run",
         "ce_graph_rebuild", "ce_graph_retrieve", "ce_graph_neighbors",
         "ce_graph_path", "ce_shared_sources", "ce_bridge_candidates",
-        "ce_ingest", "ce_lint", "ce_vault_search", "ce_vault_index",
+        "ce_ingest", "read_source", "ce_lint", "ce_vault_search", "ce_vault_index",
         "ce_query", "ce_score_diff", "ce_scrub_check", "ce_naming",
         "ce_tables", "ce_figures", "ce_scan",
         "search_wiki", "read_wiki_page", "list_wiki_pages",

@@ -7,6 +7,7 @@ import ProviderPicker from "./ProviderPicker";
 import PtyThreadSurface, { type TerminalWsApi } from "./PtyThreadSurface";
 import VoiceButton from "./VoiceButton";
 import ReasoningPicker from "./ReasoningPicker";
+import { useOrchestrationControl } from "./OrchestrationSlider";
 import { registerChord } from "../keys";
 import { useComposerDraft } from "../lib/composerDraft";
 
@@ -146,7 +147,7 @@ export type RailEntry =
 
 type Props = {
   entries: RailEntry[];
-  onSubmit: (text: string, opts: { n: number }) => void;
+  onSubmit: (text: string, opts: { n: number; preference?: number }) => void;
   onReset: () => void;
   onLoadOlder: () => void;
   hasMoreHistory: boolean;
@@ -459,6 +460,7 @@ export default function Rail({
   termWs, poppedOutTab, onPopOutTerminal, onPopInTerminalTab, onJumpToTab,
 }: Props) {
   const [input, setInput] = useComposerDraft();
+  const orch = useOrchestrationControl();
   // Run-lane focus: when set, that run's blocks highlight and others
   // dim. expandedBlocks tracks which collapsed (done) run segments the
   // user has manually opened (keyed by the block's first item id).
@@ -769,7 +771,7 @@ export default function Rail({
     const asShell =
       shellHintRef.current && !chatForcedRef.current &&
       !text.startsWith("!") && !text.startsWith("/");
-    onSubmit(asShell ? `!${text}` : text, { n: 0 });
+    onSubmit(asShell ? `!${text}` : text, orch.opts);
     setInput("");
     setShellHint(false);
     setChatForced(false);
@@ -1397,17 +1399,24 @@ export default function Rail({
           }}
           placeholder="chat, or use a prefix… (try /view)"
         />
-        <ReasoningPicker />
-        <VoiceButton
-          onText={(text) =>
-            setInput((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")} ${text}` : text))
-          }
-        />
-        <div
-          className="sy-rail-hint"
-          title="Prefixes are optional for shell commands — typed commands are auto-detected (the chip above the box; Tab flips chat ↔ shell)."
-        >
-          <code>/</code> commands · <code>!</code> shell thread · <code>!py</code> python thread · <code>!sql</code> → Table · <code>!fn</code> → Sheet
+        <div className="sy-rail-composer-meta">
+          <div className="sy-rail-composer-tools">
+            {orch.node}
+            <div className="sy-rail-composer-end">
+              <ReasoningPicker />
+              <VoiceButton
+                onText={(text) =>
+                  setInput((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")} ${text}` : text))
+                }
+              />
+            </div>
+          </div>
+          <div
+            className="sy-rail-hint"
+            title="Prefixes are optional for shell commands — typed commands are auto-detected (the chip above the box; Tab flips chat ↔ shell)."
+          >
+            <code>/</code> commands · <code>!</code> shell thread · <code>!py</code> python thread · <code>!sql</code> → Table · <code>!fn</code> → Sheet
+          </div>
         </div>
       </div>
         </>
@@ -2162,7 +2171,11 @@ export function PermissionRow(props: {
       <div className="sy-rail-permission-body">
         <div className="sy-rail-permission-head">
           <span className="sy-rail-permission-tool">
-            {entry.provider} wants to run <code>{entry.tool}</code>
+            {entry.tool === "Orchestration" && String(entry.tool_input?.action || "") === "start-local-server"
+              ? "Auto wants to start the local model server"
+              : entry.tool === "Orchestration" && String(entry.tool_input?.action || "") === "use-api-credits"
+                ? "Auto wants to spend API credits (subscriptions are at their limits)"
+                : <>{entry.provider} wants to run <code>{entry.tool}</code></>}
           </span>
         </div>
         <ToolInputView input={entry.tool_input} />

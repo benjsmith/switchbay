@@ -7,6 +7,7 @@ layout/CSS always come from here so quality is provider-agnostic.
 from __future__ import annotations
 
 import html as html_lib
+import re
 from typing import Any
 
 
@@ -133,3 +134,93 @@ h1 {{
 </body>
 </html>
 """
+
+
+# Library / Report iframes are sandboxed (scripts, no same-origin).
+# `[[wikilink]]` in agent HTML is otherwise inert `<code>` or prose.
+# Rewrite at serve time so a click postMessages the parent, which
+# already resolves `sy:open-wiki-page` against the graph.
+
+_WIKILINK_RE = re.compile(r"\[\[([^\]|#\n]+?)(?:\|([^\]]+?))?\]\]")
+_BRIDGE_ATTR = "data-sy-wiki-bridge"
+_BRIDGE = (
+    f'<style {_BRIDGE_ATTR}>'
+    "a.sy-wikilink{color:var(--acc,#6be8b3);cursor:pointer;"
+    "text-decoration:underline}"
+    "a.sy-wikilink:hover{opacity:.85}"
+    "</style>"
+    f'<script {_BRIDGE_ATTR}>'
+    "document.addEventListener('click',function(e){"
+    "var el=e.target;"
+    "while(el&&el!==document){"
+    "if(el.tagName==='A'&&el.classList&&el.classList.contains('sy-wikilink')){"
+    "e.preventDefault();"
+    "var t=el.getAttribute('data-wiki')||'';"
+    "if(t){try{parent.postMessage({type:'sy-open-wiki',target:t},'*')}"
+    "catch(x){}}"
+    "return;}"
+    "el=el.parentNode;}"
+    "});"
+    "</script>"
+)
+
+
+def _html_protected_spans(text: str) -> list[tuple[int, int]]:
+    """`<script>` / `<style>` / `<textarea>` ranges — do not rewrite."""
+    spans: list[tuple[int, int]] = []
+    lower = text.lower()
+    for tag in ("script", "style", "textarea"):
+        needle, close = f"<{tag}", f"</{tag}>"
+        i = 0
+        while True:
+            a = lower.find(needle, i)
+            if a < 0:
+                break
+            b = lower.find(close, a)
+            if b < 0:
+                spans.append((a, len(text)))
+                break
+            spans.append((a, b + len(close)))
+            i = b + len(close)
+    return spans
+
+
+def linkify_report_html(html: str) -> str:
+    """Turn `[[target]]` / `[[target|label]]` into clickable wiki anchors.
+
+    Leaves `[[report:slug]]` alone (Library report links, not wiki pages).
+    Idempotent: already-rewritten HTML is returned unchanged.
+    """
+    if not html or "[[" not in html:
+        return html
+    spans = _html_protected_spans(html)
+    out: list[str] = []
+    last = 0
+    found = 0
+    for m in _WIKILINK_RE.finditer(html):
+        if any(a <= m.start() and m.end() <= b for a, b in spans):
+            continue
+        target = (m.group(1) or "").strip()
+        if not target or target.lower().startswith("report:"):
+            continue
+        label = (m.group(2) or target).strip()
+        out.append(html[last:m.start()])
+        t_esc = html_lib.escape(target, quote=True)
+        l_esc = html_lib.escape(label)
+        out.append(
+            f'<a href="#wiki={t_esc}" class="sy-wikilink" '
+            f'data-wiki="{t_esc}">{l_esc}</a>'
+        )
+        last = m.end()
+        found += 1
+    if not found:
+        return html
+    out.append(html[last:])
+    result = "".join(out)
+    if _BRIDGE_ATTR not in result:
+        idx = result.lower().rfind("</body>")
+        if idx >= 0:
+            result = result[:idx] + _BRIDGE + result[idx:]
+        else:
+            result = result + _BRIDGE
+    return result

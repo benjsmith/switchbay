@@ -10,10 +10,10 @@
 Switch Bay turns a folder of raw material — notes, documents, sources,
 tasks — into a private, compounding **knowledge graph**, and gives you a
 cockpit where AI agents work over it: chat grounded in what you know,
-curate captured material into linked wiki pages, fan out parallel agents,
-and render rich answers as documents. It runs **entirely on your
-machine**, against whatever models you choose, and nothing leaves unless
-you send it.
+curate captured material into linked wiki pages, run Auto orchestration
+(one agent or a sparse DAG of Runs), and render rich answers as documents.
+It runs **entirely on your machine**, against whatever models you choose,
+and nothing leaves unless you send it.
 
 - **Local & private** — two processes and your files. No cloud, no
   accounts; your data and API keys stay on your machine.
@@ -24,6 +24,9 @@ you send it.
 - **Knowledge that compounds** — capture → curate → graph. Every session
   leaves the graph richer, so the next one starts smarter. Agents propose
   wiki edits; a stronger reviewer (and you) keep them honest.
+- **[Auto orchestration](docs/concepts-and-data-flow.md#data-flow-3--auto-orchestration-and-fan-out)**
+  — chooses one Run or an adaptive multi-agent DAG for complex, long-running
+  work; independent workers can use different available models and providers.
 - **Two cockpits** — **Power** mode (3-column: browser · tabs · rail) and
   **Zen** mode (think *at* the graph). Same data, your choice.
 - **Custom tabs** — describe the view you want and an agent builds it

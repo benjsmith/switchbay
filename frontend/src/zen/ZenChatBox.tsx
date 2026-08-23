@@ -12,6 +12,7 @@ import {
 import PtyThreadSurface, { type TerminalWsApi } from "../rail/PtyThreadSurface";
 import VoiceButton from "../rail/VoiceButton";
 import ReasoningPicker from "../rail/ReasoningPicker";
+import { useOrchestrationControl } from "../rail/OrchestrationSlider";
 import { useComposerDraft } from "../lib/composerDraft";
 
 // One persisted, drag-resizable height for BOTH the chat and the pty
@@ -20,8 +21,8 @@ import { useComposerDraft } from "../lib/composerDraft";
 // user drags the top handle to grow/shrink and double-clicks it to snap
 // back. Promote-to-pane (⇱) remains the route to a full-height surface.
 const BOX_H_KEY = "sy:zen-box-h";
-const DEFAULT_BOX_H = 160;  // ≈ a fresh chat box (incl. the resize handle)
-const MIN_BOX_H = 156;      // the composer + one response line must still fit
+const DEFAULT_BOX_H = 200;  // ≈ a fresh chat box (incl. the resize handle + orch row)
+const MIN_BOX_H = 188;      // the composer + slider + one response line must still fit
 
 function readBoxH(): number {
   try {
@@ -44,7 +45,7 @@ function readBoxH(): number {
 
 type Props = {
   entries: RailEntry[];
-  onSubmit: (text: string, opts: { n: number }) => void;
+  onSubmit: (text: string, opts: { n: number; preference?: number }) => void;
   focusedThread: string | null;
   focusedThreadKind: string | null;
   onSwitchThread: (threadId: string, kind: string) => void;
@@ -92,6 +93,7 @@ export default function ZenChatBox({
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const [input, setInput] = useComposerDraft();
+  const orch = useOrchestrationControl();
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const responseRef = useRef<HTMLDivElement>(null);
   // Attach-a-file: same upload → `[attached: <path>]` prefix contract
@@ -338,7 +340,7 @@ export default function ZenChatBox({
     if (!text) return;
     const asShell =
       shellHint && !chatForced && !text.startsWith("!") && !text.startsWith("/");
-    onSubmit(asShell ? `!${text}` : text, { n: 0 });
+    onSubmit(asShell ? `!${text}` : text, orch.opts);
     setInput("");
     setShellHint(false);
     setChatForced(false);
@@ -639,12 +641,17 @@ export default function ZenChatBox({
                 }}
                 placeholder="chat, or use a prefix… (try /view)"
               />
-              <ReasoningPicker />
-              <VoiceButton
-                onText={(text) =>
-                  setInput((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")} ${text}` : text))
-                }
-              />
+            </div>
+            <div className="sy-zen-composer-meta">
+              {orch.node}
+              <div className="sy-zen-composer-end">
+                <ReasoningPicker />
+                <VoiceButton
+                  onText={(text) =>
+                    setInput((cur) => (cur.trim() ? `${cur.replace(/\s+$/, "")} ${text}` : text))
+                  }
+                />
+              </div>
             </div>
           </div>
         </div>

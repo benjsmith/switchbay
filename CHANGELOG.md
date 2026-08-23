@@ -3,6 +3,147 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-24 — v0.10.0 — Auto orchestration
+
+**Migration:** none. **Breaking:** none. Explicit `n≥2` fan-out and
+`/route` keep their previous semantics.
+
+Ordinary rail chat now goes through **Auto orchestration**: a
+conservative policy chooses one ordinary Run, or a sparse DAG of Runs
+(investigate → optional verify → synthesize), from the task and a
+cost/performance preference (Economy → Maximum). Auto may still pick a
+single agent. Investigators get read-only wiki/graph tools; durable
+wiki writes still go through propose → reviewer.
+
+Each workspace is its own desk. Recipe weights (which DAG to buy for
+similar tasks) and last-good provider roster are stored per vault;
+one workspace does not train another. Roles are computational kinds
+(investigate / verify / synthesize / execute), not a user-built
+standing org. The parent Run is a long-running **chief of staff**:
+it can sit overnight, spawn waves while ΔU stays positive, and stop
+on `OBJECTIVE_MET: yes`, idle (no stop token / no new evidence), or
+user kill. A stuck *child* still times out at 15 minutes. Runtime is
+constrained by provider availability and API credits, not a parent wall
+clock.
+
+### Added
+
+- **Auto orchestration** — default for plain chat. Plan IR, DAG
+  scheduler, evidence blackboard, evidence-based verifier, targeted
+  expansion, hierarchical reduction when N is large.
+- **Cost/performance slider** on the rail (and Zen composer). Explicit
+  worker count is an advanced override (`n` on `user_input`).
+- **Per-workspace learning** — recipe bandit + last-good roster, keyed
+  by this vault and a coarse task-type bucket (research, finance,
+  code, …). The quality proxy rewards completed, source-diverse,
+  verifier-supported work, wiki/report artifacts that *landed*, and desk
+  pages *reused* later — not Reviews clicks (Reviews is an undo backlog).
+  `GET /api/orchestration/policy` and
+  Settings reset apply to the focused workspace only. Hard bounds are
+  not learnable. Provider outages (weekly limits) are a separate TTL.
+- **N=1 token accounting** — ordinary Auto Runs record prompt/completion
+  tokens so the learner does not treat single-agent chat as free.
+- **DAG resume** — interrupted orchestrations persist a checkpoint
+  (`plan.json`, `results.json`, blackboard). Daemon restart and
+  `POST /api/orchestration/{id}/resume` skip finished nodes. Cancel
+  does not auto-resume.
+- **Overnight chief** — `OBJECTIVE_MET` stop token; after-synth
+  continuation waves while ΔU > 0; `waiting_limits` pause that
+  auto-resumes when a channel reopens; rail cards to start the local
+  model server or spend BYOK API credits after subscriptions are
+  exhausted. Credit exhaustion is reported, not tight-retried.
+- **Agent space** — live DAG projection on the Agent Dashboard:
+  chief-of-staff overview, handoff pulses, click a worker for its
+  transcript. Canvas + rAF; no embedding model on the animation path.
+- **`.orchestrator/` desk folder** — watchlist, dated briefs, filing
+  cache, append-only log, playbook. Shared *input and artifacts*
+  across Auto runs, not a worker group-chat.
+- **Quant / lab task priors** — filings/earnings-shaped prompts and
+  scientific experiment prompts get independent investigators plus
+  verification; a single `execute` node may inherit parent
+  `run_command` (never granted to investigators).
+- **Copilot / enterprise model diversity** — when only one gateway is
+  allowed, independent workers pick different models from that
+  catalog. Admin policy still blocks disallowed providers.
+- **Inspectable Auto trail** — when the synthesizer names concrete
+  recommendations it must emit per-item wiki analysis + evidence
+  pages and link them from the report.
+- **Reproducible benchmark appendices** — the public bench now includes
+  the repeated-use compounding pipeline, frozen held-out and supplementary
+  questions, CE/raw-vault-RAG/closed-book controls, pooled noise-floor
+  analysis, Sonnet archive/rewind, and the Opus curator rerun. The intro
+  deck carries the updated chart on page 6 and the full Appendix Q readout.
+
+### Changed
+
+- **No planner LLM on Auto** — workers get deterministic slices
+  (sub-questions + method-specific retrieval queries). Explicit `n≥2`
+  fan-out still uses the historical planner.
+- **Compact blackboard views** — verifiers see unclassified candidates;
+  synthesizers see classified rows and keep minority evidence. Worker
+  transcripts are never the coordination channel.
+- **Utility policy** — candidate topologies scored
+  `U = Q − λc(s) C − λl(s) L`; expansion uses the same ΔU test.
+  Maximum still stops at diminishing returns.
+- **CE model ladder** is no longer a Settings control. Auto allocates
+  from the picker + keyed providers; micro-edits keep their own
+  fast-model row.
+- Child worker timeout is 15 minutes (was 180s, which killed
+  grok-build mid-retrieval and left CLI processes running). The
+  parent is not wall-clock capped. Lifetime spawn caps (max nodes /
+  expansions / continuations) are off — ΔU and `OBJECTIVE_MET` are
+  the brake. Parallelism on the machine is still capped.
+- **Schedules tab** — recurring Auto prompts per workspace (frequency,
+  prompt, started / edited / last run / run count). The daemon ticks
+  due items even when that vault is not focused.
+- **Readable ingest staging** — `ce_ingest` accepts a file (CE
+  `local_ingest` is a directory or `--file`). Large HTML/XML/JSON
+  (papers, dumps, filings) is staged as visible text so CE's 200 KiB
+  extract cap indexes content, not schema. Originals stay put.
+  `read_source` re-reads with the same conversion. A native iXBRL
+  extractor is a future CE upgrade, not a Switch Bay parser.
+
+### Fixed
+
+- **Agent space looked idle** on a busy worker: child tool/text now
+  persist to the run transcript; the DAG paints tool counts, provider,
+  and the current tool; telemetry is *N running / M done*, not `0/5`
+  while investigators are mid-retrieval.
+- **Weekly-limit workers** abort on the first limit banner, cool that
+  channel, and retry the same node on the next available provider.
+  If none remain, Auto asks to start the local model server (then
+  BYOK, then waits for a reset).
+- **Chief-of-staff lead** — Agent Space quotes the *current* roster
+  (N investigators → verifier → synthesizer, plus expansion counts),
+  not the opening recipe's canned "three diverse investigators then
+  verify". The original arm is kept as "Opened as: …" when it differs.
+- **Agent space flow** — the blackboard is a DAG node; workers pulse
+  amber while emitting tokens and blue while reading tools; token
+  packets travel the edges. Failed/pruned nodes drop off. After a run
+  the last effective roster stays as a standing desk org (at rest)
+  until the next run replaces it.
+- **Resume snapshots** — a snapshot worker writes `SNAPSHOT.md` every
+  15s (plus per-node `live-*.json` on tools) so a daemon restart can
+  restore in-flight investigators. The chief of staff is told the run
+  was interrupted and gets the original goal plus that snapshot.
+  Auto-resume on boot now scans every registered workspace.
+- **Library report-doc ✕** — closing a durable report drops the
+  transient tab.
+- **Rail workspace isolation** — a background Auto in another vault
+  no longer streams into the focused rail.
+- **Composer crowding** — Auto slider, reasoning effort, mic, and
+  prefix hints no longer overlap.
+- **Settings → Restart** on a foreground `serve` re-execs that
+  process.
+- **Wiki browser after file-browser delete** — `wiki/**/*.md` drops
+  from the page list on the next refetch.
+- Vacuous verify no longer rubber-stamps empty findings as
+  confidence 1.0.
+
+### Version
+
+0.10.0 (pre-1.0 minor). History retained.
+
 ## 2026-08-21 — v0.9.18 — plot layout
 
 **Migration:** none. **Breaking:** none.

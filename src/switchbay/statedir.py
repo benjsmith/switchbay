@@ -108,7 +108,7 @@ def _slug(name: str) -> str:
 
 
 def runs_dir(workspace: Path, parent_run_id: str | None = None) -> Path:
-    """Fan-out worker output. Transient; never roams."""
+    """Fan-out / orchestration run artifacts. Transient; never roams."""
     base = workspace_state_dir(workspace) / "runs"
     return base / parent_run_id if parent_run_id else base
 

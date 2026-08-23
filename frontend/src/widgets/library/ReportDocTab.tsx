@@ -26,10 +26,11 @@ export default function ReportDocTab() {
 
   const close = async () => {
     setClosing(true);
+    setShow(null);
+    clearReportDocOpen();
     try {
-      clearReportDocOpen();
-      await fetch("/api/report-packages/close", { method: "POST" }).catch(() => {});
-      // Tab drop is optional; prefer graph nav if server supports close later
+      const r = await fetch("/api/report-packages/close", { method: "POST" });
+      if (!r.ok) setClosing(false);
     } catch {
       setClosing(false);
     }

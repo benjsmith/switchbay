@@ -38,17 +38,23 @@ from . import (
     commands, conversations, curation_history, dbintrospect, deck_export,
     demo_workspace,
     duckdb_starters, file_state, fileops, llm_config, llmgateway,
-    localllm,
+    localllm, orchestrator_fs, schedules,
     mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
-    html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_packages, reports, secrets, selection, service, share, sheets,
+    html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
     ui_focus, updater,
     streams, tabstore, terminals, tools, verbs, watchfolders, wiki_sync, worksheets_store, workspaces,
 )
-from .agents import rail_default
+from .agents import fanout, orchestration, orchestration_policy, rail_default
 
 log = logging.getLogger("switchbay.daemon")
+
+# Parent-run statuses that mean "this thread is still executing".
+_ORCH_BUSY_STATUSES = (
+    "running", "planning", "merging", "verifying", "expanding", "synthesizing",
+    "waiting_limits",
+)
 
 MAX_FILE_BYTES = 1_000_000
 
@@ -240,9 +246,8 @@ async def handle_health(request: web.Request) -> web.Response:
         "started_at": request.app.get("started_at") or 0,
         "frontend_mtime": frontend_mtime,
         "workspace": str(request.app.get("workspace") or ""),
-        # True when we're the installed always-on service — gates the
-        # in-app Restart affordance (a dev daemon must not `make restart`
-        # a rival onto this port).
+        # True when we're the installed always-on service (vs a
+        # foreground serve). Settings → Restart works on both.
         "service_managed": request.app.get("service_managed", False),
         # Absolute repo root — the offline/stopped screens cache this to
         # build `make -C "<repo>" restart`.
@@ -511,11 +516,11 @@ async def handle_graph_data(request: web.Request) -> web.Response:
         if cached is not None:
             _put_graph_cache(request.app, ws_key, cached)
             asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
-    elif isinstance(cached, dict):
-        # In-memory cache can miss pages written since the last
-        # viewer build (file browser walks the FS; wiki browser
-        # reads nodes). Fold them in cheaply so the BROWSER list
-        # updates without waiting for curate/rescan.
+    if isinstance(cached, dict):
+        # In-memory / on-disk cache can miss pages written since the
+        # last viewer build, and still list wiki docs that were
+        # deleted in the file browser. Fold the FS in cheaply so the
+        # wiki list updates without waiting for curate/rescan.
         added = await asyncio.to_thread(
             wiki_sync.inject_on_disk_pages, workspace, cached,
         )
@@ -636,6 +641,17 @@ async def handle_fs_delete(request: web.Request) -> web.Response:
         # and a possible cross-volume move — never on the loop.
         trashed_to = await asyncio.to_thread(fileops.delete, workspace, rel)
         await asyncio.to_thread(file_state.delete_record, workspace, rel)
+        if rel.startswith("wiki/"):
+            # Wiki browser reads the in-memory graph bundle, not the
+            # FS. Prune the gone page before files_changed so the
+            # refetch does not wait on kuzu/viewer.sh.
+            ws_key = str(workspace.resolve())
+            cached = (request.app.get("graph_data_per_ws") or {}).get(ws_key)
+            if isinstance(cached, dict):
+                await asyncio.to_thread(
+                    wiki_sync.inject_on_disk_pages, workspace, cached,
+                )
+            asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
         _log_event(
             request.app, "file_delete", f"deleted {rel} → {trashed_to}",
             source="fileops", actor="user",
@@ -747,16 +763,22 @@ async def _activate(app: web.Application, new_path: Path) -> None:
     cache: dict[str, dict] = app.setdefault("graph_data_per_ws", {})
     app["graph_data"] = cache.get(str(new_path.resolve()))
     # Reset the FOREGROUND thread id — a new workspace is a new rail
-    # context; the next rail turn opens a fresh thread in the new
-    # workspace's DB. Old conversations.db rows stay on disk.
+    # context. Restore the destination workspace's most-recent thread
+    # *before* hello so clients don't sit with focusedThread=null and
+    # adopt a background RUN_STARTED from the workspace we just left.
     #
     # Do NOT wipe `llm_sessions`: provider resume handles are keyed by
     # thread_id (not provider), so a backgrounded run in the workspace
     # we're leaving keeps its session and stays steerable from the
     # (cross-workspace) Agent Dashboard. The foreground rail won't
-    # mis-resume because thread_id is reset to None here.
+    # mis-resume because thread_id is the destination's thread.
     app["thread_id"] = None
     app["thread_kind"] = None
+    dest_tid = await asyncio.to_thread(conversations.active_thread_id, new_path)
+    if dest_tid:
+        app["thread_id"] = dest_tid
+        dest_kind = await asyncio.to_thread(conversations.thread_kind, new_path, dest_tid)
+        app["thread_kind"] = dest_kind or "structured-agent"
     workspaces.register(new_path, set_active=True)
     try:
         from . import workspace_plan
@@ -870,6 +892,7 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "embedding_backend": app_settings.get_embedding_backend(),
         "embedding_vendors_keyed": vendor_keyed,
         "media": media,
+        "orchestration_preference": orchestration_policy.get_preference(),
     })
 
 
@@ -894,6 +917,8 @@ async def handle_settings_post(request: web.Request) -> web.Response:
                 )
             except Exception:  # noqa: BLE001
                 log.exception("rail-history relocation failed for %s", workspace)
+    if "orchestration_preference" in body:
+        orchestration_policy.set_preference(body["orchestration_preference"])
     if "embedding_backend" in body:
         try:
             app_settings.set_embedding_backend(str(body["embedding_backend"]))
@@ -935,6 +960,207 @@ async def handle_settings_post(request: web.Request) -> web.Response:
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=400)
     return await handle_settings_get(request)
+
+
+async def handle_orchestration_policy_get(request: web.Request) -> web.Response:
+    """Inspectable Auto-orchestration policy + hard bounds. No secrets.
+
+    Scoped to the focused workspace — each vault has its own recipe
+    weights. Priors fill in until that desk has outcomes.
+    """
+    workspace: Path = request.app["workspace"]
+    return web.json_response(orchestration_policy.inspect_state(workspace))
+
+
+async def handle_schedules_list(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    items = await asyncio.to_thread(schedules.list_items, workspace)
+    return web.json_response({"schedules": items})
+
+
+async def handle_schedules_create(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    title = str(body.get("title") or "Untitled").strip()
+    prompt = str(body.get("prompt") or "")
+    freq = str(body.get("frequency") or "daily")
+    every = body.get("every_hours")
+    pref = body.get("preference")
+    try:
+        pref_f = float(pref) if pref is not None else None
+    except (TypeError, ValueError):
+        pref_f = None
+    item = await asyncio.to_thread(
+        schedules.create, workspace,
+        title=title, prompt=prompt, frequency=freq,
+        every_hours=every, enabled=body.get("enabled", True),
+        preference=pref_f,
+    )
+    if body.get("run_now"):
+        asyncio.create_task(_fire_schedule(request.app, workspace, item))
+    return web.json_response({"ok": True, "schedule": item})
+
+
+async def handle_schedules_update(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    sid = request.match_info.get("sid", "").strip()
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    item = await asyncio.to_thread(schedules.update, workspace, sid, body)
+    if item is None:
+        return web.json_response({"error": "unknown schedule"}, status=404)
+    return web.json_response({"ok": True, "schedule": item})
+
+
+async def handle_schedules_delete(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    sid = request.match_info.get("sid", "").strip()
+    ok = await asyncio.to_thread(schedules.delete, workspace, sid)
+    if not ok:
+        return web.json_response({"error": "unknown schedule"}, status=404)
+    return web.json_response({"ok": True})
+
+
+async def handle_schedules_run(request: web.Request) -> web.Response:
+    workspace: Path = request.app["workspace"]
+    sid = request.match_info.get("sid", "").strip()
+    item = await asyncio.to_thread(schedules.get, workspace, sid)
+    if item is None:
+        return web.json_response({"error": "unknown schedule"}, status=404)
+    asyncio.create_task(_fire_schedule(request.app, workspace, item))
+    return web.json_response({"ok": True, "started": True})
+
+
+async def _fire_schedule(
+    app: web.Application, workspace: Path, item: dict[str, Any],
+) -> None:
+    sid = str(item.get("id") or "")
+    prompt = str(item.get("prompt") or "").strip()
+    if not sid or not prompt:
+        return
+    await asyncio.to_thread(schedules.mark_started, workspace, sid, "pending")
+    pref = item.get("preference")
+    try:
+        pref_f = float(pref) if pref is not None else None
+    except (TypeError, ValueError):
+        pref_f = None
+    try:
+        rid = await _dispatch_auto(
+            app, None, prompt,
+            preference=pref_f,
+            workspace_override=workspace,
+        )
+        if rid:
+            await asyncio.to_thread(schedules.set_running, workspace, sid, rid)
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001
+        log.exception("schedule %s failed in %s", sid, workspace)
+    finally:
+        try:
+            await asyncio.to_thread(schedules.mark_finished, workspace, sid)
+        except Exception:  # noqa: BLE001
+            log.exception("schedule mark_finished failed")
+
+
+async def _tick_schedules(app: web.Application) -> None:
+    try:
+        data = await asyncio.to_thread(workspaces.load)
+    except Exception:  # noqa: BLE001
+        return
+    for raw in data.get("paths") or []:
+        ws = Path(str(raw))
+        if not ws.is_dir():
+            continue
+        try:
+            live_ids = {
+                str(r.get("run_id") or "")
+                for r in (app.get("runs") or {}).values()
+                if r.get("workspace") == str(ws)
+            }
+            await asyncio.to_thread(schedules.clear_stale_running, ws, live_ids)
+            items = await asyncio.to_thread(schedules.list_items, ws)
+        except Exception:  # noqa: BLE001
+            continue
+        for item in items:
+            if not schedules.is_due(item):
+                continue
+            asyncio.create_task(_fire_schedule(app, ws, item))
+
+
+async def handle_orchestration_org(request: web.Request) -> web.Response:
+    """Standing desk roster for Agent Space when no run is live."""
+    raw = (request.query.get("workspace") or "").strip()
+    workspace: Path = request.app["workspace"]
+    if raw:
+        cand = Path(raw)
+        if cand.is_dir() and workspaces.is_within_home(cand):
+            workspace = cand
+    org = await asyncio.to_thread(orchestrator_fs.load_org, workspace)
+    return web.json_response({
+        "org": org,
+        "workspace": str(workspace),
+        "workspace_name": workspace.name,
+    })
+
+
+async def handle_orchestration_policy_reset(request: web.Request) -> web.Response:
+    """Drop learned bandit state for this workspace; priors remain."""
+    workspace: Path = request.app["workspace"]
+    orchestration_policy.reset_state(workspace)
+    return web.json_response({"ok": True, **orchestration_policy.inspect_state(workspace)})
+
+
+async def handle_orchestration_interrupted(request: web.Request) -> web.Response:
+    """Checkpoints that can be resumed after a crash or daemon restart.
+
+    Live parent Runs (including overnight waits) stay in ``/api/runs/active``
+    and are omitted here so the dashboard does not list them twice.
+    """
+    focused: Path = request.app["workspace"]
+    try:
+        data = workspaces.load()
+        paths = [str(p) for p in (data.get("paths") or [])]
+    except Exception:  # noqa: BLE001
+        paths = []
+    paths.insert(0, str(focused))
+    items: list[dict[str, Any]] = []
+    seen_ws: set[str] = set()
+    for raw in paths:
+        if raw in seen_ws:
+            continue
+        seen_ws.add(raw)
+        ws = Path(raw)
+        if not ws.is_dir():
+            continue
+        chunk = await asyncio.to_thread(orchestration.list_interrupted, ws)
+        for rec in chunk:
+            rec = dict(rec)
+            rec["workspace"] = str(ws)
+            rec["workspace_name"] = ws.name
+            items.append(rec)
+    items.sort(key=lambda r: float(r.get("updated_at") or 0), reverse=True)
+    runs: dict[str, dict[str, Any]] = request.app.get("runs") or {}
+    live = {
+        rid for rid, rec in runs.items()
+        if rec.get("status") in _ORCH_BUSY_STATUSES
+    }
+    items = [i for i in items if i.get("orchestration_id") not in live]
+    return web.json_response({"runs": items})
+
+
+async def handle_orchestration_resume(request: web.Request) -> web.Response:
+    oid = request.match_info.get("orchestration_id", "").strip()
+    if not oid:
+        return web.json_response({"error": "orchestration_id required"}, status=400)
+    t = asyncio.create_task(_resume_orchestration(request.app, oid))
+    t.add_done_callback(_make_dispatch_error_surface(request.app, oid))
+    return web.json_response({"ok": True, "orchestration_id": oid, "resuming": True})
 
 
 async def handle_curator_profile_get(request: web.Request) -> web.Response:
@@ -4012,7 +4238,9 @@ async def handle_permission_watch(request: web.Request) -> web.Response:
     except Exception as e:  # noqa: BLE001
         log.exception("watch-in-shell spawn failed")
         return web.json_response({"error": str(e)}, status=500)
-    await _broadcast(app, protocol.thread_focused(thread_id, "interactive-pty"))
+    await _broadcast(app, protocol.thread_focused(
+        thread_id, "interactive-pty", workspace=str(workspace),
+    ))
     return web.json_response({"ok": True, "thread_id": thread_id})
 
 
@@ -4812,7 +5040,9 @@ async def _dispatch_shell_command(
         log.exception("!cmd spawn failed")
         await ws.send_json({"type": "term.error", "message": str(e)})
         return
-    await _broadcast(app, protocol.thread_focused(thread_id, "interactive-pty"))
+    await _broadcast(app, protocol.thread_focused(
+        thread_id, "interactive-pty", workspace=str(app["workspace"]),
+    ))
     # Give the shell a beat to source ~/.bashrc / .zshrc, then write
     # the command + newline. A small sleep here keeps the prompt
     # from interleaving with our injected line in the displayed
@@ -5030,6 +5260,21 @@ def _run_workspace(app: web.Application, run_id: str) -> Path | None:
     return Path(raw) if raw else None
 
 
+def _workspace_key(path: Path | str) -> str:
+    try:
+        return str(Path(path).expanduser().resolve())
+    except OSError:
+        return str(path).rstrip("/")
+
+
+def _is_focused_workspace(app: web.Application, workspace: Path | str) -> bool:
+    """True when `workspace` is the daemon's currently focused vault."""
+    cur = app.get("workspace")
+    if cur is None:
+        return False
+    return _workspace_key(workspace) == _workspace_key(cur)
+
+
 def _remember_run_thread(app: web.Application, run_id: str, thread_id: str) -> None:
     """run→thread twin of `_remember_run_workspace`: keeps a finished
     run steerable/continuable — the dashboard can resolve its thread
@@ -5167,6 +5412,10 @@ async def handle_run_cancel(request: web.Request) -> web.Response:
     rec = runs.get(run_id)
     if rec is None:
         return web.json_response({"ok": True, "note": "already finished"})
+    rec["user_cancel"] = True
+    parent_id = rec.get("parent_run_id")
+    if parent_id and runs.get(parent_id):
+        runs[parent_id]["user_cancel"] = True
     task = rec.get("task")
     if task is not None:
         try:
@@ -6054,7 +6303,7 @@ def _threads_running(app: web.Application) -> dict[str, int]:
     running: dict[str, int] = {}
     for rec in (app.get("runs") or {}).values():
         tid = rec.get("thread_id")
-        if tid and rec.get("status") in ("running", "planning", "merging"):
+        if tid and rec.get("status") in _ORCH_BUSY_STATUSES:
             running[tid] = running.get(tid, 0) + 1
     return running
 
@@ -6107,7 +6356,9 @@ async def handle_thread_new(request: web.Request) -> web.Response:
     tid = await asyncio.to_thread(conversations.new_thread, workspace, title, kind)
     request.app["thread_id"] = tid
     request.app["thread_kind"] = kind
-    await _broadcast(request.app, protocol.thread_focused(tid, kind))
+    await _broadcast(request.app, protocol.thread_focused(
+        tid, kind, workspace=str(workspace),
+    ))
     return web.json_response({"ok": True, "thread_id": tid, "kind": kind})
 
 
@@ -6130,7 +6381,9 @@ async def handle_thread_focus(request: web.Request) -> web.Response:
         )
     request.app["thread_id"] = tid
     request.app["thread_kind"] = kind
-    await _broadcast(request.app, protocol.thread_focused(tid, kind))
+    await _broadcast(request.app, protocol.thread_focused(
+        tid, kind, workspace=str(workspace),
+    ))
     return web.json_response({"ok": True, "thread_id": tid, "kind": kind})
 
 
@@ -6191,6 +6444,7 @@ async def handle_thread_archive(request: web.Request) -> web.Response:
         if refocused:
             await _broadcast(request.app, protocol.thread_focused(
                 refocused, request.app["thread_kind"] or "structured-agent",
+                workspace=str(workspace),
             ))
     await _broadcast(request.app, protocol.custom({
         "type": "thread.archived", "thread_id": tid,
@@ -6456,7 +6710,7 @@ async def _a2a_message_send(
         busy = [
             r for r in (app.get("runs") or {}).values()
             if r.get("thread_id") == tid
-            and r.get("status") in ("running", "planning", "merging")
+            and r.get("status") in _ORCH_BUSY_STATUSES
         ]
         if busy:
             return web.json_response(a2a.rpc_error(
@@ -6511,7 +6765,7 @@ async def _a2a_tasks_get(
             req_id, a2a.ERR_INVALID_PARAMS, "id required",
         ))
     rec = (app.get("runs") or {}).get(run_id)
-    if rec is not None and rec.get("status") in ("running", "planning", "merging"):
+    if rec is not None and rec.get("status") in _ORCH_BUSY_STATUSES:
         return web.json_response(a2a.rpc_result(req_id, a2a.task(
             run_id=run_id,
             thread_id=str(rec.get("thread_id") or ""),
@@ -8022,43 +8276,32 @@ async def _handle_quit_slash(
 
 
 # ── Daemon restart (user-requested) ──────────────────────────────────
-# In-app UI for `make restart` (Settings button + /start). Only meaningful
-# when THIS process is the installed always-on service; a dev daemon must
-# refuse (make restart would kickstart a rival onto :8765). The service
-# manager hard-restarts the job, so the frontend's boot_id watcher
-# (devReload.ts) auto-reloads the PWA once the new process is up.
+# Settings → Restart and `/start`. The managed launchd/systemd job is
+# bounced via `service restart`. A foreground `serve` re-execs itself
+# after releasing the port. The PWA's boot_id watcher reloads either way.
 
-_RESTART_DEV_MSG = (
-    "This looks like a development daemon (`make dev-daemon`), not the "
-    "installed service — restarting it here would launch a second daemon "
-    "on the same port. Restart it from the terminal you started it in."
-)
-_RESTART_NOT_INSTALLED_MSG = (
-    "Switch Bay isn't installed as a background service yet, so there's "
-    "nothing to restart in place. Install it with `make install-service` "
-    "(then this button works), or restart your dev daemon from its terminal."
-)
+def _restart_this_daemon(app: web.Application) -> None:
+    """Restart whichever process is serving :8765.
 
-
-def _restart_precheck(app: web.Application) -> str | None:
-    """Return a human-readable refusal, or None if restart may proceed."""
+    The installed launchd/systemd job uses ``service restart``. A
+    foreground ``serve`` (Settings from a PWA talking to `make
+    dev-daemon` / a manual `python -m switchbay serve`) re-execs itself
+    after a short delay so it does not spawn a rival on the same port.
+    """
     if app.get("service_managed"):
-        return None
-    if service.is_installed():
-        return _RESTART_DEV_MSG
-    return _RESTART_NOT_INSTALLED_MSG
+        service.spawn_restart()
+        return
+    service.spawn_self_reexec()
+    _schedule_daemon_exit(app)
 
 
 async def handle_restart(request: web.Request) -> web.Response:
-    """POST /api/restart — run `make restart` (Settings → Restart). 409
-    with a reason when this daemon isn't the managed service."""
-    refusal = _restart_precheck(request.app)
-    if refusal:
-        return web.json_response({"ok": False, "error": refusal}, status=409)
+    """POST /api/restart — Settings → Restart. Restarts the process
+    that is actually serving this PWA (managed service or foreground)."""
     try:
-        service.spawn_restart()
+        _restart_this_daemon(request.app)
     except Exception as e:  # noqa: BLE001
-        log.exception("spawn_restart failed")
+        log.exception("restart failed")
         return web.json_response(
             {"ok": False, "error": f"could not start restart: {e}"}, status=500,
         )
@@ -8102,8 +8345,7 @@ async def handle_update_check(request: web.Request) -> web.Response:
 
 async def handle_update(request: web.Request) -> web.Response:
     """POST /api/update — check GitHub, apply any older components, then
-    restart the managed service so the PWA reloads. Apply still runs on
-    a dev daemon; only the restart is gated (same 409 as /api/restart)."""
+    restart this daemon so the PWA reloads."""
     blocked = _policy_block("in_app_update")
     if blocked:
         return blocked
@@ -8118,13 +8360,8 @@ async def handle_update(request: web.Request) -> web.Response:
     if not body.get("updated"):
         body.setdefault("restarted", False)
         return web.json_response(body)
-    refusal = _restart_precheck(request.app)
-    if refusal:
-        body["restarted"] = False
-        body["restart_error"] = refusal
-        return web.json_response(body)
     try:
-        service.spawn_restart()
+        _restart_this_daemon(request.app)
     except Exception as e:  # noqa: BLE001
         log.exception("spawn_restart after update failed")
         body["restarted"] = False
@@ -8138,17 +8375,13 @@ async def handle_update(request: web.Request) -> web.Response:
 async def _handle_start_slash(
     app: web.Application, ws: web.WebSocketResponse,
 ) -> None:
-    refusal = _restart_precheck(app)
-    if refusal:
-        await ws.send_json(protocol.notice(refusal, kind="slash"))
-        return
     await ws.send_json(protocol.notice(
         "Restarting Switch Bay… the app reconnects on its own once it's "
         "back up.",
         kind="slash",
     ))
     try:
-        service.spawn_restart()
+        _restart_this_daemon(app)
     except Exception as e:  # noqa: BLE001
         log.exception("spawn_restart failed")
         await ws.send_json(protocol.notice(
@@ -8877,23 +9110,469 @@ async def _dispatch_route(
     await _dispatch_fanout(app, ws, desc, n, is_route=True)
 
 
+def _keyed_provider_count() -> int:
+    return sum(1 for p in llmgateway.list_providers() if p.get("has_key"))
+
+
+async def _stream_parent_reply(
+    app: web.Application, *, parent_run_id: str, thread_id: str, text: str,
+) -> None:
+    msg_id = protocol.new_message_id()
+    await _broadcast(app, protocol.text_message_start(parent_run_id, msg_id))
+    await _broadcast(app, protocol.text_message_content(parent_run_id, msg_id, text))
+    await _broadcast(app, protocol.text_message_end(parent_run_id, msg_id))
+
+
+async def _chat_notice(
+    app: web.Application, ws: web.WebSocketResponse | None, text: str,
+    **kw: Any,
+) -> None:
+    msg = protocol.notice(text, **kw)
+    if ws is not None:
+        try:
+            await ws.send_json(msg)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+    await _broadcast(app, msg)
+
+
+async def _dispatch_auto(
+    app: web.Application, ws: web.WebSocketResponse | None, text: str,
+    *, preference: float | None = None,
+    workspace_override: Path | None = None,
+    thread_id_override: str | None = None,
+) -> str | None:
+    """Default chat path: Auto orchestration.
+
+    Null hypothesis is a single ordinary Run (`_dispatch_chat`). Extra
+    workers / verify / expansion only fire when the conservative policy
+    says the task structure, uncertainty, or preference justifies them.
+
+    ``workspace_override`` runs Auto in another vault (scheduler) without
+    stealing the focused rail thread.
+    """
+    workspace: Path = workspace_override or app["workspace"]
+    headless = ws is None or workspace_override is not None
+    pref = (
+        orchestration_policy.clamp_preference(preference)
+        if preference is not None
+        else orchestration_policy.get_preference()
+    )
+    features = orchestration_policy.extract_features(
+        text,
+        preference=pref,
+        provider_diversity=_keyed_provider_count(),
+    )
+    try:
+        state = orchestration_policy.load_state(workspace)
+    except Exception:  # noqa: BLE001
+        state = None
+    decision = orchestration_policy.decide(features, state=state)
+    plain_single = (
+        decision.strategy == "single"
+        and not decision.include_verify
+        and not decision.include_execute
+        and decision.n_investigators <= 1
+    )
+    if plain_single:
+        t0 = time.time()
+        run_id = await _dispatch_chat(
+            app, ws, text, workspace_override=workspace_override,
+            thread_id_override=thread_id_override,
+        )
+        if run_id:
+            usage = (app.get("run_usage") or {}).pop(run_id, {}) or {}
+            tok_in = usage.get("input_tokens") if isinstance(usage.get("input_tokens"), int) else 0
+            tok_out = usage.get("output_tokens") if isinstance(usage.get("output_tokens"), int) else 0
+            orchestration_policy.record_outcome({
+                "orchestration_id": run_id,
+                "strategy": "single",
+                "arm_id": "single",
+                "explored": bool(decision.explored),
+                "preference": pref,
+                "features": features.to_dict(),
+                "bucket": features.bucket(),
+                "initial_nodes": 1,
+                "final_nodes": 1,
+                "dag_depth": 1,
+                "max_concurrency": 1,
+                "tokens": int(usage.get("tokens") or (tok_in + tok_out) or 0),
+                "input_tokens": tok_in or None,
+                "output_tokens": tok_out or None,
+                "latency_s": time.time() - t0,
+                "completed": True,
+                "decision_reason": decision.reason,
+            }, workspace)
+        return run_id
+
+    pid = _resolve_default_provider()
+    try:
+        provider = llmgateway.get(pid)
+    except llmgateway.ProviderError as e:
+        await _chat_notice(app, ws, f"llm: {e}", kind="chat")
+        return None
+    if not provider.has_key():
+        await _chat_notice(
+            app, ws,
+            f"no API key configured for {provider.LABEL}. Open Settings to add one.",
+            kind="chat",
+        )
+        return None
+
+    parent_run_id = f"run-{uuid.uuid4().hex[:8]}"
+    model = _effective_model(pid) or provider.PROVIDER.get("default_model")
+    n = decision.n_investigators
+    runs: dict[str, dict[str, Any]] = app.setdefault("runs", {})
+    runs[parent_run_id] = {
+        "run_id": parent_run_id,
+        "provider": pid,
+        "model": model,
+        "input_excerpt": f"[auto {decision.strategy}] {text[:100]}",
+        "started_at": time.time(),
+        "last_chunk_at": time.time(),
+        "tool_count": 0,
+        "status": "planning",
+        "task": asyncio.current_task(),
+        "workspace": str(workspace),
+        "workspace_name": workspace.name,
+        "fanout_n": n,
+        "workers_total": n,
+        "workers_running": 0,
+        "orchestration_id": parent_run_id,
+        "orchestration_strategy": decision.strategy,
+        "preference": pref,
+        "decision_reason": decision.reason,
+        "independence": decision.independence,
+    }
+    _remember_run_workspace(app, parent_run_id, workspace)
+
+    if headless:
+        thread_id = thread_id_override or await asyncio.to_thread(
+            conversations.new_thread, workspace,
+        )
+    else:
+        thread_id = app.get("thread_id")
+        if not thread_id:
+            thread_id = await asyncio.to_thread(conversations.new_thread, workspace)
+            app["thread_id"] = thread_id
+            app["thread_kind"] = "structured-agent"
+        if app.get("thread_kind") == "interactive-pty":
+            runs.pop(parent_run_id, None)
+            await _chat_notice(
+                app, ws,
+                "this is a shell thread — start a new thread for chat.",
+                kind="chat",
+            )
+            return None
+        busy = [
+            r for r in runs.values()
+            if r.get("thread_id") == thread_id
+            and r.get("run_id") != parent_run_id
+            and r.get("status") in _ORCH_BUSY_STATUSES
+        ]
+        if busy:
+            runs.pop(parent_run_id, None)
+            await _chat_notice(
+                app, ws,
+                f"thread is busy — {busy[0].get('run_id')} is still streaming. "
+                "Wait for it to finish, or start a new thread.",
+                kind="chat",
+            )
+            return None
+    runs[parent_run_id]["thread_id"] = thread_id
+    _remember_run_thread(app, parent_run_id, thread_id)
+    _append_event(app, workspace, thread_id, "user", text, run_id=parent_run_id)
+    await _broadcast(app, protocol.run_started(
+        thread_id, parent_run_id, pid, str(model), str(workspace),
+    ))
+
+    try:
+        await _chat_notice(
+            app, ws, f"Auto: {decision.reason}.", kind="chat",
+            workspace=str(workspace),
+            run_id=parent_run_id,
+            thread_id=thread_id,
+        )
+        await _broadcast(app, protocol.step_started(parent_run_id, "planning"))
+        if parent_run_id in runs:
+            runs[parent_run_id]["step"] = "planning"
+
+        # Deterministic decomposition: a planner LLM would serialize the
+        # DAG and correlate every worker's prior. Explicit n≥2 fan-out
+        # still uses fanout.plan. Extra allocation slots go to the
+        # verifier so it is not the same model as investigator 0.
+        tasks_list = orchestration_policy.decompose_tasks(text, n, features)
+        planner_meta = {
+            "provider": None, "model": None,
+            "input_tokens": None, "output_tokens": None,
+            "decomposition": "deterministic",
+        }
+        allocations = orchestration_policy.allocate_models(
+            len(tasks_list) + (1 if decision.include_verify else 0),
+            independence=decision.independence,
+            preference=pref,
+            default_provider=pid,
+            default_model=model,
+            workspace=workspace,
+            bucket=features.bucket(),
+        )
+        from .agents import orchestration_health as orch_health
+        skipped = orch_health.skip_notes()
+        roster = orchestration_policy.format_allocation_notice(
+            allocations,
+            rail_provider=pid,
+            rail_model=str(model) if model else None,
+            skipped=skipped or None,
+        )
+        if roster:
+            await _chat_notice(
+                app, ws, roster, kind="chat",
+                workspace=str(workspace),
+                run_id=parent_run_id,
+                thread_id=thread_id,
+            )
+        hints = orchestration_policy.method_hints_for(
+            len(tasks_list), decision.independence, features,
+        )
+        plan = orchestration.plan_from_decision(
+            text, decision, tasks_list,
+            orchestration_id=parent_run_id,
+            allocations=allocations,
+            method_hints=hints,
+        )
+        plan.features = features.to_dict()
+        if parent_run_id in runs:
+            runs[parent_run_id]["planner_provider"] = planner_meta.get("provider")
+            runs[parent_run_id]["planner_model"] = planner_meta.get("model")
+            runs[parent_run_id]["planner_input_tokens"] = planner_meta.get("input_tokens")
+            runs[parent_run_id]["planner_output_tokens"] = planner_meta.get("output_tokens")
+            runs[parent_run_id]["status"] = "running"
+        await _broadcast(app, protocol.step_finished(parent_run_id, "planning"))
+
+        result = await orchestration.execute(
+            plan,
+            app=app, workspace=workspace, thread_id=thread_id,
+            parent_run_id=parent_run_id, default_provider=provider,
+            default_model=model, ws=ws,
+        )
+        merged = result.output
+        if not merged:
+            merged = "_Auto orchestration produced no output._\n"
+        await _stream_parent_reply(
+            app, parent_run_id=parent_run_id, thread_id=thread_id, text=merged,
+        )
+        fanout.append_to_rail_log(
+            workspace, thread_id, parent_run_id=parent_run_id, merged=merged,
+        )
+        fanout.write_summary(
+            workspace, parent_run_id,
+            text=text, tasks=tasks_list, merged=merged,
+            planner_meta=planner_meta, results=result.results,
+        )
+        if parent_run_id in runs and result.telemetry:
+            runs[parent_run_id]["expansions"] = result.telemetry.get("targeted_expansions")
+            runs[parent_run_id]["verification_conflicts"] = result.telemetry.get(
+                "verification_conflicts",
+            )
+            runs[parent_run_id]["tokens"] = result.telemetry.get("tokens")
+        await _broadcast(app, protocol.run_finished(
+            thread_id, parent_run_id,
+            result.telemetry.get("input_tokens"),
+            result.telemetry.get("output_tokens"),
+            "end_turn",
+        ))
+    except asyncio.CancelledError:
+        await _broadcast(app, protocol.run_error(
+            parent_run_id, "cancelled", "orchestration cancelled", thread_id,
+        ))
+        raise
+    except llmgateway.ProviderError as e:
+        await _broadcast(app, protocol.run_error(parent_run_id, e.code, str(e), thread_id))
+    except Exception as e:  # noqa: BLE001
+        log.exception("auto orchestration crashed; falling back to single run")
+        await _broadcast(app, protocol.run_error(
+            parent_run_id, "server", str(e), thread_id,
+        ))
+        runs.pop(parent_run_id, None)
+        try:
+            await _dispatch_chat(app, ws, text)
+        except Exception:  # noqa: BLE001
+            log.exception("single-run fallback also failed")
+    finally:
+        runs.pop(parent_run_id, None)
+    return parent_run_id
+
+
+async def _resume_orchestration(
+    app: web.Application, orchestration_id: str,
+    *,
+    workspace: Path | None = None,
+) -> None:
+    """Continue an interrupted DAG without re-running finished nodes."""
+    focused: Path = app["workspace"]
+    workspace = workspace or await asyncio.to_thread(
+        orchestration.workspace_for_orchestration, orchestration_id, fallback=focused,
+    ) or focused
+    ck = await asyncio.to_thread(
+        orchestration.load_checkpoint, workspace, orchestration_id,
+    )
+    if ck is None or ck.get("plan") is None:
+        log.warning("resume %s: no checkpoint", orchestration_id)
+        return
+    status = ck["status"]
+    if not orchestration.checkpoint_resumable(status):
+        log.info("resume %s: not resumable (phase=%s)", orchestration_id, status.get("phase"))
+        return
+    plan = ck["plan"]
+    thread_id = str(status.get("thread_id") or app.get("thread_id") or "")
+    if not thread_id:
+        thread_id = await asyncio.to_thread(conversations.new_thread, workspace)
+        app["thread_id"] = thread_id
+        app["thread_kind"] = "structured-agent"
+    pid = str(status.get("default_provider") or "") or _resolve_default_provider()
+    try:
+        provider = llmgateway.get(pid)
+    except llmgateway.ProviderError as e:
+        await _broadcast(app, protocol.notice(f"resume failed: {e}", kind="chat"))
+        return
+    if not provider.has_key():
+        await _broadcast(app, protocol.notice(
+            f"resume failed: no key for {getattr(provider, 'LABEL', pid)}",
+            kind="chat",
+        ))
+        return
+    model = status.get("default_model") or _effective_model(pid) or provider.PROVIDER.get("default_model")
+    runs: dict[str, dict[str, Any]] = app.setdefault("runs", {})
+    if orchestration_id in runs and runs[orchestration_id].get("status") in _ORCH_BUSY_STATUSES:
+        return
+    runs[orchestration_id] = {
+        "run_id": orchestration_id,
+        "provider": pid,
+        "model": model,
+        "input_excerpt": f"[interrupted] {(plan.objective or '')[:100]}",
+        "started_at": time.time(),
+        "last_chunk_at": time.time(),
+        "tool_count": 0,
+        "status": "running",
+        "task": asyncio.current_task(),
+        "workspace": str(workspace),
+        "workspace_name": workspace.name,
+        "thread_id": thread_id,
+        "orchestration_id": orchestration_id,
+        "orchestration_strategy": plan.strategy,
+        "resumed": True,
+        "interrupted": True,
+        "workers_running": 0,
+        "fanout_n": sum(1 for n in plan.nodes if n.kind == "investigate") or 1,
+    }
+    _remember_run_workspace(app, orchestration_id, workspace)
+    _remember_run_thread(app, orchestration_id, thread_id)
+    await _broadcast(app, protocol.run_started(
+        thread_id, orchestration_id, pid, str(model), str(workspace),
+    ))
+    snap = await asyncio.to_thread(
+        orchestration.load_snapshot, workspace, orchestration_id,
+    )
+    inflight = (snap or {}).get("in_flight") or []
+    inflight_bits = []
+    for rec in inflight[:6]:
+        if not isinstance(rec, dict):
+            continue
+        inflight_bits.append(
+            f"{rec.get('node_id')} {rec.get('provider') or ''} "
+            f"{rec.get('tool_count') or 0} tools"
+        )
+    snap_line = (
+        (" In flight: " + "; ".join(inflight_bits) + ".")
+        if inflight_bits else ""
+    )
+    await _broadcast(app, protocol.notice(
+        f"This Auto run was interrupted. Resuming `{orchestration_id}` "
+        f"from snapshot — {len(status.get('completed') or [])} nodes already "
+        f"done.{snap_line} Chief of staff keeps the original goal.",
+        kind="chat",
+        workspace=str(workspace),
+        run_id=orchestration_id,
+        thread_id=thread_id,
+    ))
+    try:
+        result = await orchestration.execute(
+            plan, app=app, workspace=workspace, thread_id=thread_id,
+            parent_run_id=orchestration_id, default_provider=provider,
+            default_model=model, resume=True,
+        )
+        merged = result.output or ""
+        if merged:
+            await _stream_parent_reply(
+                app, parent_run_id=orchestration_id, thread_id=thread_id, text=merged,
+            )
+            fanout.append_to_rail_log(
+                workspace, thread_id,
+                parent_run_id=orchestration_id, merged=merged,
+            )
+        await _broadcast(app, protocol.run_finished(
+            thread_id, orchestration_id,
+            result.telemetry.get("input_tokens"),
+            result.telemetry.get("output_tokens"),
+            "end_turn",
+        ))
+    except asyncio.CancelledError:
+        await _broadcast(app, protocol.run_error(
+            orchestration_id, "cancelled", "resume cancelled", thread_id,
+        ))
+        raise
+    except Exception as e:  # noqa: BLE001
+        log.exception("resume %s failed", orchestration_id)
+        await _broadcast(app, protocol.run_error(
+            orchestration_id, "server", str(e), thread_id,
+        ))
+    finally:
+        runs.pop(orchestration_id, None)
+
+
+async def _resume_interrupted_on_boot(app: web.Application) -> None:
+    """Resume interrupted DAGs in every registered workspace, not just focused."""
+    focused: Path = app["workspace"]
+    try:
+        data = await asyncio.to_thread(workspaces.load)
+    except Exception:  # noqa: BLE001
+        data = {"paths": [str(focused)], "active": str(focused)}
+    paths = [str(p) for p in (data.get("paths") or [])]
+    paths.insert(0, str(focused))
+    seen: set[str] = set()
+    n = 0
+    for raw in paths:
+        if raw in seen:
+            continue
+        seen.add(raw)
+        ws = Path(raw)
+        if not ws.is_dir():
+            continue
+        items = await asyncio.to_thread(orchestration.list_interrupted, ws)
+        for rec in items:
+            oid = str(rec.get("orchestration_id") or "")
+            if not oid:
+                continue
+            log.info("auto-resuming interrupted orchestration %s in %s", oid, ws)
+            await _resume_orchestration(app, oid, workspace=ws)
+            n += 1
+            if n >= 4:
+                return
+
+
 async def _dispatch_fanout(
     app: web.Application, ws: web.WebSocketResponse, text: str, n: int,
     *, preplanned_tasks: list[dict[str, Any]] | None = None,
     is_route: bool = False,
 ) -> None:
-    """Planner → N parallel workers → merger. The +/- counter on
-    the rail input dials in N (≥ 2 triggers this path; 0/1 means
-    ordinary single-agent chat). Each worker has its own run_id so
-    the Agent Dashboard's Running panel shows them concurrently;
-    per-worker output is written to
-    `<workspace>/.workbench/runs/<parent_run_id>/worker-<i>.md`
-    plus a `summary.md` with the merged result.
+    """Explicit-N compatibility path: planner → N workers → concat merge.
 
-    Runs as a background task spawned from the WS handler so the
-    handler stays responsive while the workers are out."""
-    from .agents import fanout
-
+    Triggered when the client sends `n≥2` (advanced override) or
+    `/route`. Ordinary chat uses `_dispatch_auto` instead. Execution
+    goes through `orchestration.execute` so bounds, persistence, and
+    failure handling match Auto DAGs; the plan is the historical
+    fixed-fanout shape (`output_contract: concat`)."""
     pid = _resolve_default_provider()
     try:
         provider = llmgateway.get(pid)
@@ -8956,7 +9635,7 @@ async def _dispatch_fanout(
         r for r in runs.values()
         if r.get("thread_id") == thread_id
         and r.get("run_id") != parent_run_id
-        and r.get("status") in ("running", "planning", "merging")
+        and r.get("status") in _ORCH_BUSY_STATUSES
     ]
     if busy:
         runs.pop(parent_run_id, None)
@@ -9057,25 +9736,20 @@ async def _dispatch_fanout(
         ))
         if parent_run_id in runs:
             runs[parent_run_id]["step"] = f"running {len(tasks_list)} workers"
+            runs[parent_run_id]["orchestration_strategy"] = "fixed_fanout"
+            runs[parent_run_id]["orchestration_id"] = parent_run_id
 
-
-        results = await fanout.run_workers(
-            tasks_list,
-            provider=provider, model=model, workspace=workspace,
-            parent_run_id=parent_run_id, thread_id=thread_id, app=app, ws=ws,
+        plan = orchestration.plan_fixed_fanout(
+            text, tasks_list, orchestration_id=parent_run_id,
         )
-
-        await _broadcast(app, protocol.step_finished(
-            parent_run_id, f"running {len(tasks_list)} workers",
-        ))
-        if parent_run_id in runs:
-            runs[parent_run_id]["status"] = "merging"
-        await _broadcast(app, protocol.step_started(parent_run_id, "merging"))
-        if parent_run_id in runs:
-            runs[parent_run_id]["step"] = "merging"
-
-
-        merged = fanout.merge(text, results)
+        result = await orchestration.execute(
+            plan,
+            app=app, workspace=workspace, thread_id=thread_id,
+            parent_run_id=parent_run_id, default_provider=provider,
+            default_model=model, ws=ws,
+        )
+        results = result.results
+        merged = result.output or fanout.merge(text, results)
         # Stream the merged result so the rail shows it as one
         # assistant message — same TEXT_MESSAGE framing + RUN_FINISHED
         # shape a regular dispatch uses.
@@ -9351,7 +10025,7 @@ async def _dispatch_chat(
     busy = [
         r for r in (app.get("runs") or {}).values()
         if r.get("thread_id") == thread_id and r.get("run_id") != run_id
-        and r.get("status") in ("running", "planning", "merging")
+        and r.get("status") in _ORCH_BUSY_STATUSES
     ]
     if busy:
         notice = protocol.notice(
@@ -9520,6 +10194,8 @@ async def _dispatch_chat(
     wiki_cites: list[str] = []
 
     final_done: tuple[int | None, int | None, str | None] = (None, None, None)
+    usage_in = 0
+    usage_out = 0
     # Run-start fence for create_report: a capable model may render a rich
     # HTML report via the tool (in-daemon for HTTP providers, in the MCP
     # subprocess for claude_code/codex). Neither path can broadcast, so we
@@ -9741,6 +10417,10 @@ async def _dispatch_chat(
                     run_id=run_id,
                 )
             final_done = (input_tokens, output_tokens, stop_reason)
+            if isinstance(input_tokens, int):
+                usage_in += input_tokens
+            if isinstance(output_tokens, int):
+                usage_out += output_tokens
 
             if stop_reason != "tool_use":
                 # Resolve any provider-internal tool_uses (e.g. claude-code
@@ -9937,6 +10617,9 @@ async def _dispatch_chat(
                         "stopped this run. Refining its harness in the "
                         "background so it improves next time.",
                         kind="chat",
+                        workspace=str(workspace),
+                        run_id=run_id,
+                        thread_id=thread_id,
                     ))
                     asyncio.create_task(
                         _autotune_local_harness(app, workspace, run_id),
@@ -9946,6 +10629,9 @@ async def _dispatch_chat(
                         "Agent kept repeating the same tool calls without "
                         "progress — stopped this run.",
                         kind="chat",
+                        workspace=str(workspace),
+                        run_id=run_id,
+                        thread_id=thread_id,
                     ))
                 break
             messages.append({"role": "user", "content": tool_results})
@@ -10047,6 +10733,17 @@ async def _dispatch_chat(
     finally:
         # Always deregister so the Dashboard's "Running" panel
         # reflects truth even when the run errored or was cancelled.
+        # Stash usage first so Auto N=1 telemetry can record tokens
+        # after this run row is gone.
+        app.setdefault("run_usage", {})[run_id] = {
+            "input_tokens": usage_in or None,
+            "output_tokens": usage_out or None,
+            "tokens": (usage_in + usage_out) or 0,
+        }
+        overflow = len(app["run_usage"]) - 256
+        if overflow > 0:
+            for k in list(app["run_usage"])[:overflow]:
+                app["run_usage"].pop(k, None)
         runs = app.get("runs")
         if runs is not None:
             runs.pop(run_id, None)
@@ -10256,16 +10953,26 @@ async def _vet_proposal(app: web.Application, workspace: Path, pid: str,
         # Ensure the Reviews tab exists, but do not steal focus — the
         # user may be in the graph, notes, or another agent thread.
         await asyncio.to_thread(tabstore.add_report_tab, workspace)
-        await _broadcast(app, _hello_payload(app))
-        await _broadcast(app, protocol.custom({
-            "type": "page_proposal_review", "id": pid,
-            "op": entry.get("op"), "kind": entry.get("kind"),
-            "title": title, "path": entry.get("path"),
-            "body": entry.get("body"), "review": verdict,
-        }))
-        await _broadcast(app, protocol.notice(
-            f"↯ Draft “{title}” is in Reviews"
-            + (f" — {one}" if one else "") + ".", kind="chat"))
+        # Only the focused workspace's rail should see this. A
+        # background Auto in another vault still files the draft;
+        # Reviews hydrates when the user switches there.
+        if _is_focused_workspace(app, workspace):
+            await _broadcast(app, _hello_payload(app))
+            await _broadcast(app, protocol.custom({
+                "type": "page_proposal_review", "id": pid,
+                "op": entry.get("op"), "kind": entry.get("kind"),
+                "title": title, "path": entry.get("path"),
+                "body": entry.get("body"), "review": verdict,
+                "workspace": str(workspace),
+            }))
+            await _broadcast(app, protocol.notice(
+                f"↯ Draft “{title}” is in Reviews"
+                + (f" — {one}" if one else "") + ".",
+                kind="chat",
+                workspace=str(workspace),
+                run_id=run_id,
+                thread_id=thread_id,
+            ))
         rel = str(entry.get("path") or "")
         if entry.get("written") and rel:
             _schedule_after_wiki_write(app, workspace, rel)
@@ -10281,12 +10988,20 @@ async def _open_report_tab(app: web.Application, workspace: Path,
     the model's summary in the chat."""
     try:
         await asyncio.to_thread(tabstore.add_report_tab, workspace)
+        if not _is_focused_workspace(app, workspace):
+            return
         await _broadcast(app, _hello_payload(app))
         await _broadcast(app, protocol.custom({
-            "type": "open_report", "report_id": report_id, "title": title,
+            "type": "open_report",
+            "report_id": report_id,
+            "title": title,
+            "workspace": str(workspace),
         }))
         await _broadcast(app, protocol.notice(
-            f"↗ Review ready — “{title}” opened in the Reviews tab.", kind="chat"))
+            f"↗ Review ready — “{title}” opened in the Reviews tab.",
+            kind="chat",
+            workspace=str(workspace),
+        ))
     except Exception:  # noqa: BLE001
         log.exception("open_report_tab failed for %s", report_id)
 
@@ -10521,7 +11236,30 @@ async def handle_report_package_file(request: web.Request) -> web.StreamResponse
         path = await asyncio.to_thread(report_packages.entry_path, workspace, slug)
     if path is None or not path.is_file():
         return web.json_response({"error": "not found"}, status=404)
+    if path.suffix.lower() in {".html", ".htm"}:
+        text = await asyncio.to_thread(path.read_text, encoding="utf-8")
+        # aiohttp forbids charset= in content_type when `text=` is used.
+        return web.Response(
+            text=report_html.linkify_report_html(text),
+            content_type="text/html",
+            headers={"X-Content-Type-Options": "nosniff"},
+        )
     return web.FileResponse(path=path)
+
+
+async def handle_report_packages_close(request: web.Request) -> web.Response:
+    """Close the durable Report-doc tab (Library package viewer).
+
+    Same contract as Reviews / Slideshow ✕: drop the transient tab from
+    mode.json, broadcast hello, focus Graph so the pane does not keep an
+    empty shell.
+    """
+    workspace: Path = request.app["workspace"]
+    removed = await asyncio.to_thread(tabstore.remove_report_doc_tab, workspace)
+    if removed:
+        await _broadcast(request.app, _hello_payload(request.app))
+        await _broadcast(request.app, protocol.nav("graph", {}, "Graph"))
+    return web.json_response({"ok": True, "removed": removed})
 
 
 async def handle_report_package_open(request: web.Request) -> web.Response:
@@ -10873,7 +11611,7 @@ async def handle_report_get(request: web.Request) -> web.Response:
     html = await asyncio.to_thread(reports.html_of, workspace, report_id)
     if html is None:
         return web.json_response({"error": "no such report"}, status=404)
-    return _untrusted_html_response(html)
+    return _untrusted_html_response(report_html.linkify_report_html(html))
 
 
 async def handle_proposals_pending(request: web.Request) -> web.Response:
@@ -11002,6 +11740,11 @@ async def handle_proposal_decide(request: web.Request) -> web.Response:
         await _after_wiki_write(
             request.app, workspace, str(e.get("path") or ""),
         )
+    elif decision in ("dismiss", "reject"):
+        try:
+            orchestrator_fs.forget_landed(workspace, str(e.get("path") or ""))
+        except Exception:  # noqa: BLE001
+            pass
     await _broadcast(request.app, protocol.custom({
         "type": "page_proposal_resolved", "id": pid, "decision": decision}))
     return web.json_response({"ok": True, "status": e.get("status"), "path": e.get("path")})
@@ -12730,7 +13473,9 @@ async def handle_localllm_watch(request: web.Request) -> web.Response:
     except Exception as e:  # noqa: BLE001
         log.exception("localllm watch spawn failed")
         return web.json_response({"error": str(e)}, status=500)
-    await _broadcast(app, protocol.thread_focused(thread_id, "interactive-pty"))
+    await _broadcast(app, protocol.thread_focused(
+        thread_id, "interactive-pty", workspace=str(workspace),
+    ))
     await asyncio.sleep(0.08)
     terminals.write_input(
         session, f"tail -n 200 -f {shlex.quote(str(logp))}\n".encode("utf-8"),
@@ -13587,16 +14332,17 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                     raw_n = data.get("n")
                     fanout_n = 0
                     if isinstance(raw_n, int) and raw_n >= 2:
-                        fanout_n = min(raw_n, 8)  # mirror fanout.MAX_N
+                        fanout_n = min(raw_n, fanout.MAX_N)
+                    raw_pref = data.get("preference")
+                    pref: float | None = None
+                    if isinstance(raw_pref, (int, float)):
+                        pref = orchestration_policy.clamp_preference(raw_pref)
                     parsed = rail.parse(raw_text)
                     kind = parsed.get("kind", "chat")
                     body = parsed.get("body", "")
                     if kind == "chat" and body.strip():
                         if fanout_n >= 2:
-                            # Fan-out path: planner → N workers → merge.
-                            # Skips the rule / intent / single-agent
-                            # paths because the user explicitly asked
-                            # for parallelism.
+                            # Advanced override: explicit fixed-N fan-out.
                             t = asyncio.create_task(
                                 _dispatch_fanout(request.app, ws, body, fanout_n),
                             )
@@ -13615,10 +14361,12 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                         elif await _try_intent_dispatch(request.app, ws, body):
                             pass
                         else:
-                            # 2. LLM dispatch — runs in the background
-                            #    so the WS handler stays responsive to
-                            #    other messages.
-                            t = asyncio.create_task(_dispatch_chat(request.app, ws, body))
+                            # 2. Auto orchestration (may still be one Run).
+                            t = asyncio.create_task(
+                                _dispatch_auto(
+                                    request.app, ws, body, preference=pref,
+                                ),
+                            )
                             t.add_done_callback(_make_dispatch_error_surface(request.app, ws))
                     elif kind == "slash":
                         # Slash commands route through the verb registry:
@@ -14678,6 +15426,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/library/search", handle_library_search)
     app.router.add_get("/api/report-packages", handle_report_packages_list)
     app.router.add_post("/api/report-packages/open", handle_report_package_open)
+    app.router.add_post("/api/report-packages/close", handle_report_packages_close)
     app.router.add_post("/api/report-packages/promote", handle_report_package_promote)
     app.router.add_get("/api/report-packages/{slug}", handle_report_package_file)
     app.router.add_get("/api/report-packages/{slug}/{path:.*}", handle_report_package_file)
@@ -14706,6 +15455,16 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/owid/search", handle_owid_search)
     app.router.add_post("/api/owid/import", handle_owid_import)
     app.router.add_post("/api/settings", handle_settings_post)
+    app.router.add_get("/api/orchestration/policy", handle_orchestration_policy_get)
+    app.router.add_post("/api/orchestration/policy/reset", handle_orchestration_policy_reset)
+    app.router.add_get("/api/schedules", handle_schedules_list)
+    app.router.add_post("/api/schedules", handle_schedules_create)
+    app.router.add_patch("/api/schedules/{sid}", handle_schedules_update)
+    app.router.add_delete("/api/schedules/{sid}", handle_schedules_delete)
+    app.router.add_post("/api/schedules/{sid}/run", handle_schedules_run)
+    app.router.add_get("/api/orchestration/org", handle_orchestration_org)
+    app.router.add_get("/api/orchestration/interrupted", handle_orchestration_interrupted)
+    app.router.add_post("/api/orchestration/{orchestration_id}/resume", handle_orchestration_resume)
     app.router.add_post("/api/fs/hydrate", handle_fs_hydrate)
     app.router.add_get("/api/verbs", handle_verbs)
     app.router.add_get("/api/shell/detect", handle_shell_detect)
@@ -14752,6 +15511,15 @@ def build_app(workspace: Path) -> web.Application:
     async def _relocate_rail_history(_app: web.Application) -> None:
         await _ensure_rail_history_location(_app["workspace"])
     app.on_startup.append(_relocate_rail_history)
+
+    async def _resume_orphans(_app: web.Application) -> None:
+        async def _go() -> None:
+            try:
+                await _resume_interrupted_on_boot(_app)
+            except Exception:  # noqa: BLE001
+                log.exception("orchestration auto-resume on boot failed")
+        _app["_orch_resume_task"] = asyncio.create_task(_go())
+    app.on_startup.append(_resume_orphans)
 
     # First-install greeting: seed the Intro tab (pinned leftmost) into
     # the launch workspace exactly once. A global marker makes it stick
@@ -14866,6 +15634,18 @@ def build_app(workspace: Path) -> web.Application:
     async def _start_power(_app: web.Application) -> None:
         _app["_power_task"] = asyncio.create_task(_power_loop(_app))
     app.on_startup.append(_start_power)
+
+    async def _schedule_loop(_app: web.Application) -> None:
+        while True:
+            try:
+                await _tick_schedules(_app)
+            except Exception:  # noqa: BLE001
+                log.exception("schedule tick failed")
+            await asyncio.sleep(20)
+
+    async def _start_schedules(_app: web.Application) -> None:
+        _app["_schedule_task"] = asyncio.create_task(_schedule_loop(_app))
+    app.on_startup.append(_start_schedules)
 
     async def _stop_power(_app: web.Application) -> None:
         t = _app.get("_power_task")

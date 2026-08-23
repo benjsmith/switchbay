@@ -361,17 +361,11 @@ async def _stream_codex(
                 raise base.ProviderError(
                     f"Codex: {msg_text}", code="server",
                 )
+    except asyncio.CancelledError:
+        await base.reap_cli_process(proc)
+        raise
     finally:
-        # Reap the process; drain stderr for diagnostics if it exited.
-        try:
-            if proc.returncode is None:
-                proc.terminate()
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
-        except (asyncio.TimeoutError, ProcessLookupError):
-            try:
-                proc.kill()
-            except ProcessLookupError:
-                pass
+        await base.reap_cli_process(proc)
 
     # If codex exited non-zero without emitting `turn.failed` (e.g.
     # rejected an unknown CLI flag before the event loop started),

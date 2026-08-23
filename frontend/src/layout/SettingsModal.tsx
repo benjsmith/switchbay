@@ -410,7 +410,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             onClose={onClose}
             hfDownloads={feat(info, "hf_model_download")}
           />
-          <LadderPanel open={open} providers={info?.providers ?? []} />
+          <TaskModelsPanel open={open} providers={info?.providers ?? []} />
           <PacksPanel open={open} />
           {feat(info, "user_mcp_servers") && (
             <McpServersPanel open={open} />
@@ -418,6 +418,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
           <UserTabsPanel open={open} />
           <PermissionsPanel open={open} />
           <StoragePanel open={open} />
+          <OrchestrationPolicyPanel open={open} />
           {feat(info, "media_generation") && (
             <MediaPanel open={open} />
           )}
@@ -460,7 +461,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             <button
               type="button"
               className="sy-confirm-btn sy-settings-restart"
-              title="Restart the Switch Bay daemon (make restart)"
+              title="Restart the Switch Bay daemon"
               onClick={() => {
                 const ok = window.confirm(
                   "Restart Switch Bay?\n\n"
@@ -504,272 +505,32 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
 }
 
 
-// ── Model ladder panel ──────────────────────────────────────────────
-
-
-type Rung = { provider: string; model: string; effort?: string };
-type LadderState = Partial<Record<"trivial" | "normal" | "hard", Rung>>;
+// ── Task models (micro-edits). Auto allocates its own roster. ─────
 
 type Picker = { provider: string; provider_label: string; model: string };
 
-// CE-curation ladder roles (2026-07-24). The ladder is no longer a
-// global override — it configures CE actions (curate/ingest) only.
-const RUNG_ROLE: Record<"hard" | "normal" | "trivial", { title: string; note: string }> = {
-  hard: { title: "Orchestrator", note: "the top-level curate agent" },
-  normal: { title: "Workers", note: "CE fan-out workers" },
-  trivial: { title: "Sub-tasks", note: "cheap CE sub-calls" },
-};
-
-function LadderPanel(props: { open: boolean; providers: ProviderInfo[] }) {
-  // Two scopes (2026-07-05 ruling): GLOBAL defaults apply everywhere;
-  // a workspace can override individual rungs (e.g. a software
-  // workspace pins `hard` to a stronger model while a literature
-  // workspace keeps the defaults).
-  const [glob, setGlob] = useState<LadderState | null>(null);
-  const [wsLadder, setWsLadder] = useState<LadderState>({});
-  const [wsName, setWsName] = useState("");
+function TaskModelsPanel(props: { open: boolean; providers: ProviderInfo[] }) {
   const [picker, setPicker] = useState<Picker | null>(null);
-  const [scope, setScope] = useState<"global" | "workspace">("global");
-  const [busy, setBusy] = useState(false);
-  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
-  // Orchestrator (hard) first — the CE role hierarchy reads top-down.
-  const difficulties: ("hard" | "normal" | "trivial")[] = ["hard", "normal", "trivial"];
-
   useEffect(() => {
     if (!props.open) return;
     void (async () => {
       try {
         const r = await fetch("/api/llm/ladder");
         if (!r.ok) return;
-        const body = (await r.json()) as {
-          global?: LadderState; workspace?: LadderState;
-          ladder?: LadderState; workspace_name?: string; picker?: Picker;
-        };
-        setGlob(body.global ?? body.ladder ?? {});
-        setWsLadder(body.workspace ?? {});
-        setWsName(body.workspace_name ?? "");
+        const body = (await r.json()) as { picker?: Picker };
         setPicker(body.picker ?? null);
-      } catch { /* leave null — empty state shows */ }
+      } catch { /* leave null */ }
     })();
   }, [props.open]);
-
-  const ladder = scope === "global" ? glob : wsLadder;
-  const setLadder = scope === "global" ? setGlob : setWsLadder;
-
-  const update = (diff: typeof difficulties[number], next: Partial<Rung>) => {
-    setLadder((cur: LadderState | null) => {
-      const prev = cur?.[diff] ?? { provider: "", model: "" };
-      const merged: Rung = { ...prev, ...next };
-      // Switching provider: pick that provider's first available model
-      // so the model dropdown is never stuck on another family's id.
-      if (next.provider !== undefined && next.provider !== prev.provider) {
-        if (!next.provider.trim()) {
-          merged.model = "";
-          merged.effort = "";
-        } else if (next.model === undefined) {
-          const p = props.providers.find((x) => x.id === next.provider);
-          const opts = modelsForProvider(p);
-          merged.model = opts[0] ?? p?.default_model ?? "";
-          merged.effort = "";
-        }
-      }
-      if (next.model !== undefined && next.model !== prev.model && next.effort === undefined) {
-        merged.effort = "";
-      }
-      const out = { ...(cur ?? {}) };
-      // Drop rungs the user blanks out so the saved JSON stays clean
-      // (in workspace scope, a blank rung = "use the global default").
-      if (!merged.provider.trim() && !merged.model.trim()) {
-        delete out[diff];
-      } else {
-        out[diff] = merged;
-      }
-      return out;
-    });
-    setStatus(null);
-  };
-
-  const save = async () => {
-    if (!ladder || busy) return;
-    setBusy(true);
-    setStatus(null);
-    try {
-      const r = await fetch("/api/llm/ladder", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ scope, ladder }),
-      });
-      if (!r.ok) {
-        const body = await r.json();
-        setStatus({ ok: false, msg: body.error || `HTTP ${r.status}` });
-        return;
-      }
-      const body = (await r.json()) as {
-        global?: LadderState; workspace?: LadderState; ladder?: LadderState;
-      };
-      setGlob(body.global ?? body.ladder ?? {});
-      setWsLadder(body.workspace ?? {});
-      // Nudge the rail model picker to re-fetch its routing footer/warnings.
-      window.dispatchEvent(new CustomEvent("sy-routing-changed"));
-      setStatus({ ok: true, msg: scope === "global" ? "saved — applies to every workspace without overrides" : `saved — overrides for ${wsName}` });
-    } catch (e) {
-      setStatus({ ok: false, msg: (e as Error).message });
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
-    <section className="sy-settings-ladder">
-      <h3 className="sy-settings-h3">CE curation models</h3>
+    <section className="sy-settings-packs">
+      <h3 className="sy-settings-h3">Task models</h3>
       <p className="sy-settings-blurb">
-        Curate / ingest only — rail chat stays on the picker. Override a
-        rung to pin a model; a cheaper rung can be a smaller model or a
-        lower effort on the same one.
+        Rail chat uses the picker. Auto assigns extra workers from other
+        keyed providers when independent evidence paths are worth buying,
+        and remembers outages (weekly limits, a local server that is
+        down) so it does not keep rediscovering a dead channel.
       </p>
-      <div className="sy-side-seg" role="tablist" aria-label="Ladder scope" style={{ marginBottom: 8 }}>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={scope === "global"}
-          className={"sy-side-seg-btn" + (scope === "global" ? " sy-side-seg-btn--on" : "")}
-          onClick={() => setScope("global")}
-          title="Defaults that apply in every workspace"
-        >
-          Global defaults
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={scope === "workspace"}
-          className={"sy-side-seg-btn" + (scope === "workspace" ? " sy-side-seg-btn--on" : "")}
-          onClick={() => setScope("workspace")}
-          title="Per-rung overrides for the active workspace — blank rungs inherit the global default"
-        >
-          {wsName || "This workspace"}
-        </button>
-      </div>
-      <div className="sy-settings-ladder-rows">
-        {difficulties.map((diff) => {
-          const rung = ladder?.[diff];
-          const globRung = glob?.[diff];
-          const role = RUNG_ROLE[diff];
-          const pid = rung?.provider ?? "";
-          const provider = props.providers.find((p) => p.id === pid);
-          const modelOpts = modelsForProvider(provider);
-          // Keep a saved/legacy model id visible even if not in live list.
-          const modelValue = rung?.model ?? "";
-          const modelChoices = modelValue && !modelOpts.includes(modelValue)
-            ? [modelValue, ...modelOpts]
-            : modelOpts;
-          const isSet = !!pid;
-          // "Follows picker" when this rung is unset AND (for the
-          // orchestrator) no global pin covers it. The orchestrator's
-          // unset default is the picker; workers/sub-tasks unset also
-          // fall through to the picker.
-          const followsPicker = !isSet && !(scope === "workspace" && globRung);
-          const globLabel = scope === "workspace" && globRung
-            ? `global: ${globRung.provider} / ${globRung.model}`
-            : null;
-          return (
-            <div key={diff} className="sy-settings-ladder-row">
-              <span className="sy-settings-ladder-label" title={role.note}>
-                <strong>{role.title}</strong>
-                <span className="sy-settings-ladder-diff">{diff}</span>
-              </span>
-              {followsPicker ? (
-                <div className="sy-settings-ladder-follow">
-                  <span className="sy-settings-ladder-followtxt" title="Runs on your rail picker selection">
-                    Follows picker{picker ? `: ${picker.provider_label} · ${picker.model}` : ""}
-                  </span>
-                  <button
-                    type="button"
-                    className="sy-settings-mini-btn"
-                    onClick={() => update(diff, {
-                      provider: picker?.provider || props.providers[0]?.id || "",
-                      model: picker?.model || "",
-                    })}
-                  >
-                    Override…
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <select
-                    className="sy-settings-input"
-                    value={pid}
-                    onChange={(e) => update(diff, { provider: e.target.value })}
-                    aria-label={`${diff} provider`}
-                  >
-                    <option value="">{globLabel ? `(use ${globLabel})` : "(follows picker)"}</option>
-                    {props.providers.map((p) => (
-                      <option key={p.id} value={p.id}>{p.label}</option>
-                    ))}
-                  </select>
-                  <select
-                    className="sy-settings-input"
-                    value={modelValue}
-                    disabled={!pid}
-                    onChange={(e) => update(diff, { model: e.target.value })}
-                    aria-label={`${diff} model`}
-                  >
-                    {!pid && <option value="">(pick provider first)</option>}
-                    {pid && modelChoices.length === 0 && (
-                      <option value="">(no models — install or refresh)</option>
-                    )}
-                    {pid && modelChoices.map((m) => (
-                      <option key={m} value={m}>{m}</option>
-                    ))}
-                  </select>
-                  <RungEffortSelect
-                    provider={pid}
-                    model={modelValue}
-                    value={rung?.effort ?? ""}
-                    onChange={(effort) => update(diff, { effort })}
-                  />
-                  <button
-                    type="button"
-                    className="sy-settings-mini-btn"
-                    title="Clear this rung → follow the picker"
-                    onClick={() => update(diff, { provider: "", model: "", effort: "" })}
-                  >
-                    ✕
-                  </button>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      <div className="sy-settings-ladder-actions">
-        <button
-          type="button"
-          className="sy-confirm-btn"
-          disabled={busy || ladder === null}
-          onClick={() => void save()}
-        >
-          {busy ? "Saving…" : "Save ladder"}
-        </button>
-        {status && (
-          <span
-            className={"sy-settings-status" + (status.ok ? "" : " sy-settings-status--err")}
-          >
-            {status.msg}
-          </span>
-        )}
-      </div>
-      {picker && (
-        <div className="sy-settings-ladder-row sy-settings-ladder-row--effort">
-          <span className="sy-settings-ladder-label">
-            <strong>Rail effort</strong>
-          </span>
-          <EffortSelect
-            provider={picker.provider}
-            model={picker.model}
-            label={`${picker.provider_label} · ${picker.model}`}
-          />
-        </div>
-      )}
       <MicroEditModelPanel open={props.open} providers={props.providers} picker={picker} />
     </section>
   );
@@ -833,72 +594,6 @@ function RungEffortSelect({
     </select>
   );
 }
-
-function EffortSelect({
-  provider, model, label = "Reasoning",
-}: {
-  provider: string; model: string; label?: string;
-}) {
-  const [options, setOptions] = useState<EffortOption[]>([]);
-  const [selected, setSelected] = useState<string>("");
-  const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    let cancelled = false;
-    if (!provider) { setOptions([]); return; }
-    void (async () => {
-      try {
-        const qs = new URLSearchParams({ provider, model: model || "" });
-        const r = await fetch(`/api/llm/reasoning-options?${qs}`);
-        if (!r.ok) { if (!cancelled) setOptions([]); return; }
-        const b = (await r.json()) as { options?: EffortOption[]; selected?: string | null };
-        if (cancelled) return;
-        setOptions(b.options ?? []);
-        setSelected(b.selected ?? "");
-      } catch {
-        if (!cancelled) setOptions([]);
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [provider, model]);
-
-  const choose = async (effort: string) => {
-    setBusy(true);
-    try {
-      await fetch("/api/llm/reasoning-effort", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ provider, model, effort: effort || null }),
-      });
-      setSelected(effort);
-      window.dispatchEvent(new CustomEvent("sy:llm-changed"));
-    } catch { /* transient */ } finally { setBusy(false); }
-  };
-
-  if (options.length === 0) return null;
-  return (
-    <label
-      className="sy-effort-select"
-      title="How hard this model thinks. Higher costs more and is slower."
-    >
-      <span className="sy-effort-select-meta" title={label}>{label}</span>
-      <select
-        className="sy-settings-input sy-effort-select-input"
-        value={selected}
-        disabled={busy}
-        onChange={(e) => void choose(e.target.value)}
-      >
-        <option value="">(provider default)</option>
-        {options.map((o) => (
-          <option key={o.id} value={o.id}>
-            {o.label}{o.hint ? ` — ${o.hint}` : ""}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
 
 // ── Micro-edit fast-model ───────────────────────────────────────────
 // Decoupled from the CE ladder (2026-07-24): a single optional fast
@@ -2835,8 +2530,7 @@ function LocalModelPanel({
       <h3 className="sy-settings-h3">Local agent model</h3>
       <p className="sy-settings-blurb">
         Run models on this machine (~{ram} GB RAM). Pick a server type.
-        Installing points ladder <strong>trivial + normal</strong> at the
-        local model.
+        Installing pins CE curate workers to this local model.
       </p>
       {body.local_rung && (
         <p className="sy-settings-blurb">
@@ -3935,6 +3629,124 @@ function StoragePanel({ open }: { open: boolean }) {
         Switching re-embeds your existing history in the background.
       </p>
 
+      {status && (
+        <p className={"sy-settings-status" + (status.ok ? "" : " sy-settings-status--err")}>
+          {status.msg}
+        </p>
+      )}
+    </section>
+  );
+}
+
+
+type OrchPolicy = {
+  version?: number;
+  updated_at?: number;
+  totals?: { orchestrations?: number; explorations?: number; resets?: number };
+  buckets?: { bucket: string; arms: { arm: string; n: number; mean_reward?: number | null }[] }[];
+  hard_bounds?: Record<string, number>;
+};
+
+function OrchestrationPolicyPanel({ open }: { open: boolean }) {
+  const [policy, setPolicy] = useState<OrchPolicy | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [interrupted, setInterrupted] = useState<number>(0);
+
+  const reload = async () => {
+    try {
+      const [r, i] = await Promise.all([
+        fetch("/api/orchestration/policy"),
+        fetch("/api/orchestration/interrupted"),
+      ]);
+      if (r.ok) setPolicy((await r.json()) as OrchPolicy);
+      if (i.ok) {
+        const body = (await i.json()) as { runs?: unknown[] };
+        setInterrupted((body.runs ?? []).length);
+      }
+    } catch {
+      /* older daemon */
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    void reload();
+  }, [open]);
+
+  const reset = async () => {
+    if (busy) return;
+    if (!window.confirm("Reset learned orchestration for this workspace? Priors stay; Auto still works.")) return;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = await fetch("/api/orchestration/policy/reset", { method: "POST" });
+      if (!r.ok) {
+        setStatus({ ok: false, msg: `HTTP ${r.status}` });
+        return;
+      }
+      setPolicy((await r.json()) as OrchPolicy);
+      setStatus({ ok: true, msg: "Learned policy cleared. Auto uses hand-authored priors." });
+    } catch (e) {
+      setStatus({ ok: false, msg: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (policy === null) return null;
+  const totals = policy.totals ?? {};
+  const nOrch = totals.orchestrations ?? 0;
+  const nExpl = totals.explorations ?? 0;
+  const nReset = totals.resets ?? 0;
+  const topArms = (policy.buckets ?? [])
+    .flatMap((b) => b.arms.map((a) => ({ ...a, bucket: b.bucket })))
+    .filter((a) => a.n >= 2)
+    .sort((a, b) => b.n - a.n)
+    .slice(0, 4);
+
+  return (
+    <section className="sy-settings-packs">
+      <h3 className="sy-settings-h3">Auto orchestration</h3>
+      <p className="sy-settings-blurb">
+        The rail preference (Economy → Maximum) sets how much extra
+        quality Auto may buy — cost and latency weights, not a worker
+        count. Agent count is an outcome of the chosen policy. This
+        workspace keeps its own recipe weights (which DAG to buy for
+        similar tasks) and last-good provider roster. Other vaults
+        do not share that memory. It cannot raise hard safety bounds.
+        Provider outages (weekly limits) are remembered separately
+        from policy quality. Reset drops this workspace’s learned
+        weights; priors remain.
+      </p>
+      <div className="sy-settings-perm-row">
+        <span>
+          <strong>Learned runs (this workspace):</strong> {nOrch}
+          {nExpl > 0 ? ` · ${nExpl} explorations` : ""}
+          {nReset > 0 ? ` · reset ${nReset}×` : ""}
+          {interrupted > 0 ? ` · ${interrupted} interrupted` : ""}
+        </span>
+        <span className="sy-spacer" />
+        <button
+          type="button"
+          className="sy-settings-pill"
+          onClick={() => void reset()}
+          disabled={busy}
+          title="Clear learned orchestration weights for this workspace"
+        >
+          Reset learned policy
+        </button>
+      </div>
+      {topArms.length > 0 && (
+        <p className="sy-settings-blurb" style={{ marginTop: 8, fontFamily: "var(--font-mono)", fontSize: "11px" }}>
+          {topArms.map((a) => (
+            <span key={a.bucket + a.arm} style={{ display: "block" }}>
+              {a.arm} ×{a.n}
+              {typeof a.mean_reward === "number" ? ` · reward ${a.mean_reward.toFixed(2)}` : ""}
+            </span>
+          ))}
+        </p>
+      )}
       {status && (
         <p className={"sy-settings-status" + (status.ok ? "" : " sy-settings-status--err")}>
           {status.msg}

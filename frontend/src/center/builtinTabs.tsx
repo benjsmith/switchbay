@@ -28,6 +28,7 @@ const VegaTab = lazy(() => import("../widgets/vega/VegaTab"));
 const SketchTab = lazy(() => import("../widgets/sketch/SketchTab"));
 const AgentDashboardTab = lazy(() => import("../widgets/agents/AgentDashboardTab"));
 const ProjectsTab = lazy(() => import("../widgets/projects/ProjectsTab"));
+const SchedulesTab = lazy(() => import("../widgets/schedules/SchedulesTab"));
 const PackFileListTab = lazy(() => import("../widgets/packtabs/PackFileListTab"));
 const TerminalTab = lazy(() => import("../widgets/terminal/TerminalTab"));
 const ReportTab = lazy(() => import("../widgets/report/ReportTab"));
@@ -72,6 +73,7 @@ export function registerBuiltinTabs(): void {
     bare: true,
   });
   registerTabKind("projects", ProjectsAdapter);
+  registerTabKind("schedules", (() => <SchedulesTab />) as TabComponent, { bare: true });
   registerTabKind("agents", AgentsAdapter);
   // Rich HTML report (create_report) in a sandboxed iframe.
   registerTabKind("report", (() => <ReportTab />) as TabComponent, { bare: true });

@@ -72,3 +72,20 @@ def test_outside_workspace_write_still_cards(tmp_path):
     ti = {"file_path": "/Users/somebody/.zshrc"}
     pat = permissions.pattern_for("Write", ti)
     assert not permissions.is_pre_approved(tmp_path, pat, tool="Write", tool_input=ti)
+
+
+def test_orchestration_pattern_is_action_scoped(tmp_path):
+    start = permissions.pattern_for(
+        "Orchestration",
+        {"action": "start-local-server", "summary": "Start MLX"},
+    )
+    byok = permissions.pattern_for(
+        "Orchestration",
+        {"action": "use-api-credits", "summary": "Spend keys"},
+    )
+    assert start == "Orchestration(start-local-server)"
+    assert byok == "Orchestration(use-api-credits)"
+    assert not permissions.is_pre_approved(
+        tmp_path, start, tool="Orchestration",
+        tool_input={"action": "start-local-server"},
+    )

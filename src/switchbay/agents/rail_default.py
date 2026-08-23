@@ -377,6 +377,7 @@ ALLOWED_TOOLS = [
     "wiki_related_by_sources",
     # CE-native vault/kuzu (additive — different corpus from search_wiki).
     "ce_vault_search",
+    "read_source",
     "ce_graph_neighbors",
     "ce_graph_path",
     "ce_shared_sources",
@@ -481,6 +482,10 @@ _LOCAL_TOOL_BLURBS: dict[str, str] = {
     ),
     "search_wiki": (
         "Find wiki pages by keyword. Then read_wiki_page on the best hit."
+    ),
+    "read_source": (
+        "Read a vault extract or cache original as visible text. "
+        "Use when extraction: snippet. Never quote extract frontmatter."
     ),
     "ce_epoch_summary": (
         "One-shot wiki health snapshot (counts, inboxes). Call once "

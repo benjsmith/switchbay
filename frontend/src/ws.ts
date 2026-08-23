@@ -95,6 +95,8 @@ export type ThreadFocused = {
   type: "thread_focused";
   thread_id: string;
   kind?: string;
+  /** Owning workspace. Other-workspace focus events are ignored. */
+  workspace?: string;
 };
 
 export type ParsedKind = "chat" | "cmd" | "slash" | "excel" | "sql" | "python";
@@ -103,11 +105,19 @@ export type Notice = {
   type: "notice";
   text: string;
   kind: ParsedKind | null;
+  /** When set, the rail drops the notice unless this is the focused workspace. */
+  workspace?: string;
+  run_id?: string;
+  thread_id?: string;
 };
 
 export type UserInput = {
   type: "user_input";
   text: string;
+  /** Explicit worker count override (≥2). Omit for Auto. */
+  n?: number;
+  /** Cost/performance preference in [0, 1]. */
+  preference?: number;
 };
 
 export type SelectionSet = {
@@ -240,6 +250,7 @@ export type OpenReport = {
   type: "open_report";
   report_id: string;
   title: string;
+  workspace?: string;
 };
 
 /** The Intro tab was added (via /intro or the first-install seed) —
@@ -444,6 +455,7 @@ export type PageProposalReview = {
     issues?: string[];
     one_line?: string;
   } | null;
+  workspace?: string;
 };
 
 export type PageProposalResolved = {
@@ -493,6 +505,16 @@ export type PermissionRequest = {
   /** For external cards: absolute cwd of the source, when known —
    *  enables "watch in shell". Null for old hooks that don't send cwd. */
   origin_path?: string | null;
+};
+
+export type OrchestrationHandoff = {
+  type: "orchestration_handoff";
+  orchestration_id: string;
+  from: string;
+  to: string;
+  kind: string;
+  text: string;
+  ts: number;
 };
 
 /** Companion to PermissionRequest — broadcast after a verdict so
@@ -599,7 +621,8 @@ export type ServerMessage =
   | ProviderRetryOffer
   | ProviderRetryResolved
   | PermissionRequest
-  | PermissionResolved;
+  | PermissionResolved
+  | OrchestrationHandoff;
 export type ClientMessage = UserInput | SelectionSet;
 export type Listener = (msg: ServerMessage) => void;
 

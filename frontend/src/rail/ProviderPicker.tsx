@@ -255,7 +255,9 @@ export default function ProviderPicker() {
             <div className="sy-rail-pickroutes">
               <div className="sy-rail-pickrouteshd">Curation &amp; micro-edits use</div>
               <div className="sy-rail-pickroutesub">
-                Rail chat uses your selection above; these tasks route to the model ladder.
+                Rail chat uses your selection above. Auto may probe other
+                keyed providers for independent workers; that is not a
+                picker change.
               </div>
               {overrides.map((o) => (
                 <div key={o.kind} className="sy-rail-pickroute" title={o.reason}>

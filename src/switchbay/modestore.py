@@ -71,6 +71,7 @@ DEFAULT_MODE: dict[str, Any] = {
         {"id": "sketch", "title": "Sketch", "kind": "sketch"},
         {"id": "library", "title": "Library", "kind": "library"},
         {"id": "projects", "title": "Projects", "kind": "projects"},
+        {"id": "schedules", "title": "Schedules", "kind": "schedules"},
         # The Agents dashboard is cross-workspace (it sees + steers runs in
         # every workspace), so it's a `system` tab — the strip pins it to
         # the right, after a separator past all other tabs and before
@@ -108,7 +109,25 @@ def load(workspace: Path) -> dict[str, Any]:
             t for t in tabs
             if not (isinstance(t, dict) and t.get("kind") == "slides")
         ]
-        if len(filtered) != len(tabs):
+        if not any(isinstance(t, dict) and t.get("kind") == "schedules" for t in filtered):
+            inserted: list[Any] = []
+            done = False
+            for t in filtered:
+                if (
+                    not done and isinstance(t, dict)
+                    and (t.get("kind") == "agents" or t.get("source") == "system")
+                ):
+                    inserted.append({
+                        "id": "schedules", "title": "Schedules", "kind": "schedules",
+                    })
+                    done = True
+                inserted.append(t)
+            if not done:
+                inserted.append({
+                    "id": "schedules", "title": "Schedules", "kind": "schedules",
+                })
+            filtered = inserted
+        if filtered != tabs:
             data["tabs"] = filtered
     return data
 

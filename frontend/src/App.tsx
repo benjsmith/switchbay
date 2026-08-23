@@ -79,6 +79,16 @@ function writeCachedWorkspaces(workspace: string, workspaces: Workspaces): void 
   }
 }
 
+function workspaceKey(p?: string | null): string {
+  return (p || "").replace(/\/+$/, "");
+}
+
+function sameWorkspace(a?: string | null, b?: string | null): boolean {
+  const ka = workspaceKey(a);
+  const kb = workspaceKey(b);
+  return ka.length > 0 && ka === kb;
+}
+
 export default function App() {
   // RailSocket lives entirely inside the WS effect below — see the long
   // comment there for why useMemo would leak a second connection in
@@ -193,6 +203,23 @@ export default function App() {
   const runMetaRef = useRef<Map<string, {
     threadId: string; workspace?: string; provider?: string;
   }>>(new Map());
+  // Live AG-UI frames after RUN_STARTED carry only runId. A workspace
+  // switch must keep dropping the previous workspace's stream even
+  // when those runs were accepted while we were focused there.
+  const belongsToFocusedRail = (runId: string): boolean => {
+    if (foreignRunsRef.current.has(runId)) return false;
+    const meta = runMetaRef.current.get(runId);
+    if (!meta) return false;
+    if (
+      meta.workspace
+      && focusedWsRef.current
+      && !sameWorkspace(meta.workspace, focusedWsRef.current)
+    ) {
+      foreignRunsRef.current.add(runId);
+      return false;
+    }
+    return meta.threadId === focusedThreadRef.current;
+  };
   // Transient bottom-right toasts: background runs finishing, and
   // "runs continue in background" on switch-away.
   type Toast = {
@@ -250,12 +277,10 @@ export default function App() {
     }
   }, []);
 
-  // User-requested restart (Settings → Restart = `make restart`). Unlike
-  // Quit we DON'T show the stopped overlay or close the socket: the
-  // service manager brings a fresh daemon back on its own, and the
-  // existing boot_id watcher (devReload.ts) auto-reloads the PWA. We
-  // only surface a toast — and the daemon's refusal, if it isn't the
-  // managed service (a dev daemon).
+  // User-requested restart (Settings → Restart). Unlike Quit we DON'T
+  // show the stopped overlay or close the socket: the process comes
+  // back on its own (launchd job, or a delayed re-exec of this serve),
+  // and the boot_id watcher (devReload.ts) auto-reloads the PWA.
   const requestRestart = useCallback(async () => {
     try {
       const r = await fetch("/api/restart", { method: "POST" });
@@ -589,6 +614,8 @@ export default function App() {
         // reads focusedThreadRef synchronously when it fires. Kind is
         // resolved there too (from /api/threads) — reset it only when
         // the focused thread actually changed (reconnect keeps it).
+        const prevWs = focusedWsRef.current;
+        const switched = !!prevWs && !sameWorkspace(prevWs, msg.workspace);
         if ((msg.thread_id ?? null) !== focusedThreadRef.current) {
           focusedThreadKindRef.current = null;
           setFocusedThreadKind(null);
@@ -597,19 +624,34 @@ export default function App() {
         setFocusedThread(msg.thread_id ?? null);
         setWorkspace(msg.workspace);
         focusedWsRef.current = msg.workspace;
+        // Runs accepted while we were on the previous workspace stay
+        // in runMeta; mark them foreign so TEXT_MESSAGE / tool frames
+        // (runId only) cannot keep writing into this rail.
+        for (const [id, meta] of runMetaRef.current) {
+          if (meta.workspace && !sameWorkspace(meta.workspace, msg.workspace)) {
+            foreignRunsRef.current.add(id);
+          }
+        }
         setMode(msg.mode);
         setWorkspacesState(msg.workspaces);
         setActiveTab((cur) => cur ?? msg.mode.tabs[0]?.id ?? null);
         setSelectionLocal(msg.selection);   // restore persisted selection
-        setEntries((prev) => {
-          // Belt-and-braces: don't append another "connected …" line if
-          // the previous entry was already an identical one (covers
-          // sequential reconnects after a daemon restart).
-          const text = `connected · ${msg.workspace} · mode: ${msg.mode.name} · ${msg.mode.tabs.length} tabs`;
-          const last = prev[prev.length - 1];
-          if (last && last.source === "system" && last.text === text) return prev;
-          return [...prev, { id: ++idRef.current, source: "system", text }];
-        });
+        const text = `connected · ${msg.workspace} · mode: ${msg.mode.name} · ${msg.mode.tabs.length} tabs`;
+        if (switched) {
+          // Drop the previous workspace's live bubbles immediately —
+          // waiting for hydrate left a window where foreign deltas
+          // matched leftover messageIds and kept streaming.
+          setEntries([{ id: ++idRef.current, source: "system", text }]);
+        } else {
+          setEntries((prev) => {
+            // Belt-and-braces: don't append another "connected …" line if
+            // the previous entry was already an identical one (covers
+            // sequential reconnects after a daemon restart).
+            const last = prev[prev.length - 1];
+            if (last && last.source === "system" && last.text === text) return prev;
+            return [...prev, { id: ++idRef.current, source: "system", text }];
+          });
+        }
         // First-install product tour (once per machine; /walkthrough re-runs).
         // If nothing will auto-start, release the first-run gate now;
         // otherwise the tour's own onClose releases it.
@@ -619,6 +661,12 @@ export default function App() {
             .then((scheduled) => { if (!scheduled) setWalkthroughSettled(true); });
         }
       } else if (msg.type === "notice") {
+        if (msg.workspace && !sameWorkspace(msg.workspace, focusedWsRef.current)) return;
+        if (msg.run_id && (
+          foreignRunsRef.current.has(msg.run_id)
+          || (runMetaRef.current.has(msg.run_id) && !belongsToFocusedRail(msg.run_id))
+        )) return;
+        if (msg.thread_id && msg.thread_id !== focusedThreadRef.current) return;
         setEntries((e) => [
           ...e,
           { id: ++idRef.current, source: "notice", text: msg.text, kind: msg.kind },
@@ -639,7 +687,11 @@ export default function App() {
         // Another client (or our own POST, echoed; or a `!cmd` that
         // spawned a shell thread) moved the daemon's focus. Our own
         // switches set the ref before POSTing, so the echo no-ops
-        // here; a genuinely foreign switch re-hydrates.
+        // here; a genuinely foreign switch re-hydrates. Ignore a
+        // focus event stamped for a workspace we are not showing.
+        if (msg.workspace && !sameWorkspace(msg.workspace, focusedWsRef.current)) {
+          return;
+        }
         if (msg.thread_id !== focusedThreadRef.current) {
           focusedThreadRef.current = msg.thread_id;
           setFocusedThread(msg.thread_id);
@@ -647,6 +699,8 @@ export default function App() {
           setFocusedThreadKind(msg.kind ?? "structured-agent");
           hydrateThreadRef.current(msg.thread_id);
         }
+      } else if (msg.type === "orchestration_handoff") {
+        window.dispatchEvent(new CustomEvent("sy:orch-handoff", { detail: msg }));
       } else if (msg.type === "RUN_STARTED") {
         // Learn the run's thread FIRST — later frames carry only runId,
         // and a mid-run switch to this thread needs the mapping even if
@@ -663,7 +717,7 @@ export default function App() {
         // Rail is per-workspace: drop runs that belong to another
         // workspace. With no entry created here, their later message/
         // tool events (matched by runId) find no row and are ignored.
-        if (msg.workspace && msg.workspace !== focusedWsRef.current) {
+        if (msg.workspace && !sameWorkspace(msg.workspace, focusedWsRef.current)) {
           foreignRunsRef.current.add(msg.runId);
           return;
         }
@@ -694,8 +748,7 @@ export default function App() {
           },
         ]);
       } else if (msg.type === "TEXT_MESSAGE_START") {
-        if (foreignRunsRef.current.has(msg.runId)) return;
-        if (runMetaRef.current.get(msg.runId)?.threadId !== focusedThreadRef.current) return;
+        if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) => {
           // First message of a run claims the empty placeholder bubble
           // RUN_STARTED created; later segments (prose after a tool
@@ -724,6 +777,7 @@ export default function App() {
           ];
         });
       } else if (msg.type === "TEXT_MESSAGE_CONTENT") {
+        if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) => {
           // Find the assistant entry for this messageId (almost always
           // the last one). Foreign runs never opened a message, so
@@ -749,10 +803,7 @@ export default function App() {
           // AFTER its TEXT_MESSAGE_START went by (or hydration wiped
           // the live bubble). Open a bubble lazily so the rest of the
           // segment lands instead of vanishing.
-          if (
-            !foreignRunsRef.current.has(msg.runId) &&
-            runMetaRef.current.get(msg.runId)?.threadId === focusedThreadRef.current
-          ) {
+          if (belongsToFocusedRail(msg.runId)) {
             return [
               ...prev,
               {
@@ -771,6 +822,7 @@ export default function App() {
         // Segment closed (tool call incoming, or end of stream) —
         // stop this bubble's streaming cursor. The run-level wrap-up
         // (token meta, error notices) arrives with RUN_FINISHED/ERROR.
+        if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) =>
           prev.map((e) =>
             e.source === "assistant" && e.message_id === msg.messageId
@@ -782,10 +834,7 @@ export default function App() {
         // Chain-of-thought for a segment → a collapsible entry. Same
         // foreign/other-thread guard as streamed text so background
         // runs don't leak into the focused rail.
-        if (
-          !foreignRunsRef.current.has(msg.runId) &&
-          runMetaRef.current.get(msg.runId)?.threadId === focusedThreadRef.current
-        ) {
+        if (belongsToFocusedRail(msg.runId)) {
           setEntries((prev) => [
             ...prev,
             { id: ++idRef.current, source: "reasoning", text: msg.text, run_id: msg.runId },
@@ -852,8 +901,7 @@ export default function App() {
           ];
         });
       } else if (msg.type === "TOOL_CALL_START") {
-        if (foreignRunsRef.current.has(msg.runId)) return;
-        if (runMetaRef.current.get(msg.runId)?.threadId !== focusedThreadRef.current) return;
+        if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) => [
           ...prev,
           {
@@ -866,6 +914,7 @@ export default function App() {
           },
         ]);
       } else if (msg.type === "TOOL_CALL_ARGS") {
+        if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) => {
           // The daemon delivers the complete input as one JSON frame;
           // parse it into the tool entry. (A streaming-args provider
@@ -886,6 +935,7 @@ export default function App() {
           return prev;
         });
       } else if (msg.type === "TOOL_CALL_RESULT") {
+        if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) => {
           // Patch the matching tool entry in place with its result.
           for (let i = prev.length - 1; i >= 0; i--) {
@@ -985,6 +1035,7 @@ export default function App() {
       } else if (msg.type === "page_proposal_review") {
         // A local-model page proposal the reviewer flagged borderline —
         // an accept/reject card in the rail. Dedupe by id.
+        if (msg.workspace && !sameWorkspace(msg.workspace, focusedWsRef.current)) return;
         setEntries((prev) =>
           prev.some((e) => e.source === "proposal" && e.prop_id === msg.id)
             ? prev
@@ -1317,6 +1368,7 @@ export default function App() {
         // just added to mode.tabs by the preceding hello, but React state
         // may not have settled this tick, so retry the focus briefly
         // until switch-by-kind finds it.
+        if (msg.workspace && !sameWorkspace(msg.workspace, focusedWsRef.current)) return;
         notifyReportOpen(String(msg.report_id || ""), String(msg.title || "Report"));
         const focus = (tries: number) => {
           if (switchToKindRef.current?.("report")) return;
@@ -1614,7 +1666,21 @@ export default function App() {
       );
     };
     window.addEventListener("sy:open-wiki-page", onOpenWiki);
-    return () => window.removeEventListener("sy:open-wiki-page", onOpenWiki);
+    // Library / Report iframes are sandboxed; [[wikilink]] clicks
+    // postMessage {type:'sy-open-wiki', target} from the child.
+    const onMsg = (ev: MessageEvent) => {
+      const d = ev.data;
+      if (!d || typeof d !== "object") return;
+      if ((d as { type?: string }).type !== "sy-open-wiki") return;
+      const target = String((d as { target?: string }).target || "").trim();
+      if (!target || target.length > 200) return;
+      onOpenWiki(new CustomEvent("sy:open-wiki-page", { detail: { target } }));
+    };
+    window.addEventListener("message", onMsg);
+    return () => {
+      window.removeEventListener("sy:open-wiki-page", onOpenWiki);
+      window.removeEventListener("message", onMsg);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -1825,15 +1891,14 @@ export default function App() {
     return () => window.removeEventListener("sy:open-agents-run", onJump);
   }, []);
 
-  const onSubmit = (text: string, opts: { n: number }) => {
+  const onSubmit = (text: string, opts: { n: number; preference?: number }) => {
     setEntries((e) => [...e, { id: ++idRef.current, source: "user", text }]);
-    const payload: { type: "user_input"; text: string; n?: number } = {
-      type: "user_input", text,
-    };
-    // Only include `n` when fan-out is dialed in. Daemon treats
-    // missing / 0 / 1 as ordinary single-agent chat — keep the wire
-    // shape backwards-compatible for older clients.
+    const payload: {
+      type: "user_input"; text: string; n?: number; preference?: number;
+    } = { type: "user_input", text };
+    // Explicit N is an advanced override. Missing / 0 / 1 → Auto.
     if (opts.n >= 2) payload.n = opts.n;
+    if (typeof opts.preference === "number") payload.preference = opts.preference;
     socketRef.current?.send(payload);
   };
 

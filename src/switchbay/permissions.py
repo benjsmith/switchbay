@@ -170,6 +170,9 @@ def pattern_for(tool: str, tool_input: dict[str, Any]) -> str:
     if tool in ("Read", "Edit", "Write", "NotebookEdit"):
         path = str(tool_input.get("file_path") or tool_input.get("path") or "")
         return f"{tool}({path})" if path else f"{tool}(*)"
+    if tool == "Orchestration":
+        action = str(tool_input.get("action") or "").strip() or "unknown"
+        return f"Orchestration({action})"
     # Generic shape — include a short input excerpt so the user can
     # tell two calls apart.
     blob = json.dumps(tool_input, sort_keys=True)[:80]

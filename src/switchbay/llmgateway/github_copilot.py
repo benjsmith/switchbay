@@ -36,7 +36,7 @@ log = logging.getLogger("switchbay.llm.copilot")
 
 ID = "github_copilot"
 LABEL = "GitHub Copilot"
-DEFAULT_MODEL = "gpt-4o"
+DEFAULT_MODEL = "gpt-5.4"
 DEFAULT_TIMEOUT_S = 300.0
 
 # The public client id GitHub's official Copilot editor plugins use
@@ -212,11 +212,23 @@ PROVIDER = {
         "set the host in the sign-in panel."
     ),
     "auth_flow": "github_device",  # Settings renders the sign-in button
+    # Cold-cache fallback for the picker and Auto diversity when
+    # GET /models has not been fetched yet. Live catalog is
+    # authoritative (plan- and policy-dependent). Ids match
+    # api.githubcopilot.com as of 2026-08 (docs.github.com Copilot
+    # supported models). gpt-4o / o3-mini are retired on this surface.
     "model_suggestions": [
-        "gpt-4o",
-        "gpt-4o-mini",
-        "o3-mini",
-        "claude-sonnet-4",
+        "gpt-5.4",
+        "gpt-5.4-mini",
+        "gpt-5.5",
+        "gpt-5-mini",
+        "claude-sonnet-4.6",
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-haiku-4.5",
+        "gemini-3.1-pro-preview",
+        "gemini-3.5-flash",
+        "grok-4.6",
     ],
     "capabilities": {
         "chat": True,

@@ -149,45 +149,33 @@ async def test_restart_endpoint_spawns_when_managed(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_restart_endpoint_refuses_dev_daemon(monkeypatch):
-    """Not the managed service but installed → refuse (would spawn a
-    rival on the port), and DON'T run make restart."""
-    spawned = []
-    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append(True))
-    monkeypatch.setattr(daemon.service, "is_installed", lambda: True)
+async def test_restart_endpoint_reexecs_unmanaged(monkeypatch):
+    """Foreground serve (not the launchd job) re-execs itself instead of
+    bouncing the installed service — that would fight for :8765."""
+    spawned: list[str] = []
+    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append("svc"))
+    monkeypatch.setattr(daemon.service, "spawn_self_reexec", lambda: spawned.append("self"))
+    monkeypatch.setattr(daemon, "_schedule_daemon_exit", lambda app, **kw: spawned.append("exit"))
 
     req = make_mocked_request("POST", "/api/restart", app={"service_managed": False})
     resp = await daemon.handle_restart(req)
 
-    assert resp.status == 409
-    assert spawned == []
+    assert resp.status == 200
+    assert spawned == ["self", "exit"]
 
 
 @pytest.mark.asyncio
-async def test_restart_endpoint_refuses_when_not_installed(monkeypatch):
-    spawned = []
-    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append(True))
-    monkeypatch.setattr(daemon.service, "is_installed", lambda: False)
-
-    req = make_mocked_request("POST", "/api/restart", app={"service_managed": False})
-    resp = await daemon.handle_restart(req)
-
-    assert resp.status == 409
-    assert spawned == []
-
-
-@pytest.mark.asyncio
-async def test_start_slash_refuses_dev_daemon_without_spawning(monkeypatch):
-    spawned = []
-    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append(True))
-    monkeypatch.setattr(daemon.service, "is_installed", lambda: True)
+async def test_start_slash_reexecs_unmanaged(monkeypatch):
+    spawned: list[str] = []
+    monkeypatch.setattr(daemon.service, "spawn_restart", lambda: spawned.append("svc"))
+    monkeypatch.setattr(daemon.service, "spawn_self_reexec", lambda: spawned.append("self"))
+    monkeypatch.setattr(daemon, "_schedule_daemon_exit", lambda app, **kw: spawned.append("exit"))
 
     ws = _FakeWS()
     await daemon._handle_start_slash({"service_managed": False}, ws)
 
-    assert spawned == []
-    assert len(ws.sent) == 1
-    assert "development daemon" in ws.sent[0]["value"]["text"]
+    assert spawned == ["self", "exit"]
+    assert ws.sent and "Restarting" in ws.sent[0]["value"]["text"]
 
 
 @pytest.mark.asyncio
@@ -201,6 +189,15 @@ async def test_start_slash_spawns_when_managed(monkeypatch):
     assert spawned == [True]
     # A "restarting…" notice precedes the spawn.
     assert ws.sent and "Restarting" in ws.sent[0]["value"]["text"]
+
+
+def test_serve_reexec_argv_uses_module_form(monkeypatch):
+    monkeypatch.setattr(service.sys, "argv", ["/repo/src/switchbay/__main__.py", "serve", "--workspace", "/tmp/ws"])
+    monkeypatch.setattr(service.sys, "executable", "/repo/.venv/bin/python")
+    assert service._serve_reexec_argv() == [
+        "/repo/.venv/bin/python", "-m", "switchbay", "serve",
+        "--workspace", "/tmp/ws",
+    ]
 
 
 def test_is_managed_false_when_not_installed(monkeypatch):

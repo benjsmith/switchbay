@@ -94,6 +94,9 @@ def agent_card(*, workspace_name: str, workspace_path: str, port: int,
             "switchbay": {
                 "workspace": workspace_path,
                 "defaultProvider": provider_default,
+                # Observability only — A2A is interoperability, not the
+                # orchestration algorithm. Auto is a DAG of ordinary Runs.
+                "orchestration": "auto",
             },
         },
     }

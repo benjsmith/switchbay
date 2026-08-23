@@ -10,7 +10,8 @@ Shape (all keys optional; absent → documented default):
 
   {
     "rail_history_local": true,   # see below
-    "workspaces_home": "~/Workspaces"   # see below
+    "workspaces_home": "~/Workspaces",   # see below
+    "orchestration_preference": 0.5  # 0 Economy … 1 Maximum
   }
 
 `rail_history_local` — where the per-workspace rail-history DB

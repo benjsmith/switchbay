@@ -132,6 +132,11 @@ def _propose_wiki_page(workspace: Path, payload: dict[str, Any]) -> dict[str, An
         workspace, op="create", kind=kind, title=title, body=body,
         scaffold=scaffold,
     )
+    try:
+        from . import orchestrator_fs
+        orchestrator_fs.remember_landed(workspace, str(e.get("path") or ""))
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "proposal_id": e["id"], "path": e["path"],
             "scaffold": scaffold,
             "note": (
@@ -154,6 +159,11 @@ def _propose_page_edit(workspace: Path, payload: dict[str, Any]) -> dict[str, An
     e = proposals.add(workspace, op="edit", kind=str(payload.get("kind") or "note"),
                       title=str(payload.get("title") or path), body=body, path=path,
                       scaffold=scaffold)
+    try:
+        from . import orchestrator_fs
+        orchestrator_fs.remember_landed(workspace, str(e.get("path") or ""))
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "proposal_id": e["id"], "path": e["path"],
             "scaffold": scaffold,
             "note": (
@@ -173,6 +183,11 @@ def _create_report(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     if not summary:
         return {"ok": False, "error": "summary is required (the one-line chat reply)"}
     meta = reports.save(workspace, title=title, summary=summary, html=html)
+    try:
+        from . import orchestrator_fs
+        orchestrator_fs.remember_landed(workspace, f"reports/{meta['id']}")
+    except Exception:  # noqa: BLE001
+        pass
     return {"ok": True, "report_id": meta["id"], "title": meta["title"],
             "summary": meta["summary"],
             "note": "Report opened in the Report tab. Your chat reply should "
@@ -191,6 +206,11 @@ register(Tool(
         "(inline all CSS/JS; no external URLs/CDNs; it renders in a "
         "sandboxed iframe). After calling this, reply in chat with ONLY "
         "the one-line summary — the document lives in the tab. "
+        "When the document names tickers or other concrete "
+        "recommendations, include [[wikilink]]s to the analysis and "
+        "evidence wiki pages for each (plain [[slug]] is enough; the "
+        "viewer makes them clickable) and a per-item Evidence snapshot "
+        "quoting sourced excerpts plus missing sources. "
         "Plain language: avoid jargon and domain acronyms unless "
         "ubiquitous; define any necessary acronym on first use in the "
         "document."

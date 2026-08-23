@@ -60,8 +60,8 @@ function buildSteps(): Step[] {
       id: "settings",
       title: "Settings",
       body:
-        "Configure LLM access here — provider keys, the model ladder, "
-        + "and storage. Without a provider, agents stay quiet.",
+        "Configure LLM access here — provider keys and storage. "
+        + "Without a provider, agents stay quiet.",
       target: "[data-tour='settings']",
       requireMode: "power",
       enter: async (ctx) => {

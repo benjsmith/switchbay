@@ -12,6 +12,7 @@ over the WS as AG-UI events (`TEXT_MESSAGE_*` / `RUN_FINISHED`).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -95,6 +96,34 @@ def coerce_effort(effort: str | None, options: list[dict]) -> str | None:
     if not effort:
         return None
     return effort if any(o.get("id") == effort for o in options) else None
+
+
+async def reap_cli_process(proc: Any) -> None:
+    """Terminate a provider CLI subprocess, even if the caller was cancelled.
+
+    ``asyncio.wait_for`` on a node cancels the inner task; a ``finally``
+    that only ``wait()``s then gets cancelled itself and never ``kill()``s.
+    Grok/Claude then keep working for minutes after Auto has moved on.
+    """
+    if proc is None or getattr(proc, "returncode", None) is not None:
+        return
+    try:
+        proc.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        await asyncio.wait_for(proc.wait(), timeout=2.0)
+    except (asyncio.TimeoutError, ProcessLookupError):
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+    except asyncio.CancelledError:
+        try:
+            proc.kill()
+        except ProcessLookupError:
+            pass
+        raise
 
 
 CAPABILITY_NOTES = """Execution surface (`PROVIDER["capabilities"]`).

@@ -37,10 +37,17 @@ export type ActiveRun = {
   workspace?: string;
   workspace_name?: string;
   activity?: string;
+  current_tool?: string;
+  tool_count?: number;
   step?: string;
   parent_run_id?: string;
   worker_index?: number;
   is_background?: boolean;
+  orchestration_strategy?: string;
+  node_kind?: string;
+  decision_reason?: string;
+  expansions?: number;
+  verification_conflicts?: number;
 };
 
 type Props = {
@@ -59,7 +66,10 @@ const DEFAULT_HEIGHT = 220;
 const MIN_HEIGHT = 100;
 const MAX_HEIGHT = 560;
 
-const LIVE_STATUSES = ["running", "planning", "merging"];
+const LIVE_STATUSES = [
+  "running", "planning", "merging", "verifying", "expanding", "synthesizing",
+  "waiting_limits",
+];
 
 function readPersisted(): { state: PanelState; heightPx: number } {
   try {
@@ -96,7 +106,14 @@ function workingToward(r: ActiveRun): string {
   if (r.status === "idle") {
     return `${r.input_excerpt || "shell"} — waiting for input`;
   }
-  return r.step || r.activity || r.input_excerpt || "";
+  const bits = [
+    r.orchestration_strategy && r.orchestration_strategy !== "single"
+      ? r.orchestration_strategy.replace(/_/g, " ")
+      : "",
+    r.step || r.activity || r.input_excerpt || "",
+    r.decision_reason || "",
+  ].filter(Boolean);
+  return bits.join(" · ");
 }
 
 const LIVE_STATUSES_SET = new Set(LIVE_STATUSES);
@@ -476,6 +493,13 @@ export default function DashboardPanel({ runs, workspace, onJump, onExpandedChan
                       runId={r.run_id}
                       live={live}
                       isPty={r.provider === "pty"}
+                      liveSnapshot={{
+                        toolCount: r.tool_count,
+                        activity: r.activity,
+                        currentTool: r.current_tool,
+                        provider: r.provider,
+                        model: r.model,
+                      }}
                     />
                   </div>
                 )}

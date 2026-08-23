@@ -34,6 +34,9 @@ PUBLISH_IGNORES = [
     ".curator/*",
     "!.curator/profile.md",
     "!.curator/projects.json",
+    ".orchestrator/*",
+    "!.orchestrator/README.md",
+    "!.orchestrator/watchlist.csv",
 ]
 VAULT_IGNORE = "vault/"
 

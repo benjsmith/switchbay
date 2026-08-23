@@ -43,11 +43,13 @@ SHIPPED: dict[str, tuple[str, ...] | None] = {
     "ingest": _WIKI_READ + (
         "ce_ingest",
         "ce_vault_search",
+        "read_source",
         "propose_wiki_page",
     ),
     "add-source": _WIKI_READ + (
         "ce_ingest",
         "ce_vault_search",
+        "read_source",
         "propose_wiki_page",
     ),
     "deck": _WIKI_READ + (

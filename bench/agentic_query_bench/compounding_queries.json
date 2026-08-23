@@ -1,0 +1,15 @@
+{
+  "corpus": "ml-walkthrough",
+  "note": "Held-out SYNTHESIS queries, authored before any run and NOT lifted from any single source. Grounded in the corpus's LLM/ML topics; answerable only by synthesising across multiple sources/pages. Frozen; a hash is recorded per run.",
+  "frozen_at": "2026-08-02",
+  "queries": [
+    {"id": "q1-align", "q": "How do preference-optimisation methods (RLHF, DPO) relate to instruction tuning, and what problem does each solve that the others do not?"},
+    {"id": "q2-infer-eff", "q": "Trace the main efficiency techniques for open-weight LLM inference (quantisation, speculative decoding, mixture-of-experts) and how they interact or trade off."},
+    {"id": "q3-prompt-agent", "q": "What is the throughline from prompting techniques to agentic tool use, and where does each step add capability?"},
+    {"id": "q4-attention", "q": "How does the attention mechanism underpin transformers, and what alternatives (e.g. state-space models) address its limitations?"},
+    {"id": "q5-openweight", "q": "Synthesise what the corpus says about the open-weight model wave: what changed, which techniques enabled it, and what tensions remain?"},
+    {"id": "q6-scaling", "q": "How do scaling considerations connect model size, data, and inference cost across the corpus's models?"},
+    {"id": "q7-alignment-safety", "q": "How do constitutional AI and preference-based alignment relate, and what are their respective failure modes according to the sources?"},
+    {"id": "q8-finetune", "q": "Compare the parameter-efficient fine-tuning approaches in the corpus and when each is preferable."}
+  ]
+}
