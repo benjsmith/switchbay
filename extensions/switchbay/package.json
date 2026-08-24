@@ -6,7 +6,7 @@
   "publisher": "switchbay",
   "license": "LicenseRef-FSL-1.1-ALv2",
   "engines": {
-    "vscode": "^1.96.0"
+    "vscode": "^1.101.0"
   },
   "categories": ["Other"],
   "activationEvents": [
@@ -27,6 +27,11 @@
           "default": "",
           "description": "Python that can import switchbay (usually <repo>/.venv/bin/python)."
         }
+      }
+    },
+    "configurationDefaults": {
+      "extensions.supportAgentsWindow": {
+        "switchbay.switchbay": true
       }
     },
     "viewsContainers": {
@@ -80,6 +85,14 @@
       {
         "command": "switchbay.openPage",
         "title": "Switch Bay: Open Wiki Page"
+      },
+      {
+        "command": "switchbay.curate",
+        "title": "Switch Bay: Curate (Agents session)"
+      },
+      {
+        "command": "switchbay.openAgentsWindow",
+        "title": "Switch Bay: Open VS Code Agents Window"
       }
     ],
     "menus": {
@@ -120,6 +133,18 @@
             "description": "Author a sketch (companion extension)"
           }
         ]
+      }
+    ],
+    "chatAgents": [
+      { "path": "./agents/auto.agent.md" },
+      { "path": "./agents/curator.agent.md" },
+      { "path": "./agents/investigator.agent.md" },
+      { "path": "./agents/reviewer.agent.md" }
+    ],
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "switchbay.mcp",
+        "label": "Switch Bay"
       }
     ]
   },

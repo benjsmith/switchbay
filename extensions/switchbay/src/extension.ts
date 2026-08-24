@@ -1,7 +1,10 @@
 import * as vscode from "vscode";
+import { openAgentsWindow, optIntoAgentsWindow } from "./agentsSession";
 import { registerChat } from "./chat";
 import { readCachedGraph, rebuildViewer, wikiPageUri, type GraphNode } from "./ce";
 import { disposeMcp } from "./mcp";
+import { registerMcpProvider } from "./mcpProvider";
+import { startCurate } from "./orch";
 import { workspaceFolder } from "./paths";
 import { openWikiPreview } from "./preview";
 import { ProjectsTreeProvider } from "./projectsTree";
@@ -9,6 +12,8 @@ import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
 import { WikiTreeProvider } from "./wikiTree";
 
 export function activate(context: vscode.ExtensionContext): void {
+  void optIntoAgentsWindow();
+  registerMcpProvider(context);
   const wiki = new WikiTreeProvider();
   const projects = new ProjectsTreeProvider();
   context.subscriptions.push(
@@ -17,6 +22,17 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("switchbay.openGraph", () => openGraph(context)),
     vscode.commands.registerCommand("switchbay.openPreview", (uri?: vscode.Uri) => openWikiPreview(uri)),
     vscode.commands.registerCommand("switchbay.openAgents", () => openAgents()),
+    vscode.commands.registerCommand("switchbay.openAgentsWindow", () => openAgentsWindow()),
+    vscode.commands.registerCommand("switchbay.curate", async () => {
+      const prompt = await vscode.window.showInputBox({
+        title: "Switch Bay Auto",
+        prompt: "What should we curate or research?",
+        placeHolder: "curate the wiki",
+      });
+      if (prompt === undefined) return;
+      const { text } = await startCurate(context, prompt);
+      void vscode.window.showInformationMessage(text.replace(/[*`]/g, "").slice(0, 200));
+    }),
     vscode.commands.registerCommand("switchbay.fireThrusters", () => openHopper(context)),
     vscode.commands.registerCommand("switchbay.openHtml", (uri: vscode.Uri) => openHtml(uri)),
     vscode.commands.registerCommand("switchbay.openPage", async (node: GraphNode) => {

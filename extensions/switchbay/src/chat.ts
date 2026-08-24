@@ -26,9 +26,9 @@ export function registerChat(context: vscode.ExtensionContext): vscode.ChatParti
         return;
       }
       if (cmd === "curate") {
-        const note = await startCurate(request.prompt);
-        stream.markdown(note);
-        return await runTurn(context, request.prompt || "curate the wiki", stream, token);
+        const { text } = await startCurate(context, request.prompt);
+        stream.markdown(text);
+        return;
       }
       const hint = SLASH_HINTS[cmd];
       const user = hint

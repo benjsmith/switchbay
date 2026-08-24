@@ -39,11 +39,21 @@ VS Code
   activity bar: wiki tree · projects · agent dashboard
   editors: native md · wiki preview · graph/atlas · HTML · hopper
   chat: @switchbay + /thrusters /curate /plot /deck /sketch
+  Agents window: Auto / Curator / Reviewer custom agents (Local harness)
   vscode.lm  (Copilot models)
-       │ stdio MCP                    │ subprocess
-       ▼                              ▼
+       │ stdio MCP (also registered for Local Agents)
+       ▼
   python -m switchbay.mcp_server    curiosity-engine scripts
-  CSWY_PROFILE=vscode               viewer.sh / sweep.py / …
+  CSWY_PROFILE=vscode
+
+`/curate` does two things, on purpose:
+
+1. **VS Code-native** — open the Agents window and start a Local session
+   on the **Auto** custom agent (Investigator/Reviewer subagents + MCP).
+2. **Switch Bay-native** — write a DAG snapshot under the machine-local
+   runs dir and prime it with read-only MCP (`ce_epoch_summary`,
+   `ce_lint`). The Agent Dashboard file-watches that. Writing still
+   happens in the Agents session via `propose_wiki_page`.
 ```
 
 Hard rules:
@@ -63,6 +73,9 @@ Hard rules:
 - Wiki preview renders tables, PNG figures, `[[wikilinks]]`, and source
   filenames you can right-click to reveal in Explorer / OS / open.
 - `/thrusters` arms Mars Hopper in a webview.
+- `/curate` (and **Switch Bay: Curate**) opens a VS Code Agents session
+  on Auto and a Switch Bay DAG on disk. Opt-in:
+  `extensions.supportAgentsWindow["switchbay.switchbay"] = true`.
 
 ## How to run the spike
 

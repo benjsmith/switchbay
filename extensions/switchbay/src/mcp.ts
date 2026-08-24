@@ -2,6 +2,34 @@ import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
 import * as vscode from "vscode";
 import { pythonBin, repoRoot, srcDir, workspaceFsPath } from "./paths";
 
+export const MCP_SERVER_LABEL = "switchbay";
+
+export type McpLaunch = {
+  command: string;
+  args: string[];
+  cwd: string;
+  env: Record<string, string>;
+};
+
+export function mcpLaunch(context: vscode.ExtensionContext): McpLaunch | undefined {
+  const workspace = workspaceFsPath();
+  if (!workspace) return undefined;
+  const repo = repoRoot(context);
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) {
+    if (typeof v === "string") env[k] = v;
+  }
+  env.PYTHONPATH = srcDir(repo);
+  env.CSWY_WORKSPACE = workspace;
+  env.CSWY_PROFILE = "vscode";
+  return {
+    command: pythonBin(repo),
+    args: ["-m", "switchbay.mcp_server"],
+    cwd: workspace,
+    env,
+  };
+}
+
 type Pending = {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
@@ -37,18 +65,11 @@ export class McpClient {
   }
 
   static async start(context: vscode.ExtensionContext): Promise<McpClient> {
-    const workspace = workspaceFsPath();
-    if (!workspace) throw new Error("open a folder first");
-    const repo = repoRoot(context);
-    const py = pythonBin(repo);
-    const proc = spawn(py, ["-m", "switchbay.mcp_server"], {
-      cwd: workspace,
-      env: {
-        ...process.env,
-        PYTHONPATH: srcDir(repo),
-        CSWY_WORKSPACE: workspace,
-        CSWY_PROFILE: "vscode",
-      },
+    const launch = mcpLaunch(context);
+    if (!launch) throw new Error("open a folder first");
+    const proc = spawn(launch.command, launch.args, {
+      cwd: launch.cwd,
+      env: launch.env,
       stdio: ["pipe", "pipe", "pipe"],
     }) as ChildProcessWithoutNullStreams;
     const client = new McpClient(proc);

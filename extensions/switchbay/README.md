@@ -16,3 +16,10 @@ From the Switch Bay repo root in VS Code:
 4. Confirm `lsof -i :8765` is empty
 
 Chat: `@switchbay` — slashes `/thrusters`, `/curate`, `/plot`, `/deck`, `/sketch`.
+
+`/curate` opens the **VS Code Agents window** on the bundled **Auto**
+custom agent (Local harness + Switch Bay MCP) and writes a DAG snapshot
+the Agent Dashboard watches. Also: **Switch Bay: Curate** in the palette.
+
+Custom agents in the Agents dropdown: Auto, Curator, Reviewer.
+Investigator is subagent-only.

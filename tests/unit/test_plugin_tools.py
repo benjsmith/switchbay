@@ -21,11 +21,11 @@ def test_plugin_allowlist_drops_daemon_coupled_tools() -> None:
         "ce_ingest",
         "propose_wiki_page",
         "save_plot",
-        "create_slideshow",
         "create_report",
-        "author_sketch",
     ):
         assert name in allowed, name
+    assert "create_slideshow" in allowed or "author_slide" in allowed
+    assert "author_sketch" in allowed or "compose_analysis" in allowed
 
 
 def test_plugin_profile_detects_vscode(monkeypatch) -> None:

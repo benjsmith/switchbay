@@ -2,6 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphNode } from "./ce";
+import { listRuns, runsRoot } from "./orch";
 import { repoRoot, workspaceFolder } from "./paths";
 
 function nonce(): string {
@@ -170,18 +171,79 @@ export function openHopper(context: vscode.ExtensionContext): void {
 }
 
 export function openAgents(): void {
+  const folder = workspaceFolder();
   const panel = vscode.window.createWebviewPanel(
     "switchbay.agents",
     "Agent Dashboard",
     vscode.ViewColumn.Beside,
     { enableScripts: true },
   );
+  const n = nonce();
   panel.webview.html = `<!DOCTYPE html>
-<html><body style="font-family: var(--vscode-font-family); padding: 1.5rem; color: var(--vscode-foreground);">
+<html><head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}'" />
+<style>
+  body { font-family: var(--vscode-font-family); padding: 1.25rem 1.5rem; color: var(--vscode-foreground); }
+  h1 { font-size: 1.1rem; }
+  .muted { opacity: 0.65; font-size: 0.85rem; }
+  .run { border: 1px solid var(--vscode-widget-border, #444); border-radius: 6px; padding: 0.8rem 1rem; margin: 0.8rem 0; }
+  .nodes { display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  .node { padding: 0.2rem 0.55rem; border-radius: 999px; font-size: 0.8rem;
+          background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+  .node.running { outline: 1px solid var(--vscode-focusBorder); }
+  .node.done { opacity: 0.85; }
+  .node.failed { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); }
+  pre { white-space: pre-wrap; font-size: 0.8rem; max-height: 8rem; overflow: auto; }
+</style>
+</head>
+<body>
   <h1>Agent Dashboard</h1>
-  <p>DAG animation lands when Auto orchestration runs from <code>@switchbay /curate</code>.</p>
-  <p>This spike watches run JSON on disk — nothing listens on <code>:8765</code>.</p>
+  <p class="muted">File-watched Switch Bay DAG. VS Code Agents window owns the long-running loop. Nothing on :8765.</p>
+  <div id="list">No runs yet. Use <code>@switchbay /curate</code> or <strong>Switch Bay: Curate</strong>.</div>
+  <script nonce="${n}">
+    const vscode = acquireVsCodeApi();
+    const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;","\\u0022":"&quot;","'":"&#39;"}[c] || c));
+    window.addEventListener("message", (ev) => {
+      const runs = ev.data && ev.data.runs;
+      if (!Array.isArray(runs)) return;
+      const el = document.getElementById("list");
+      if (!runs.length) { el.textContent = "No runs yet."; return; }
+      el.innerHTML = runs.map((r) => {
+        const nodes = (r.nodes || []).map((n) =>
+          "<span class='node " + esc(n.status || "") + "'>" + esc(n.kind) + " · " + esc(n.status || "pending") + "</span>"
+        ).join("");
+        return "<div class='run'><strong>" + esc(r.objective || r.orchestration_id) + "</strong>"
+          + "<div class='muted'>" + esc(r.phase || "") + " · " + esc(r.via || "") + " · " + esc(r.orchestration_id) + "</div>"
+          + "<div class='nodes'>" + nodes + "</div>"
+          + (r.note ? "<pre>" + esc(String(r.note).slice(0, 1200)) + "</pre>" : "")
+          + "</div>";
+      }).join("");
+    });
+  </script>
 </body></html>`;
+
+  const push = () => {
+    const ws = folder?.fsPath;
+    if (!ws) {
+      void panel.webview.postMessage({ runs: [] });
+      return;
+    }
+    void panel.webview.postMessage({ runs: listRuns(ws) });
+  };
+  push();
+  const ws = folder?.fsPath;
+  if (ws) {
+    const root = runsRoot(ws);
+    fs.mkdirSync(root, { recursive: true });
+    try {
+      const watcher = fs.watch(root, { recursive: true }, () => push());
+      panel.onDidDispose(() => watcher.close());
+    } catch {
+      const id = setInterval(push, 2000);
+      panel.onDidDispose(() => clearInterval(id));
+    }
+  }
 }
 
 export function openHtml(uri: vscode.Uri): void {
