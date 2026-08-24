@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphNode } from "./ce";
+import { readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode } from "./ce";
 import { listRuns, runsRoot } from "./orch";
 import { repoRoot, workspaceFolder } from "./paths";
 
@@ -12,114 +12,65 @@ function nonce(): string {
   return s;
 }
 
+function graphMediaRoot(context: vscode.ExtensionContext): vscode.Uri {
+  return vscode.Uri.joinPath(context.extensionUri, "media", "graph");
+}
+
+function graphWebviewHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string | null {
+  const index = path.join(mediaRoot.fsPath, "webview-graph.html");
+  if (!fs.existsSync(index)) return null;
+  let html = fs.readFileSync(index, "utf8");
+  const csp = [
+    `default-src 'none'`,
+    `img-src ${webview.cspSource} data:`,
+    `font-src ${webview.cspSource} data:`,
+    `style-src ${webview.cspSource} 'unsafe-inline'`,
+    `script-src ${webview.cspSource}`,
+  ].join("; ");
+  html = html.replace(
+    "<head>",
+    `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`,
+  );
+  html = html.replace(/(src|href)="(\.\/[^"]+)"/g, (_m, attr: string, rel: string) => {
+    const uri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, rel.replace(/^\.\//, "")));
+    return `${attr}="${uri}"`;
+  });
+  return html;
+}
+
 export function openGraph(context: vscode.ExtensionContext): void {
   const folder = workspaceFolder();
   if (!folder) {
     void vscode.window.showWarningMessage("Open a curiosity-engine folder first.");
     return;
   }
-  const graph = readCachedGraph(folder.fsPath);
-  const nodes: GraphNode[] = graph?.nodes?.length ? graph.nodes : scanWikiMarkdown(folder.fsPath);
+  const mediaRoot = graphMediaRoot(context);
   const panel = vscode.window.createWebviewPanel(
     "switchbay.graph",
     "Graph",
     vscode.ViewColumn.One,
-    { enableScripts: true, retainContextWhenHidden: true },
+    {
+      enableScripts: true,
+      retainContextWhenHidden: true,
+      localResourceRoots: [mediaRoot],
+    },
   );
-  const n = nonce();
-  const csp = `default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${n}'`;
-  const payload = JSON.stringify(nodes);
-  panel.webview.html = `<!DOCTYPE html>
-<html><head>
-<meta charset="UTF-8" />
-<meta http-equiv="Content-Security-Policy" content="${csp}" />
-<style>
-  body { font-family: var(--vscode-font-family); margin: 0; color: var(--vscode-foreground);
-         background: var(--vscode-editor-background); }
-  header { padding: 0.6rem 1rem; border-bottom: 1px solid var(--vscode-widget-border, #333);
-           display: flex; gap: 0.8rem; align-items: baseline; }
-  header span { opacity: 0.6; font-size: 0.85rem; }
-  input { flex: 1; background: var(--vscode-input-background); color: var(--vscode-input-foreground);
-          border: 1px solid var(--vscode-input-border, #444); padding: 0.25rem 0.5rem; }
-  .group { padding: 0.4rem 0; }
-  .group h2 { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase;
-              margin: 0.6rem 1rem 0.2rem; opacity: 0.55; }
-  .node { padding: 0.35rem 1rem; cursor: pointer; display: flex; justify-content: space-between; }
-  .node:hover { background: var(--vscode-list-hoverBackground); }
-  .id { opacity: 0.5; font-size: 0.8rem; }
-  .menu { position: fixed; background: var(--vscode-menu-background); color: var(--vscode-menu-foreground);
-          border: 1px solid var(--vscode-widget-border, #444); z-index: 5; min-width: 12rem; }
-  .menu button { display: block; width: 100%; text-align: left; background: none; border: 0; color: inherit;
-                 padding: 0.35rem 0.8rem; cursor: pointer; font: inherit; }
-  .menu button:hover { background: var(--vscode-menu-selectionBackground); }
-</style>
-</head>
-<body>
-  <header>
-    <strong>Graph</strong>
-    <span>click opens markdown · right-click workflows</span>
-    <input id="q" placeholder="filter pages" />
-  </header>
-  <div id="list"></div>
-  <div id="menu" class="menu" hidden></div>
-  <script nonce="${n}">
-    const vscode = acquireVsCodeApi();
-    const nodes = ${payload};
-    const list = document.getElementById("list");
-    const menu = document.getElementById("menu");
-    const q = document.getElementById("q");
-    function render() {
-      const term = (q.value || "").toLowerCase();
-      const groups = {};
-      for (const n of nodes) {
-        const hay = ((n.title || "") + " " + (n.id || "") + " " + (n.path || "")).toLowerCase();
-        if (term && !hay.includes(term)) continue;
-        const t = (n.type || "unclassified").toLowerCase();
-        (groups[t] = groups[t] || []).push(n);
-      }
-      list.innerHTML = "";
-      Object.keys(groups).sort().forEach((t) => {
-        const wrap = document.createElement("div");
-        wrap.className = "group";
-        wrap.innerHTML = "<h2>" + t + "</h2>";
-        for (const n of groups[t]) {
-          const row = document.createElement("div");
-          row.className = "node";
-          row.innerHTML = "<span>" + (n.title || n.id) + "</span><span class='id'>" + n.id + "</span>";
-          row.addEventListener("click", () => vscode.postMessage({ type: "open", node: n }));
-          row.addEventListener("contextmenu", (ev) => {
-            ev.preventDefault();
-            menu.hidden = false;
-            menu.style.left = ev.pageX + "px";
-            menu.style.top = ev.pageY + "px";
-            menu.innerHTML = "";
-            const items = [
-              ["Open markdown", "open"],
-              ["Open preview", "preview"],
-              ["Reveal in Explorer", "reveal"],
-              ["To plot", "plot"],
-              ["To sketch", "sketch"],
-              ["To slideshow", "deck"],
-            ];
-            for (const [label, action] of items) {
-              const b = document.createElement("button");
-              b.textContent = label;
-              b.onclick = () => { vscode.postMessage({ type: action, node: n }); menu.hidden = true; };
-              menu.appendChild(b);
-            }
-          });
-          wrap.appendChild(row);
-        }
-        list.appendChild(wrap);
-      });
-    }
-    q.addEventListener("input", render);
-    document.addEventListener("click", () => { menu.hidden = true; });
-    render();
-  </script>
-</body></html>`;
-
+  const html = graphWebviewHtml(panel.webview, mediaRoot);
+  if (!html) {
+    panel.webview.html = `<p style="padding:1.5rem;font-family:sans-serif">Graph viewer is not built yet.
+      From the Switch Bay repo run <code>pnpm --dir frontend run build:webview</code> then F5 again.</p>`;
+    return;
+  }
+  const graph: GraphData = readCachedGraph(folder.fsPath) ?? {
+    nodes: scanWikiMarkdown(folder.fsPath),
+    edges: [],
+  };
+  const send = () => { void panel.webview.postMessage({ graph }); };
   panel.webview.onDidReceiveMessage(async (msg: { type?: string; node?: GraphNode }) => {
+    if (msg.type === "ready") {
+      send();
+      return;
+    }
     const node = msg.node;
     if (!node) return;
     const uri = wikiPageUri(folder, node.path);
@@ -143,6 +94,7 @@ export function openGraph(context: vscode.ExtensionContext): void {
       });
     }
   });
+  panel.webview.html = html;
   context.subscriptions.push(panel);
 }
 

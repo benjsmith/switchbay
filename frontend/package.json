@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:webview": "vite build --config vite.webview.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {

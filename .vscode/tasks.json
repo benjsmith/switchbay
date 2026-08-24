@@ -7,7 +7,7 @@
       "command": "bash",
       "args": [
         "-lc",
-        "cd \"${workspaceFolder}/extensions/switchbay\" && if [ ! -x node_modules/.bin/tsc ]; then pnpm install; fi && ./node_modules/.bin/tsc -p ."
+        "cd \"${workspaceFolder}/extensions/switchbay\" && if [ ! -x node_modules/.bin/tsc ]; then pnpm install; fi && ./node_modules/.bin/tsc -p . && cd \"${workspaceFolder}/frontend\" && if [ ! -d node_modules ]; then pnpm install; fi && pnpm exec vite build --config vite.webview.config.ts"
       ],
       "problemMatcher": "$tsc",
       "group": {

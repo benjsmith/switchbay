@@ -64,6 +64,7 @@ dev-frontend:
 vscode-compile:
 	pnpm --dir extensions/switchbay install --frozen-lockfile
 	pnpm --dir extensions/switchbay run compile
+	pnpm --dir frontend run build:webview
 
 # Production build: the daemon serves frontend/dist at / (so the PWA
 # installs from the always-on daemon, no vite). Run this before

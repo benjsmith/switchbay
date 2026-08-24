@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Graph</title>
+  <style>
+    html, body, #root, #mount { height: 100%; width: 100%; margin: 0; overflow: hidden; }
+    body { background: var(--bg, #0f1115); color: var(--text, #e6e8eb); }
+    .ctx-menu {
+      position: fixed; z-index: 40; min-width: 12rem;
+      background: var(--vscode-menu-background, #1c1c1c);
+      color: var(--vscode-menu-foreground, #ccc);
+      border: 1px solid var(--vscode-widget-border, #444);
+    }
+    .ctx-menu button {
+      display: block; width: 100%; text-align: left; background: none; border: 0;
+      color: inherit; padding: 0.35rem 0.8rem; cursor: pointer; font: inherit;
+    }
+    .ctx-menu button:hover { background: var(--vscode-menu-selectionBackground, #37373d); }
+  </style>
+</head>
+<body>
+  <div id="root" class="sy-graph-host">
+    <div id="mount" class="sy-graph-mount"></div>
+  </div>
+  <div id="ctx" class="ctx-menu" hidden></div>
+  <script type="module" src="./src/webview-graph.ts"></script>
+</body>
+</html>

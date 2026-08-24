@@ -26,6 +26,7 @@ frontend/.vite/
 
 # ── vscode plugin experiment (compiled output) ──
 extensions/**/out/
+extensions/switchbay/media/graph/
 
 # ── workspace runtime (when this repo is opened as its own workspace) ──
 .workbench/
