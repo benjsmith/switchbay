@@ -45,8 +45,14 @@ export class WikiTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem
     if (element instanceof TypeGroupItem) return element.children;
     if (element) return [];
 
-    const graph = readCachedGraph(folder.fsPath);
-    const nodes = graph?.nodes?.length ? graph.nodes : scanWikiMarkdown(folder.fsPath);
+    let nodes: GraphNode[] = [];
+    try {
+      const graph = readCachedGraph(folder.fsPath);
+      nodes = graph?.nodes?.length ? graph.nodes : scanWikiMarkdown(folder.fsPath);
+    } catch (err) {
+      console.log("[switchbay] wiki tree scan failed", err);
+      return [];
+    }
     const groups = new Map<string, GraphNode[]>();
     for (const n of nodes) {
       const t = (n.type || "unclassified").toLowerCase();

@@ -46,7 +46,12 @@ export class ProjectsTreeProvider implements vscode.TreeDataProvider<vscode.Tree
       return element.pages.map((p) => new PageItem(p, folder));
     }
     if (element) return [];
-    return this.scan(folder);
+    try {
+      return this.scan(folder);
+    } catch (err) {
+      console.log("[switchbay] projects tree scan failed", err);
+      return [];
+    }
   }
 
   private scan(folder: vscode.Uri): ProjectItem[] {

@@ -1,3 +1,5 @@
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { openAgentsWindow, optIntoAgentsWindow } from "./agentsSession";
 import { registerChat } from "./chat";
@@ -11,14 +13,28 @@ import { ProjectsTreeProvider } from "./projectsTree";
 import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
 import { WikiTreeProvider } from "./wikiTree";
 
+function updateWikiContext(): void {
+  const folder = workspaceFolder();
+  const hasWiki = Boolean(folder && fs.existsSync(path.join(folder.fsPath, "wiki")));
+  void vscode.commands.executeCommand("setContext", "switchbay.hasWiki", hasWiki);
+}
+
 export function activate(context: vscode.ExtensionContext): void {
-  void optIntoAgentsWindow();
-  registerMcpProvider(context);
+  const log = vscode.window.createOutputChannel("Switch Bay");
+  context.subscriptions.push(log);
   const wiki = new WikiTreeProvider();
   const projects = new ProjectsTreeProvider();
+  // Views first — MCP/chat failures must not leave "no data provider".
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("switchbay.wiki", wiki),
     vscode.window.registerTreeDataProvider("switchbay.projects", projects),
+    vscode.commands.registerCommand("switchbay.openWorkspace", () =>
+      vscode.commands.executeCommand("workbench.action.files.openFolder")),
+    vscode.commands.registerCommand("switchbay.refreshTrees", () => {
+      updateWikiContext();
+      wiki.refresh();
+      projects.refresh();
+    }),
     vscode.commands.registerCommand("switchbay.openGraph", () => openGraph(context)),
     vscode.commands.registerCommand("switchbay.openPreview", (uri?: vscode.Uri) => openWikiPreview(uri)),
     vscode.commands.registerCommand("switchbay.openAgents", () => openAgents()),
@@ -62,12 +78,29 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }),
   );
-  registerChat(context);
 
+  try {
+    registerMcpProvider(context);
+  } catch (err) {
+    log.appendLine(`MCP provider failed: ${err}`);
+  }
+  try {
+    registerChat(context);
+  } catch (err) {
+    log.appendLine(`Chat participant failed: ${err}`);
+  }
+  void optIntoAgentsWindow();
+  updateWikiContext();
+
+  const ping = () => {
+    updateWikiContext();
+    wiki.refresh();
+    projects.refresh();
+  };
+  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => ping()));
   const folder = workspaceFolder();
   if (folder) {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, "wiki/**/*.md"));
-    const ping = () => { wiki.refresh(); projects.refresh(); };
     watcher.onDidChange(ping);
     watcher.onDidCreate(ping);
     watcher.onDidDelete(ping);

@@ -8,6 +8,16 @@ hypothesis, keep/drop list, and verdict criteria.
 
 ## Debug
 
+From the Switch Bay repo root in VS Code. F5 runs a shell compile via
+`extensions/switchbay/node_modules/.bin/tsc` (not `npm`), so Dock-launched
+VS Code no longer fails with exit 127 when `npm`/`pnpm` are missing from
+the GUI PATH.
+
+After F5, open the **curiosity-engine folder** in the Extension Development
+Host (File → Open Folder), then click the Switch Bay activity-bar icon.
+Wiki should list pages grouped by type. If it still shows the empty
+welcome, Output → **Switch Bay** and the refresh button on the Wiki view.
+
 From the Switch Bay repo root in VS Code:
 
 1. `pnpm --dir extensions/switchbay install`

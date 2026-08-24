@@ -10,7 +10,9 @@
   },
   "categories": ["Other"],
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onView:switchbay.wiki",
+    "onView:switchbay.projects"
   ],
   "main": "./out/extension.js",
   "contributes": {
@@ -58,7 +60,13 @@
     "viewsWelcome": [
       {
         "view": "switchbay.wiki",
-        "contents": "Open a folder that has a `wiki/` directory (a curiosity-engine workspace).\n[Open Folder](command:vscode.openFolder)"
+        "contents": "Open a curiosity-engine folder (`wiki/` + `vault/`).\n[Open Folder](command:switchbay.openWorkspace)",
+        "when": "workspaceFolderCount == 0"
+      },
+      {
+        "view": "switchbay.wiki",
+        "contents": "This folder has no `wiki/` directory. Open a curiosity-engine workspace, or add `wiki/` here.\n[Open Folder](command:switchbay.openWorkspace)",
+        "when": "workspaceFolderCount != 0 && !switchbay.hasWiki"
       }
     ],
     "commands": [
@@ -87,6 +95,15 @@
         "title": "Switch Bay: Open Wiki Page"
       },
       {
+        "command": "switchbay.openWorkspace",
+        "title": "Switch Bay: Open Workspace Folder"
+      },
+      {
+        "command": "switchbay.refreshTrees",
+        "title": "Switch Bay: Refresh Wiki & Projects",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "switchbay.curate",
         "title": "Switch Bay: Curate (Agents session)"
       },
@@ -100,6 +117,13 @@
         {
           "command": "switchbay.openPreview",
           "when": "resourceExtname == .md && resourcePath =~ /wiki/",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "switchbay.refreshTrees",
+          "when": "view == switchbay.wiki || view == switchbay.projects",
           "group": "navigation"
         }
       ]

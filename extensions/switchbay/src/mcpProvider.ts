@@ -44,12 +44,21 @@ export function registerMcpProvider(context: vscode.ExtensionContext): void {
     console.log("[switchbay] vscode.lm.registerMcpServerDefinitionProvider is unavailable; Agents Local harness will not see Switch Bay MCP");
     return;
   }
-  context.subscriptions.push(register(PROVIDER_ID, {
-    provideMcpServerDefinitions: () => {
-      const launch = mcpLaunch(context);
-      if (!launch) return [];
-      return [stdioDefinition(launch)];
-    },
-    resolveMcpServerDefinition: (server) => server,
-  }));
+  try {
+    context.subscriptions.push(register(PROVIDER_ID, {
+      provideMcpServerDefinitions: () => {
+        try {
+          const launch = mcpLaunch(context);
+          if (!launch) return [];
+          return [stdioDefinition(launch)];
+        } catch (err) {
+          console.log("[switchbay] MCP definition failed", err);
+          return [];
+        }
+      },
+      resolveMcpServerDefinition: (server) => server,
+    }));
+  } catch (err) {
+    console.log("[switchbay] MCP provider registration failed", err);
+  }
 }

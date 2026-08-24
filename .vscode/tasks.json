@@ -3,13 +3,20 @@
   "tasks": [
     {
       "label": "switchbay-compile",
-      "type": "npm",
-      "script": "compile",
-      "path": "extensions/switchbay/",
+      "type": "shell",
+      "command": "bash",
+      "args": [
+        "-lc",
+        "cd \"${workspaceFolder}/extensions/switchbay\" && if [ ! -x node_modules/.bin/tsc ]; then pnpm install; fi && ./node_modules/.bin/tsc -p ."
+      ],
       "problemMatcher": "$tsc",
       "group": {
         "kind": "build",
         "isDefault": true
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
       }
     }
   ]
