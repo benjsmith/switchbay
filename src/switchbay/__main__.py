@@ -32,6 +32,12 @@ def main(argv: list[str] | None = None) -> int:
         "action",
         choices=("install", "uninstall", "start", "stop", "restart", "status"),
     )
+    svc.add_argument(
+        "--enterprise-user",
+        action="store_true",
+        help="On install, write <repo>/admin.json from the enterprise "
+             "template (no /Library or ProgramData). For testers.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -49,7 +55,10 @@ def main(argv: list[str] | None = None) -> int:
         return daemon.run(workspace=args.workspace.resolve(), host=host, port=port)
     if args.cmd == "service":
         from . import service
-        return service.run(args.action)
+        return service.run(
+            args.action,
+            enterprise_user=bool(getattr(args, "enterprise_user", False)),
+        )
 
     parser.print_help()
     return 1

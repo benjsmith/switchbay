@@ -39,6 +39,8 @@ def stamp_baked(
     sso_slug: str | None = None,
     allow_hf: bool | None = None,
     skills_npx: bool | None = None,
+    in_app_update: bool | None = None,
+    update_repo: str | None = None,
 ) -> dict:
     """Write policy into payload/admin.baked.json. Returns the dict."""
     path = payload / "admin.baked.json"
@@ -60,7 +62,16 @@ def stamp_baked(
         feats["hf_model_download"] = bool(allow_hf)
     if skills_npx is not None:
         feats["install_skills_npx"] = bool(skills_npx)
+    if in_app_update is not None:
+        feats["in_app_update"] = bool(in_app_update)
     data["features"] = feats
+    if update_repo or in_app_update:
+        updates = dict(data.get("updates") or {})
+        if update_repo:
+            updates["repo"] = update_repo.strip()
+        if in_app_update:
+            updates.setdefault("include_skills", False)
+        data["updates"] = updates
     path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
     return data
 
@@ -385,6 +396,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="Bake Hugging Face downloads ON (overlay cannot enable later)")
     p.add_argument("--no-skills-npx", action="store_true",
                    help="Bake npx/uvx skills add OFF")
+    p.add_argument("--in-app-update", action="store_true",
+                   help="Bake Settings → Update ON. Git checkouts pull the "
+                        "configured repo and keep admin.baked.json / admin.json. "
+                        "Packaged non-git trees still skip in-app update.")
+    p.add_argument("--update-repo", default="",
+                   help="GitHub owner/name Settings → Update fetches "
+                        "(default benjsmith/switchbay)")
     p.add_argument("--vendor-ce", type=Path, default=None,
                    help="Copy this curiosity-engine skill dir to layout/vendor/")
     args = p.parse_args(argv)
@@ -399,6 +417,8 @@ def main(argv: list[str] | None = None) -> int:
         sso_slug=args.sso_slug or None,
         allow_hf=True if args.allow_hf else None,
         skills_npx=False if args.no_skills_npx else None,
+        in_app_update=True if args.in_app_update else None,
+        update_repo=args.update_repo.strip() or None,
     )
     if args.vendor_ce:
         dest = payload / "vendor" / "curiosity-engine"

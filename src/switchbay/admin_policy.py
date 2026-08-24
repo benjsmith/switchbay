@@ -13,7 +13,9 @@ Search order (first existing file wins):
   2. ``%ProgramData%\\SwitchBay\\admin.json``  (Windows MDM)
   3. ``/Library/Application Support/SwitchBay/admin.json``  (macOS MDM)
   4. ``/etc/switchbay/admin.json``
-  5. ``<repo>/admin.json``  (optional drop-in next to the checkout)
+  5. ``<repo>/admin.json``  (optional drop-in next to the checkout;
+     ``service install --enterprise-user`` writes this without
+     machine-admin rights)
 
 ``SWITCHBAY_PROFILE=open`` is the default. Enterprise payloads stamp
 ``SWITCHBAY_PROFILE=enterprise``.
@@ -272,6 +274,11 @@ def load(*, force: bool = False) -> dict[str, Any]:
         raw = src.get("paths")
         if isinstance(raw, dict):
             paths.update(raw)
+    updates = {}
+    for src in (baked_data, overlay):
+        raw = src.get("updates")
+        if isinstance(raw, dict):
+            updates.update(raw)
 
     resolved = {
         "profile": profile,
@@ -284,6 +291,7 @@ def load(*, force: bool = False) -> dict[str, Any]:
         "mcp": mcp,
         "skills": skills,
         "paths": paths,
+        "updates": updates,
         "allow_profile_override": allow_override,
         "tighten": tighten,
     }
@@ -425,6 +433,54 @@ def skills_ref_allowed(ref: str) -> bool:
     return _ref_allowed(ref, skills_allowlist())
 
 
+DEFAULT_UPDATE_REPO = "benjsmith/switchbay"
+
+
+def update_repo() -> str:
+    """GitHub owner/name used by Settings → Update for Switch Bay itself."""
+    raw = str((load().get("updates") or {}).get("repo") or "").strip()
+    if raw.count("/") == 1 and ".." not in raw and " " not in raw:
+        return raw
+    return DEFAULT_UPDATE_REPO
+
+
+def update_include_skills() -> bool:
+    """Whether Settings → Update may touch curiosity-engine / merge.
+
+    Enterprise defaults to Switch Bay only (skills come from the
+    bake / vendor tree). Open profile still updates bundled skills.
+    """
+    data = load().get("updates") or {}
+    if "include_skills" in data:
+        return bool(data["include_skills"])
+    return profile() != "enterprise"
+
+
+def stamp_enterprise_user_policy(repo: Path | None = None) -> Path:
+    """Write ``<repo>/admin.json`` from the enterprise template.
+
+    No ``/Library`` or ProgramData write — testers and ``service
+    install --enterprise-user`` use this instead of machine admin.
+    Overlay-only (no ``admin.baked.json``), so a tester can still
+    flip ``features.in_app_update`` in the file.
+    """
+    dest_root = repo if repo is not None else _repo_root()
+    dest = dest_root / "admin.json"
+    template = _repo_root() / "config" / "admin.enterprise.json"
+    data = _read_file(template) if template.is_file() else {}
+    if not data:
+        data = {
+            "profile": "enterprise",
+            "features": dict(FEATURE_DEFAULTS_ENTERPRISE),
+        }
+    data["profile"] = "enterprise"
+    data["allow_profile_override"] = True
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    reset_cache()
+    return dest
+
+
 def derived_copilot_hosts() -> list[str]:
     host = copilot_host().lower()
     out = {host}
@@ -456,7 +512,11 @@ def egress_allowed(url: str) -> bool:
             "cas-bridge.xethub.hf.co",
         })
     if feature_enabled("in_app_update"):
-        allow.add("api.github.com")
+        allow.update({
+            "github.com", "api.github.com",
+            "codeload.github.com", "raw.githubusercontent.com",
+            "objects.githubusercontent.com",
+        })
     if isinstance(extra, list) and extra:
         allow.update({str(x).strip().lower() for x in extra if str(x).strip()})
     if host in allow:

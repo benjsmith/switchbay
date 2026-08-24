@@ -474,10 +474,13 @@ def _win(action: str, repo: Path) -> int:
 ACTIONS = ("install", "uninstall", "start", "stop", "restart", "status")
 
 
-def run(action: str) -> int:
+def run(action: str, *, enterprise_user: bool = False) -> int:
     """Entry point for `python -m switchbay service <action>`."""
     if action not in ACTIONS:
         print(f"unknown service action: {action!r}; expected one of {', '.join(ACTIONS)}")
+        return 2
+    if enterprise_user and action != "install":
+        print("--enterprise-user only applies to `service install`")
         return 2
     repo = _repo_root()
     if sys.platform == "darwin":
@@ -489,6 +492,13 @@ def run(action: str) -> int:
     else:
         print(f"unsupported platform for service management: {sys.platform}")
         return 2
+    if action == "install" and enterprise_user:
+        from . import admin_policy
+        dest = admin_policy.stamp_enterprise_user_policy(repo)
+        os.environ["SWITCHBAY_PROFILE"] = "enterprise"
+        print(
+            f"wrote {dest} (enterprise, user-scoped; no /Library or ProgramData)"
+        )
     if action == "install":
         _ensure_uv()  # pack extras install via `uv pip install`
     rc = impl(action, repo)

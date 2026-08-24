@@ -40,6 +40,8 @@ docs/product-pilot-*.md
 
 # ── machine-level admin policy drop-in (never commit a live copy) ──
 /admin.json
+/admin.baked.json
+/SWITCHBAY_PROFILE
 
 # ── regenerable / local-only ──
 docs/*.pdf

@@ -75,3 +75,17 @@ def test_overlay_example_mentions_host():
     ex = m.overlay_example(copilot_host="ghe.example.com", allow_hf=False)
     assert ex["copilot"]["host"] == "ghe.example.com"
     assert ex["features"]["hf_model_download"] is False
+
+
+def test_stamp_baked_in_app_update(tmp_path: Path):
+    m = _mod()
+    payload = _payload(tmp_path)
+    data = m.stamp_baked(
+        payload, in_app_update=True, update_repo="acme/switchbay",
+    )
+    on_disk = json.loads((payload / "admin.baked.json").read_text(encoding="utf-8"))
+    assert on_disk == data
+    assert data["features"]["in_app_update"] is True
+    assert data["updates"]["repo"] == "acme/switchbay"
+    assert data["updates"]["include_skills"] is False
+    assert data["allow_profile_override"] is False

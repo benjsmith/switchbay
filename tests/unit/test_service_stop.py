@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from switchbay import service
+import json
+
+from switchbay import admin_policy, service
 
 
 def test_stop_daemon_pid_windows_uses_pid_not_image(monkeypatch, tmp_path):
@@ -56,3 +58,41 @@ def test_spawn_restart_does_not_invoke_make(monkeypatch, tmp_path):
     service.spawn_restart()
     assert popped and popped[0][-2:] == ["service", "restart"]
     assert "make" not in popped[0]
+
+
+def test_run_enterprise_user_only_on_install():
+    assert service.run("status", enterprise_user=True) == 2
+
+
+def test_main_passes_enterprise_user_flag(monkeypatch):
+    seen: dict[str, object] = {}
+
+    def fake_run(action, *, enterprise_user=False):
+        seen["action"] = action
+        seen["enterprise_user"] = enterprise_user
+        return 0
+
+    monkeypatch.setattr(service, "run", fake_run)
+    from switchbay.__main__ import main
+    assert main(["service", "install", "--enterprise-user"]) == 0
+    assert seen == {"action": "install", "enterprise_user": True}
+
+
+def test_run_install_enterprise_user_stamps(tmp_path, monkeypatch):
+    monkeypatch.setattr(service, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(service.sys, "platform", "darwin")
+    monkeypatch.setattr(service, "_mac", lambda action, repo: 0)
+    monkeypatch.setattr(service, "_ensure_uv", lambda: None)
+    monkeypatch.setattr(service, "_install_bundled_skills", lambda: None)
+    monkeypatch.delenv("SWITCHBAY_PROFILE", raising=False)
+    admin_policy.reset_cache()
+    rc = service.run("install", enterprise_user=True)
+    assert rc == 0
+    dest = tmp_path / "admin.json"
+    assert dest.is_file()
+    data = json.loads(dest.read_text(encoding="utf-8"))
+    assert data["profile"] == "enterprise"
+    assert data["features"]["in_app_update"] is False
+    import os
+    assert os.environ.get("SWITCHBAY_PROFILE") == "enterprise"
+    admin_policy.reset_cache()

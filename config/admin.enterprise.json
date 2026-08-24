@@ -39,5 +39,6 @@
   },
   "mcp": { "allowlist": "*" },
   "skills": { "allowlist": "*" },
-  "network": { "bind_host": "127.0.0.1", "bind_port": 8765, "egress_allowlist": [] }
+  "network": { "bind_host": "127.0.0.1", "bind_port": 8765, "egress_allowlist": [] },
+  "updates": { "repo": "benjsmith/switchbay", "include_skills": false }
 }

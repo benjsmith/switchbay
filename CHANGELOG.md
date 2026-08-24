@@ -3,6 +3,32 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-25 — v0.11.1 — Enterprise Update + tester install
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Settings → Update no longer flashes on for enterprise while policy is
+  loading (fail-closed). When `in_app_update` is off, the control is a
+  disabled “IT package” button instead of a live GitHub update.
+- In-app update, when IT bakes it on, keeps `admin.json` /
+  `admin.baked.json` / `SWITCHBAY_PROFILE` across git checkout and
+  rebuild. Packaged (non-git) trees skip with a message to use the
+  organization package. Skill `npx` updates honour
+  `install_skills_npx`; enterprise defaults to Switch Bay only
+  (`updates.include_skills: false`).
+
+### Added
+
+- `service install --enterprise-user` (also `make install-service
+  ENTERPRISE_USER=1` / `bash scripts/install.sh --enterprise-user`)
+  writes `<repo>/admin.json` from the enterprise template with no
+  `/Library` or ProgramData access — for testers.
+- Bake `--in-app-update` and `--update-repo owner/name` so a fleet can
+  self-update from GitHub without a new portal package per version,
+  while keeping the bake-time policy.
+
 ## 2026-08-25 — v0.11.0 — Slideshows, Reviews, and install hardening
 
 **Migration:** leftover `kind: deck` wiki pages are kept as ordinary

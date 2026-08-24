@@ -20,10 +20,13 @@ Search order (first existing file wins):
 2. `%ProgramData%\SwitchBay\admin.json` (Windows MDM)
 3. `/Library/Application Support/SwitchBay/admin.json` (macOS MDM)
 4. `/etc/switchbay/admin.json`
-5. `<checkout>/admin.json` (optional drop-in; gitignored)
+5. `<checkout>/admin.json` (optional drop-in; gitignored). Testers:
+   `python -m switchbay service install --enterprise-user` writes this
+   without machine-admin rights.
 
 A template lives at [`config/admin.enterprise.json`](../config/admin.enterprise.json).
-Copy it to one of the paths above. Own it as root, mode `0644`.
+Copy it to one of the paths above, or use `--enterprise-user`. MDM copies
+should be root-owned, mode `0644`.
 
 ```json
 {
@@ -66,7 +69,7 @@ Provider ids: `github_copilot`, `llamacpp`, `mlx`, `ollama`,
 
 | Feature | Enterprise default | Why |
 |---|---|---|
-| `in_app_update` | off | Settings → Update runs `git pull` / `npx skills` as the user |
+| `in_app_update` | off | Settings → Update. Off: disabled “IT package” control; updates via the company package. On (bake `--in-app-update`): git checkout of `updates.repo`, keeping bake policy files. Packaged non-git trees still skip. |
 | `install_skills_npx` | **on** (IT may set false) | `npx` / `uvx skills add` like VS Code. Restrict with `skills.allowlist` (`*` or a list of refs / globs). |
 | `ce_auto_setup` | off | CE `scripts/setup.sh` + `uv venv` per workspace |
 | `ce_bundled_setup` | **on** (IT may set false) | Allows only `<install-root>/vendor/curiosity-engine/scripts/setup.sh`, after real-path validation, with fixed non-interactive argv and a scrubbed environment. Global, workspace, symlink-escaped, or otherwise arbitrary scripts remain blocked. |
@@ -100,7 +103,8 @@ This branch:
   `ce_bundled_setup: false` to require fully pre-provisioned workspaces.
 - The launchd/systemd unit already invokes
   `<repo>/.venv/bin/python -m switchbay serve` — **not** `uv run`.
-- Settings → Update is hidden and the endpoint returns 403.
+- Settings → Update is a disabled “IT package” control and the endpoint
+  returns 403 unless IT bakes `features.in_app_update: true`.
 
 **What the company portal package must contain** (built on a blessed
 builder, not on the employee Mac):
@@ -126,7 +130,7 @@ The employee machine then starts Python. No `uv`, no `pnpm`, no
 | Always-on launchd agent (`KeepAlive`) | Persistence | Keep — required for the PWA. Document it as a per-user agent, not a privileged daemon. Program is `.venv/bin/python`. |
 | Unsigned `python3.13` + Keychain / TCC “other apps” | Prompt fatigue, EDR | `scan_other_app_caches: false` skips Containers. Keys still use the OS keychain; Copilot uses device-flow, not a long-lived API key. |
 | Hugging Face downloads | Egress, large writes | `hf_model_download: false`. IT can drop GGUF/MLX into the HF cache; the picker only lists what’s already on disk. |
-| In-app git pull of Switch Bay + skills | Supply-chain, unexpected network | `in_app_update: false`. Updates go through the portal package. |
+| In-app git pull of Switch Bay + skills | Supply-chain, unexpected network | Default `in_app_update: false` (portal package). IT may bake `--in-app-update` so git checkouts pull `updates.repo` and restore `admin.baked.json` / `admin.json`. Skills stay off unless `updates.include_skills` is true. |
 | Hosted LLM API keys (Anthropic, OpenAI, xAI, Gemini, Meta) | Data leaving the tenant | Hidden. Copilot stays inside the existing GitHub Enterprise / EMU subscription. |
 | Coding CLIs (Claude Code, Grok, Codex, Muse) | Extra binaries, shell | Hidden. Copilot is HTTP; local models are HTTP to `localhost`. |
 | Comms streams (mail, Slack, …) | OAuth, mailbox read | Off. |
@@ -184,3 +188,44 @@ macOS package). Endpoints must not run `uv` or `pnpm`.
 
 Stop uses `taskkill /PID` of the daemon pidfile, never
 `taskkill /IM python.exe`.
+
+## In-app update (optional)
+
+Default enterprise: Settings → Update is a disabled **↓ Update (IT package)**
+button; `POST /api/update` returns 403. Ship a new portal package for each
+version.
+
+To let git-based deployments pull later GitHub releases **without** a new
+Intune/Jamf package each time, bake with `--in-app-update`. Overlay cannot
+turn this flag back on if it was baked off.
+
+```sh
+python3 scripts/bake_enterprise.py \
+  --payload ./switchbay-enterprise-darwin-arm64 \
+  --copilot-host github.example.com \
+  --in-app-update \
+  --update-repo benjsmith/switchbay
+```
+
+On apply, Switch Bay snapshots `admin.json`, `admin.baked.json`, and
+`SWITCHBAY_PROFILE`, checks out the latest tag of `updates.repo`, rebuilds,
+then restores those files. Skills stay vendor-pinned unless
+`updates.include_skills` is true. Non-git payloads (MSI/pkg trees) still skip
+in-app update — they have no `frontend/dist` in git and must not run `uv` /
+`pnpm` on the endpoint.
+
+## Tester install (no machine admin)
+
+On a normal git checkout, without writing `/Library` or ProgramData:
+
+```sh
+bash scripts/install.sh --enterprise-user
+# or: make install-service ENTERPRISE_USER=1
+# or: python -m switchbay service install --enterprise-user
+```
+
+That copies `config/admin.enterprise.json` to gitignored `<repo>/admin.json`
+and registers the per-user service. Remove the file (or `make open-local`)
+to return to the open profile. Testers can set `features.in_app_update` in
+that overlay to exercise Settings → Update; there is no baked file, so the
+overlay is not tighten-only.

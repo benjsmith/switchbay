@@ -62,6 +62,38 @@ class Component:
     related_version: str = ""
 
 
+POLICY_KEEP = ("admin.json", "admin.baked.json", "SWITCHBAY_PROFILE")
+
+
+def app_repo() -> str:
+    try:
+        from . import admin_policy
+        return admin_policy.update_repo()
+    except Exception:  # noqa: BLE001
+        return "benjsmith/switchbay"
+
+
+def _include_skills() -> bool:
+    try:
+        from . import admin_policy
+        return admin_policy.update_include_skills()
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _skill_update_blocked(channel: str | None) -> str | None:
+    """Why a skill update must not run, or None to proceed."""
+    try:
+        from . import admin_policy
+    except Exception:  # noqa: BLE001
+        return None
+    if not admin_policy.update_include_skills():
+        return "admin policy updates.include_skills=false"
+    if channel == "npx" and not admin_policy.feature_enabled("install_skills_npx"):
+        return "admin policy install_skills_npx=false"
+    return None
+
+
 COMPONENTS: tuple[Component, ...] = (
     Component(id="switchbay", label="Switch Bay", repo="benjsmith/switchbay", kind="app"),
     Component(
@@ -438,7 +470,9 @@ def _component_status(comp: Component) -> dict[str, Any]:
         "channel": None,
     }
     try:
-        latest = fetch_latest_tag(comp.repo)
+        latest = fetch_latest_tag(
+            app_repo() if comp.id == "switchbay" else comp.repo,
+        )
     except UpdateError as e:
         row["error"] = str(e)
         return row
@@ -447,6 +481,7 @@ def _component_status(comp: Component) -> dict[str, Any]:
     if comp.kind == "app":
         current = local_switchbay_version()
         row["current"] = display_tag(current)
+        row["repo"] = app_repo() if comp.id == "switchbay" else comp.repo
         row["channel"] = "git"
         row["update_available"] = version_less(current, latest)
         return row
@@ -486,7 +521,25 @@ def _component_status(comp: Component) -> dict[str, Any]:
 
 def check() -> dict[str, Any]:
     """Inspect GitHub + local versions. Never mutates anything."""
-    components = [_component_status(c) for c in COMPONENTS]
+    include_skills = _include_skills()
+    components: list[dict[str, Any]] = []
+    for c in COMPONENTS:
+        if c.kind == "skill" and not include_skills:
+            components.append({
+                "id": c.id,
+                "label": c.label,
+                "repo": c.repo,
+                "kind": c.kind,
+                "current": None,
+                "latest": None,
+                "installed": True,
+                "update_available": False,
+                "error": None,
+                "channel": None,
+                "detail": "skipped (admin policy updates.include_skills=false)",
+            })
+            continue
+        components.append(_component_status(c))
     errors = [c["error"] for c in components if c.get("error")]
     return {
         "ok": not errors,
@@ -499,12 +552,32 @@ def check() -> dict[str, Any]:
 # ── apply ───────────────────────────────────────────────────────────
 
 
+def _porcelain_path(line: str) -> str:
+    rest = line[3:] if len(line) >= 4 and line[2:3] == " " else line.strip()
+    rest = rest.strip().strip('"').replace("\\", "/")
+    if " -> " in rest:
+        rest = rest.split(" -> ")[-1].strip().strip('"')
+    if rest.startswith("./"):
+        rest = rest[2:]
+    return rest
+
+
 def _git_dirty(repo: Path) -> bool:
+    """True when the tree has local changes other than bake/user policy files."""
     try:
         r = _git(["status", "--porcelain"], cwd=repo, timeout=8)
     except (OSError, subprocess.TimeoutExpired):
         return True
-    return r.returncode != 0 or bool((r.stdout or "").strip())
+    if r.returncode != 0:
+        return True
+    for line in (r.stdout or "").splitlines():
+        if not line.strip():
+            continue
+        rel = _porcelain_path(line)
+        if rel in POLICY_KEEP:
+            continue
+        return True
+    return False
 
 
 def _git_detached(repo: Path) -> bool:
@@ -559,6 +632,28 @@ def _sync_and_build(repo: Path) -> None:
         )
 
 
+def _snapshot_policy_files(repo: Path) -> dict[str, bytes]:
+    """Bytes of bake/user policy files that must survive a tree replace."""
+    snap: dict[str, bytes] = {}
+    for name in POLICY_KEEP:
+        path = repo / name
+        try:
+            if path.is_file():
+                snap[name] = path.read_bytes()
+        except OSError:
+            continue
+    return snap
+
+
+def _restore_policy_files(repo: Path, snap: dict[str, bytes]) -> None:
+    for name, data in snap.items():
+        path = repo / name
+        try:
+            path.write_bytes(data)
+        except OSError as e:
+            log.warning("could not restore %s after update: %s", name, e)
+
+
 def _apply_switchbay(comp: Component, latest: str) -> dict[str, Any]:
     repo = service._repo_root()
     out: dict[str, Any] = {
@@ -569,60 +664,68 @@ def _apply_switchbay(comp: Component, latest: str) -> dict[str, Any]:
         "to": display_tag(latest),
         "detail": "",
     }
-    if not (repo / ".git").exists() and not (repo / ".git").is_file():
-        out["status"] = "skipped"
-        out["detail"] = "this install is not a git checkout"
-        return out
-    if _git_dirty(repo):
-        out["status"] = "skipped"
-        out["detail"] = "working tree has local changes — commit or stash first"
-        return out
-    fetched = _git(["fetch", "--tags", "origin"], cwd=repo, timeout=90)
-    if fetched.returncode != 0:
-        out["detail"] = (
-            f"git fetch failed: {(fetched.stderr or fetched.stdout or '')[-300:]}"
-        )
-        return out
-    tag = _resolve_tag(repo, latest)
-    if tag is None:
-        out["detail"] = f"tag {display_tag(latest)} not found after fetch"
-        return out
-    head = _git(["rev-parse", "HEAD"], cwd=repo, timeout=8)
-    target = _git(["rev-parse", f"{tag}^{{commit}}"], cwd=repo, timeout=8)
-    if head.returncode == 0 and target.returncode == 0:
-        if (head.stdout or "").strip() == (target.stdout or "").strip():
-            out["status"] = "unchanged"
-            out["detail"] = f"already at {tag}"
-            return out
-    if _git_detached(repo):
-        co = _git(["checkout", "--detach", tag], cwd=repo, timeout=30)
-        if co.returncode != 0:
-            out["detail"] = (
-                f"git checkout {tag} failed: {(co.stderr or co.stdout or '')[-300:]}"
-            )
-            return out
-    elif _is_ancestor(repo, "HEAD", tag):
-        mg = _git(["merge", "--ff-only", tag], cwd=repo, timeout=30)
-        if mg.returncode != 0:
-            out["detail"] = (
-                f"git merge --ff-only {tag} failed: "
-                f"{(mg.stderr or mg.stdout or '')[-300:]}"
-            )
-            return out
-    else:
-        out["status"] = "skipped"
-        out["detail"] = (
-            f"local branch has commits not in {tag} — update from a terminal"
-        )
-        return out
+    policy = _snapshot_policy_files(repo)
     try:
-        _sync_and_build(repo)
-    except UpdateError as e:
-        out["detail"] = str(e)
+        if not (repo / ".git").exists() and not (repo / ".git").is_file():
+            out["status"] = "skipped"
+            out["detail"] = (
+                "this install is not a git checkout — use the organization "
+                "package, or bake with features.in_app_update on a git tree"
+            )
+            return out
+        if _git_dirty(repo):
+            out["status"] = "skipped"
+            out["detail"] = "working tree has local changes — commit or stash first"
+            return out
+        fetched = _git(["fetch", "--tags", "origin"], cwd=repo, timeout=90)
+        if fetched.returncode != 0:
+            out["detail"] = (
+                f"git fetch failed: {(fetched.stderr or fetched.stdout or '')[-300:]}"
+            )
+            return out
+        tag = _resolve_tag(repo, latest)
+        if tag is None:
+            out["detail"] = f"tag {display_tag(latest)} not found after fetch"
+            return out
+        head = _git(["rev-parse", "HEAD"], cwd=repo, timeout=8)
+        target = _git(["rev-parse", f"{tag}^{{commit}}"], cwd=repo, timeout=8)
+        if head.returncode == 0 and target.returncode == 0:
+            if (head.stdout or "").strip() == (target.stdout or "").strip():
+                out["status"] = "unchanged"
+                out["detail"] = f"already at {tag}"
+                return out
+        if _git_detached(repo):
+            co = _git(["checkout", "--detach", tag], cwd=repo, timeout=30)
+            if co.returncode != 0:
+                out["detail"] = (
+                    f"git checkout {tag} failed: {(co.stderr or co.stdout or '')[-300:]}"
+                )
+                return out
+        elif _is_ancestor(repo, "HEAD", tag):
+            mg = _git(["merge", "--ff-only", tag], cwd=repo, timeout=30)
+            if mg.returncode != 0:
+                out["detail"] = (
+                    f"git merge --ff-only {tag} failed: "
+                    f"{(mg.stderr or mg.stdout or '')[-300:]}"
+                )
+                return out
+        else:
+            out["status"] = "skipped"
+            out["detail"] = (
+                f"local branch has commits not in {tag} — update from a terminal"
+            )
+            return out
+        try:
+            _sync_and_build(repo)
+        except UpdateError as e:
+            out["detail"] = str(e)
+            return out
+        out["status"] = "updated"
+        out["detail"] = f"checked out {tag} and rebuilt"
         return out
-    out["status"] = "updated"
-    out["detail"] = f"checked out {tag} and rebuilt"
-    return out
+    finally:
+        if policy:
+            _restore_policy_files(repo, policy)
 
 
 def _npx() -> str | None:
@@ -851,8 +954,19 @@ def apply() -> dict[str, Any]:
         log.info("updating %s → %s", cid, latest)
         if comp.kind == "app":
             results.append(_apply_switchbay(comp, latest))
-        else:
-            results.append(_apply_skill(comp, latest))
+            continue
+        blocked = _skill_update_blocked(str(row.get("channel") or "") or None)
+        if blocked:
+            results.append({
+                "id": cid,
+                "label": row.get("label") or cid,
+                "status": "skipped",
+                "from": row.get("current"),
+                "to": display_tag(latest),
+                "detail": blocked,
+            })
+            continue
+        results.append(_apply_skill(comp, latest))
 
     any_updated = any(r.get("status") == "updated" for r in results)
     any_failed = any(r.get("status") == "failed" for r in results)

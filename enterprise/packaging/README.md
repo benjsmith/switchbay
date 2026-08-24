@@ -58,6 +58,8 @@ python3 scripts/bake_enterprise.py \
 | `--sso-slug` | GitHub Enterprise Managed Users slug |
 | `--allow-hf` | Permit Settings → Find & install for local models. If omitted, a later management overlay cannot enable it. |
 | `--no-skills-npx` | Disallow `npx` / `uvx skills add` |
+| `--in-app-update` | Bake Settings → Update ON. Git checkouts pull `--update-repo` and keep `admin.baked.json`. Non-git payloads still skip. Overlay cannot enable this later if omitted. |
+| `--update-repo owner/name` | GitHub repo Settings → Update fetches (default `benjsmith/switchbay`) |
 | `--vendor-ce DIR` | Copy the curiosity-engine skill into `vendor/` so endpoints do not fetch it with `npx` |
 
 ### 3. Code signing (optional)
