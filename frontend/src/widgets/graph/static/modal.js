@@ -11,7 +11,7 @@
  */
 import { sanitizeHtml } from "../../../lib/sanitizeHtml";
 import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "../../editor/previewLists";
-import { classifySourceRef, normalizeWorkspacePath } from "../../../lib/localPath";
+import { classifySourceRef, normalizeWorkspacePath, openWorkspaceFile } from "../../../lib/localPath";
 
 window.Modal = (function () {
   let pages = {};
@@ -24,15 +24,16 @@ window.Modal = (function () {
   // instead of failing on click.
   const SLIDES_HIDDEN_TYPES = new Set(['figure', 'table']);
 
-  function init(data) {
+  function init(data, rootEl) {
     pages = data.pages || {};
-    modal = document.querySelector('#modal');
-    backdrop = document.querySelector('#modal-backdrop');
-    closeBtn = document.querySelector('#modal-close');
-    titleEl = document.querySelector('#modal-title');
-    propsEl = document.querySelector('#modal-properties');
-    bodyEl = document.querySelector('#modal-body');
-    slidesBtn = document.querySelector('#modal-slides');
+    const root = rootEl || document;
+    modal = root.querySelector('#modal');
+    backdrop = root.querySelector('#modal-backdrop');
+    closeBtn = root.querySelector('#modal-close');
+    titleEl = root.querySelector('#modal-title');
+    propsEl = root.querySelector('#modal-properties');
+    bodyEl = root.querySelector('#modal-body');
+    slidesBtn = root.querySelector('#modal-slides');
 
     backdrop.addEventListener('click', close);
     closeBtn.addEventListener('click', close);
@@ -57,15 +58,19 @@ window.Modal = (function () {
     });
 
     // Frontmatter sources → OS default app (Preview / browser / …).
-    propsEl.addEventListener('click', (ev) => {
-      const a = ev.target.closest && ev.target.closest('a.sy-source-cite');
-      if (!a) return;
-      const path = a.getAttribute('data-open-path');
-      if (!path) return;
-      ev.preventDefault();
-      ev.stopPropagation();
-      void openNative(path);
-    });
+    // Bind on the modal (capture) so a remounted Graph tab still hits
+    // these links even if #modal-properties was queried too early.
+    if (modal) {
+      modal.addEventListener('click', (ev) => {
+        const a = ev.target.closest && ev.target.closest('a.sy-source-cite[data-open-path]');
+        if (!a || !modal.contains(a)) return;
+        const path = a.getAttribute('data-open-path');
+        if (!path) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        void openWorkspaceFile(path);
+      }, true);
+    }
   }
 
   function open(pageId) {
@@ -353,21 +358,6 @@ window.Modal = (function () {
     propsEl.innerHTML = rows.join('');
     propsEl.querySelectorAll("details.sy-prop-list").forEach((el) => {
       el.addEventListener("toggle", () => writeSourcesOpen(el.open));
-    });
-  }
-
-  function openNative(path) {
-    return fetch("/api/fs/open-external", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
-    }).then(async (r) => {
-      if (!r.ok) {
-        const b = await r.json().catch(() => ({}));
-        window.alert("Couldn't open: " + (b.error || r.status));
-      }
-    }).catch((e) => {
-      window.alert("Couldn't open: " + (e && e.message ? e.message : e));
     });
   }
 

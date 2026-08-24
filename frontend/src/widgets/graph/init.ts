@@ -35,7 +35,7 @@ export function mountGraph(
   }
 
   window.Subgraph.init(data);
-  window.Modal.init(data);
+  window.Modal.init(data, container);
   let mode: ViewerMode = "classic";
   if (atlasEnabled(data) && mountAtlas(data, { onSelectPage: opts?.onSelectPage })) {
     mode = "atlas";

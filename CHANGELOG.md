@@ -3,6 +3,17 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-25 — v0.11.3 — Graph modal source links actually click
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Graph document-modal ``sources`` bind clicks on the modal root
+  (not a global ``#modal-properties`` that can miss the mounted
+  tab). Basename refs try ``vault/`` then ``wiki/`` from the
+  frontend so Open works even if the running daemon is older.
+
 ## 2026-08-25 — v0.11.2 — Frontmatter sources open natively
 
 **Migration:** none. **Breaking:** none.

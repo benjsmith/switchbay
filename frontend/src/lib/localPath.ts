@@ -58,6 +58,15 @@ export function revealWorkspaceFile(path: string): void {
   window.dispatchEvent(new CustomEvent("sy:reveal-file", { detail: { path: n } }));
 }
 
+/** Paths to try for Settings → Open / frontmatter sources.
+ *  Basenames in wiki frontmatter usually live under vault/ or wiki/. */
+export function sourceOpenCandidates(rel: string): string[] {
+  const n = normalizeWorkspacePath(rel);
+  if (!n) return [];
+  if (n.includes("/")) return [n];
+  return [n, `vault/${n}`, `wiki/${n}`];
+}
+
 /** Open a local source with the OS default app, or a URL in a tab. */
 export async function openWorkspaceFile(raw: string): Promise<void> {
   const kind = classifySourceRef(raw);
@@ -65,24 +74,27 @@ export async function openWorkspaceFile(raw: string): Promise<void> {
     window.open(raw.trim(), "_blank", "noopener");
     return;
   }
-  const n = normalizeWorkspacePath(raw);
-  if (!n) {
+  const candidates = sourceOpenCandidates(raw);
+  if (candidates.length === 0) {
     window.alert("Couldn't open: not a workspace path");
     return;
   }
-  try {
-    const r = await fetch("/api/fs/open-external", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: n }),
-    });
-    if (!r.ok) {
+  let lastErr = "not found";
+  for (const path of candidates) {
+    try {
+      const r = await fetch("/api/fs/open-external", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path }),
+      });
+      if (r.ok) return;
       const b = await r.json().catch(() => ({} as { error?: string }));
-      window.alert(`Couldn't open: ${b.error ?? r.status}`);
+      lastErr = b.error ?? String(r.status);
+    } catch (e) {
+      lastErr = (e as Error).message;
     }
-  } catch (e) {
-    window.alert(`Couldn't open: ${(e as Error).message}`);
   }
+  window.alert(`Couldn't open: ${lastErr}`);
 }
 
 let lastReveal: string | null = null;
