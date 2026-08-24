@@ -72,7 +72,8 @@
     "commands": [
       {
         "command": "switchbay.openGraph",
-        "title": "Switch Bay: Open Graph"
+        "title": "Switch Bay: Open Graph",
+        "icon": "$(type-hierarchy)"
       },
       {
         "command": "switchbay.openPreview",
@@ -80,7 +81,8 @@
       },
       {
         "command": "switchbay.openAgents",
-        "title": "Switch Bay: Open Agent Dashboard"
+        "title": "Switch Bay: Open Agent Dashboard",
+        "icon": "$(organization)"
       },
       {
         "command": "switchbay.fireThrusters",
@@ -122,9 +124,19 @@
       ],
       "view/title": [
         {
+          "command": "switchbay.openGraph",
+          "when": "view == switchbay.wiki",
+          "group": "navigation@1"
+        },
+        {
+          "command": "switchbay.openAgents",
+          "when": "view == switchbay.wiki",
+          "group": "navigation@2"
+        },
+        {
           "command": "switchbay.refreshTrees",
           "when": "view == switchbay.wiki || view == switchbay.projects",
-          "group": "navigation"
+          "group": "navigation@3"
         }
       ]
     },
