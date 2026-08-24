@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode } from "./ce";
+import { ensureGraphEdges, readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode } from "./ce";
 import { listRuns, runsRoot } from "./orch";
 import { repoRoot, workspaceFolder } from "./paths";
 
@@ -61,14 +61,23 @@ export function openGraph(context: vscode.ExtensionContext): void {
       From the Switch Bay repo run <code>pnpm --dir frontend run build:webview</code> then F5 again.</p>`;
     return;
   }
-  const graph: GraphData = readCachedGraph(folder.fsPath) ?? {
+  const graph: GraphData = readCachedGraph(folder.fsPath) ?? ensureGraphEdges({
     nodes: scanWikiMarkdown(folder.fsPath),
     edges: [],
-  };
+  }, folder.fsPath);
+  if (graph.pages) {
+    for (const page of Object.values(graph.pages)) delete page.body_html;
+  }
   const send = () => { void panel.webview.postMessage({ graph }); };
   panel.webview.onDidReceiveMessage(async (msg: { type?: string; node?: GraphNode }) => {
     if (msg.type === "ready") {
       send();
+      return;
+    }
+    if (msg.type === "atlas-deferred") {
+      void vscode.window.showInformationMessage(
+        "Knowledge Atlas will mount from this view switch on the next spike. Staying on the classic graph.",
+      );
       return;
     }
     const node = msg.node;

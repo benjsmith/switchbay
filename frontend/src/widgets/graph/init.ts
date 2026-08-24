@@ -19,7 +19,14 @@ export type GraphMount = { mode: ViewerMode };
 export function mountGraph(
   container: HTMLElement,
   data: GraphData,
-  opts?: { onSelectPage?: (id: string) => void },
+  opts?: {
+    onSelectPage?: (id: string) => void;
+    /** Pin classic or atlas. Unset follows the PWA localStorage/query choice. */
+    forceMode?: ViewerMode;
+    skipEdit?: boolean;
+    /** Keep the view: switch visible but do not mount Atlas yet. */
+    deferAtlas?: boolean;
+  },
 ): GraphMount {
   destroyAtlas();
   container.classList.add("ce-graph-root");
@@ -37,18 +44,20 @@ export function mountGraph(
   window.Subgraph.init(data);
   window.Modal.init(data);
   let mode: ViewerMode = "classic";
-  if (atlasEnabled(data) && mountAtlas(data, { onSelectPage: opts?.onSelectPage })) {
+  const wantAtlas = opts?.forceMode === "atlas"
+    || (opts?.forceMode !== "classic" && atlasEnabled(data));
+  if (wantAtlas && mountAtlas(data, { onSelectPage: opts?.onSelectPage })) {
     mode = "atlas";
   } else {
     window.Graph.init(data);
   }
   document.body.dataset.viewer = mode;
-  initAtlasChoice(data, mode);
+  initAtlasChoice(data, mode, { deferAtlas: opts?.deferAtlas });
 
   // Edit module wires the modal padlock + textarea editor. The refetch
   // callback re-pulls the rebuilt data.json (cebridge updates its
   // cache server-side after POST /api/page).
-  if (window.Edit) {
+  if (window.Edit && !opts?.skipEdit) {
     window.Edit.init(data, async (currentPageId) => {
       const res = await fetch(`/api/graph/data?t=${Date.now()}`);
       if (!res.ok) return;

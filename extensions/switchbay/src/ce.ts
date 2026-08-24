@@ -19,6 +19,7 @@ export type GraphPage = {
   type: string;
   path: string;
   properties?: Record<string, unknown>;
+  body_html?: string;
 };
 
 export type GraphData = {
@@ -47,9 +48,158 @@ export function readCachedGraph(workspace: string): GraphData | null {
   try {
     const data = JSON.parse(fs.readFileSync(p, "utf8")) as GraphData;
     if (!data || !Array.isArray(data.nodes)) return null;
-    return data;
+    // wiki_render emits nodes-only when kuzu is missing. Rewire from
+    // resolved wikilinks already in body_html so the classic force
+    // graph has edges without a daemon or graph.py rebuild.
+    return ensureGraphEdges(data, workspace);
   } catch {
     return null;
+  }
+}
+
+const WIKILINK_RE = /\[\[([^\]|#\n]+)(?:\|[^\]]*)?\]\]/g;
+const DATA_PAGE_RE = /data-page=["']([^"']+)["']/g;
+const HASH_PAGE_RE = /#page=([^"'&]+)/g;
+const REL_FIELDS = [
+  "sources", "relates_to", "facts", "evidence", "figures",
+  "tables", "concepts", "entities", "projects",
+] as const;
+
+function stemOf(id: string): string {
+  return id.replace(/\.md$/i, "").split("/").pop() || id;
+}
+
+function indexIds(nodes: GraphNode[]): { ids: Set<string>; stemToId: Map<string, string> } {
+  const ids = new Set(nodes.map((n) => n.id));
+  const stemToId = new Map<string, string>();
+  for (const id of ids) {
+    const stem = stemOf(id);
+    if (!stemToId.has(stem)) stemToId.set(stem, id);
+  }
+  return { ids, stemToId };
+}
+
+function resolveTarget(
+  raw: string,
+  ids: Set<string>,
+  stemToId: Map<string, string>,
+): string | null {
+  let t = raw.trim();
+  try { t = decodeURIComponent(t); } catch { /* keep */ }
+  t = t.replace(/^\.\//, "");
+  if (t.startsWith("wiki/")) t = t.slice(5);
+  t = t.replace(/\.md$/i, "");
+  if (ids.has(t)) return t;
+  return stemToId.get(stemOf(t)) ?? null;
+}
+
+function addEdge(
+  out: Map<string, { source: string; target: string; type: string }>,
+  source: string,
+  target: string,
+): void {
+  if (!source || !target || source === target) return;
+  const key = `${source}\0${target}`;
+  if (!out.has(key)) out.set(key, { source, target, type: "wikilink" });
+}
+
+function harvestFromWikiMarkdown(
+  workspace: string,
+  ids: Set<string>,
+  stemToId: Map<string, string>,
+  out: Map<string, { source: string; target: string; type: string }>,
+): void {
+  const wiki = path.join(workspace, "wiki");
+  if (!fs.existsSync(wiki)) return;
+  const walk = (dir: string) => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) {
+        if (e.name.startsWith(".")) continue;
+        walk(full);
+        continue;
+      }
+      if (!e.name.endsWith(".md")) continue;
+      const rel = path.relative(wiki, full).split(path.sep).join("/");
+      const source = rel.replace(/\.md$/i, "");
+      if (!ids.has(source)) continue;
+      let text = "";
+      try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
+      WIKILINK_RE.lastIndex = 0;
+      for (const m of text.matchAll(WIKILINK_RE)) {
+        const target = resolveTarget(m[1], ids, stemToId);
+        if (target) addEdge(out, source, target);
+      }
+    }
+  };
+  walk(wiki);
+}
+
+/** Fill `edges` + `degree` from wikilinks when CE's cache is nodes-only. */
+export function ensureGraphEdges(data: GraphData, workspace?: string): GraphData {
+  if (!Array.isArray(data.edges) || data.edges.length === 0) {
+    data.edges = harvestWikilinkEdges(data, workspace);
+  }
+  applyDegrees(data);
+  return data;
+}
+
+export function harvestWikilinkEdges(
+  data: GraphData,
+  workspace?: string,
+): GraphData["edges"] {
+  const { ids, stemToId } = indexIds(data.nodes || []);
+  const out = new Map<string, { source: string; target: string; type: string }>();
+  const add = (source: string, raw: string) => {
+    const target = resolveTarget(raw, ids, stemToId);
+    if (target && ids.has(source)) addEdge(out, source, target);
+  };
+
+  if (data.pages) {
+    for (const [pid, page] of Object.entries(data.pages)) {
+      const source = ids.has(pid) ? pid : resolveTarget(page.id || pid, ids, stemToId);
+      if (!source) continue;
+      const html = page.body_html || "";
+      DATA_PAGE_RE.lastIndex = 0;
+      for (const m of html.matchAll(DATA_PAGE_RE)) add(source, m[1]);
+      HASH_PAGE_RE.lastIndex = 0;
+      for (const m of html.matchAll(HASH_PAGE_RE)) add(source, m[1]);
+      const props = page.properties || {};
+      for (const field of REL_FIELDS) {
+        const raw = props[field];
+        const items = Array.isArray(raw) ? raw : typeof raw === "string" && raw ? [raw] : [];
+        for (const item of items) add(source, String(item));
+      }
+    }
+  }
+
+  if (out.size === 0 && workspace) {
+    harvestFromWikiMarkdown(workspace, ids, stemToId, out);
+  }
+  return [...out.values()];
+}
+
+function applyDegrees(data: GraphData): void {
+  const nbr = new Map<string, Set<string>>();
+  const touch = (a: string, b: string) => {
+    if (!nbr.has(a)) nbr.set(a, new Set());
+    nbr.get(a)!.add(b);
+  };
+  for (const e of data.edges || []) {
+    const s = typeof e.source === "string" ? e.source : "";
+    const t = typeof e.target === "string" ? e.target : "";
+    if (!s || !t || s === t) continue;
+    touch(s, t);
+    touch(t, s);
+  }
+  for (const n of data.nodes || []) {
+    n.degree = nbr.get(n.id)?.size ?? 0;
   }
 }
 

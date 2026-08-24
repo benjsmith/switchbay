@@ -1,11 +1,16 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Graph</title>
+  <!-- classic SVG needs a real height; VS Code webviews start at 0 without this. -->
   <style>
-    html, body, #root, #mount { height: 100%; width: 100%; margin: 0; overflow: hidden; }
+    html, body, #root, #mount, .ce-graph-root, #graph-pane, #graph {
+      height: 100%; width: 100%; margin: 0; overflow: hidden;
+    }
+    #graph-pane { min-height: 0; display: flex; flex-direction: column; }
+    #graph { flex: 1; min-height: 0; }
     body { background: var(--bg, #0f1115); color: var(--text, #e6e8eb); }
     .ctx-menu {
       position: fixed; z-index: 40; min-width: 12rem;

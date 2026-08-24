@@ -111,7 +111,7 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = "switchbay.openGraph";
   const cached = folder ? readCachedGraph(folder.fsPath) : null;
   status.text = cached
-    ? `$(type-hierarchy) Switch Bay · ${cached.nodes.length} nodes`
+    ? `$(type-hierarchy) Switch Bay · ${cached.nodes.length} nodes · ${(cached.edges || []).length} edges`
     : "$(type-hierarchy) Switch Bay";
   status.tooltip = "Open Graph (no daemon)";
   status.show();

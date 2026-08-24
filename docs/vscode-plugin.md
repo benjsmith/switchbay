@@ -65,6 +65,10 @@ Hard rules:
 
 ## Interaction
 
+- Graph is the **classic** SVG force graph this spike (wikilink
+  edges harvested from CE `data.json` when kuzu left it nodes-only).
+  The existing **view:** control stays; Knowledge Atlas mounts from
+  that switch on the next spike.
 - Graph node **click** → open the `.md` in a normal VS Code tab.
 - Graph node **right-click** → Open preview, Reveal in Explorer, To
   plot, To sketch, To slideshow. The last three insert the matching

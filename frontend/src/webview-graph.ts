@@ -4,6 +4,7 @@
  * markdown via postMessage — no daemon, no in-graph doc modal.
  */
 import "./widgets/graph/load";
+import { paletteFromCss } from "./widgets/graph/atlas";
 import { mountGraph } from "./widgets/graph/init";
 import type { GraphData } from "./widgets/graph/types";
 
@@ -57,18 +58,51 @@ function showMenu(x: number, y: number, node: NodeRef): void {
   }
 }
 
+let live: AbortController | null = null;
+let resizeObs: ResizeObserver | null = null;
+
 function bind(data: GraphData): void {
-  mountGraph(mount, data, { onSelectPage: (id) => openNode(data, id) });
+  live?.abort();
+  live = new AbortController();
+  const { signal } = live;
+  resizeObs?.disconnect();
+
+  const themed: GraphData = {
+    ...data,
+    palette: { ...paletteFromCss(), ...(data.palette || {}) },
+  };
+  // Plugin spike: classic force graph only. Atlas mounts from the
+  // existing view: switch on the next spike.
+  mountGraph(mount, themed, {
+    onSelectPage: (id) => openNode(themed, id),
+    forceMode: "classic",
+    skipEdit: true,
+    deferAtlas: true,
+  });
+  const pingSize = () => window.dispatchEvent(new Event("resize"));
+  requestAnimationFrame(() => {
+    pingSize();
+    window.setTimeout(pingSize, 120);
+  });
+  resizeObs = new ResizeObserver(pingSize);
+  resizeObs.observe(mount);
   if (window.Modal) {
     window.Modal.open = (id: string) => {
-      openNode(data, id);
+      openNode(themed, id);
       return false;
     };
   }
   window.addEventListener("hashchange", () => {
     const m = location.hash.match(/page=([^&]+)/);
-    if (m) openNode(data, decodeURIComponent(m[1]));
-  });
+    if (m) openNode(themed, decodeURIComponent(m[1]));
+  }, { signal });
+  window.addEventListener("sy:graph-viewer-change", (ev) => {
+    const deferred = (ev as CustomEvent<{ deferred?: boolean }>).detail?.deferred;
+    if (!deferred) return;
+    const state = document.getElementById("viewer-mode-state");
+    if (state) state.textContent = "classic";
+    vscode.postMessage({ type: "atlas-deferred" });
+  }, { signal });
   mount.addEventListener("contextmenu", (ev) => {
     const t = ev.target as HTMLElement | null;
     const el = t?.closest?.("[data-id]");
@@ -79,10 +113,10 @@ function bind(data: GraphData): void {
     }
     if (!id) return;
     ev.preventDefault();
-    const node = findNode(data, id);
+    const node = findNode(themed, id);
     if (node) showMenu(ev.clientX, ev.clientY, node);
-  });
-  document.addEventListener("click", () => { menu.hidden = true; });
+  }, { signal });
+  document.addEventListener("click", () => { menu.hidden = true; }, { signal });
 }
 
 window.addEventListener("message", (ev: MessageEvent) => {
