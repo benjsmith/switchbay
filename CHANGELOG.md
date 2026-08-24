@@ -3,6 +3,17 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-25 — v0.11.2 — Frontmatter sources open natively
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Wiki frontmatter ``sources`` (Editor preview and Graph document
+  modal) are links. Click opens the file with the OS default app
+  (Preview, browser, …), resolving a basename under ``vault/`` or
+  ``wiki/`` when needed.
+
 ## 2026-08-25 — v0.11.1 — Enterprise Update + tester install
 
 **Migration:** none. **Breaking:** none.

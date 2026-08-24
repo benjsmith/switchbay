@@ -58,6 +58,33 @@ export function revealWorkspaceFile(path: string): void {
   window.dispatchEvent(new CustomEvent("sy:reveal-file", { detail: { path: n } }));
 }
 
+/** Open a local source with the OS default app, or a URL in a tab. */
+export async function openWorkspaceFile(raw: string): Promise<void> {
+  const kind = classifySourceRef(raw);
+  if (kind === "url") {
+    window.open(raw.trim(), "_blank", "noopener");
+    return;
+  }
+  const n = normalizeWorkspacePath(raw);
+  if (!n) {
+    window.alert("Couldn't open: not a workspace path");
+    return;
+  }
+  try {
+    const r = await fetch("/api/fs/open-external", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: n }),
+    });
+    if (!r.ok) {
+      const b = await r.json().catch(() => ({} as { error?: string }));
+      window.alert(`Couldn't open: ${b.error ?? r.status}`);
+    }
+  } catch (e) {
+    window.alert(`Couldn't open: ${(e as Error).message}`);
+  }
+}
+
 let lastReveal: string | null = null;
 
 export function getLastRevealPath(): string | null {

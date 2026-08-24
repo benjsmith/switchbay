@@ -14,7 +14,7 @@ import {
 import CodeView, { detectLanguage, LANGUAGE_CHOICES, type CodeLanguage } from "./CodeView";
 import { notifyHtmlDeckOpen } from "../htmldeck/htmlDeckOpen";
 import {
-  classifySourceRef, revealWorkspaceFile,
+  classifySourceRef, normalizeWorkspacePath, openWorkspaceFile, revealWorkspaceFile,
 } from "../../lib/localPath";
 
 // Markdown view mode, driven by the chevron handle on the pane divider.
@@ -584,9 +584,19 @@ export default function EditorTab() {
                                 ? <CollapsibleSources items={v.map(String)} />
                                 : Array.isArray(v)
                                   ? v.map((item, i) => (
-                                    <div key={i}><SourceCite value={String(item)} /></div>
+                                    <div key={i}>
+                                      <SourceCite
+                                        value={String(item)}
+                                        forceLocal={k === "sources"}
+                                      />
+                                    </div>
                                   ))
-                                  : <SourceCite value={String(v)} />}
+                                  : (
+                                    <SourceCite
+                                      value={String(v)}
+                                      forceLocal={k === "sources" || k === "extracted_from"}
+                                    />
+                                  )}
                             </td>
                           </tr>
                         ))}
@@ -621,14 +631,15 @@ function CollapsibleSources({ items }: { items: string[] }) {
     >
       <summary>{items.length} sources</summary>
       {items.map((item, i) => (
-        <div key={i}><SourceCite value={item} /></div>
+        <div key={i}><SourceCite value={item} forceLocal /></div>
       ))}
     </details>
   );
 }
 
-function SourceCite({ value }: { value: string }) {
-  const kind = classifySourceRef(value);
+function SourceCite({ value, forceLocal = false }: { value: string; forceLocal?: boolean }) {
+  const kind = classifySourceRef(value)
+    || (forceLocal && normalizeWorkspacePath(value) ? "local" : null);
   if (kind === "url") {
     return (
       <a href={value} target="_blank" rel="noreferrer" className="sy-source-cite">
@@ -638,14 +649,18 @@ function SourceCite({ value }: { value: string }) {
   }
   if (kind === "local") {
     return (
-      <button
-        type="button"
+      <a
+        href={`#file=${encodeURIComponent(value)}`}
         className="sy-source-cite"
-        onClick={() => revealWorkspaceFile(value)}
-        title="Show this file in the Files browser"
+        title="Open with the system default app"
+        onClick={(ev) => {
+          ev.preventDefault();
+          ev.stopPropagation();
+          void openWorkspaceFile(value);
+        }}
       >
         {value}
-      </button>
+      </a>
     );
   }
   return <>{value}</>;

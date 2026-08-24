@@ -11,6 +11,7 @@
  */
 import { sanitizeHtml } from "../../../lib/sanitizeHtml";
 import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "../../editor/previewLists";
+import { classifySourceRef, normalizeWorkspacePath } from "../../../lib/localPath";
 
 window.Modal = (function () {
   let pages = {};
@@ -53,6 +54,17 @@ window.Modal = (function () {
       if (target) {
         window.location.hash = '#page=' + encodeURIComponent(target);
       }
+    });
+
+    // Frontmatter sources → OS default app (Preview / browser / …).
+    propsEl.addEventListener('click', (ev) => {
+      const a = ev.target.closest && ev.target.closest('a.sy-source-cite');
+      if (!a) return;
+      const path = a.getAttribute('data-open-path');
+      if (!path) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      void openNative(path);
     });
   }
 
@@ -344,6 +356,21 @@ window.Modal = (function () {
     });
   }
 
+  function openNative(path) {
+    return fetch("/api/fs/open-external", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    }).then(async (r) => {
+      if (!r.ok) {
+        const b = await r.json().catch(() => ({}));
+        window.alert("Couldn't open: " + (b.error || r.status));
+      }
+    }).catch((e) => {
+      window.alert("Couldn't open: " + (e && e.message ? e.message : e));
+    });
+  }
+
   function propRow(key, value, iconKind) {
     const v = formatValue(value, key);
     const icon = renderIcon(iconKind);
@@ -365,17 +392,38 @@ window.Modal = (function () {
     return `<span class="prop-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="3" y1="5" x2="13" y2="5"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="11" x2="13" y2="11"/></svg></span>`;
   }
 
+  function formatSourceRef(item, forceLocal) {
+    const raw = String(item);
+    const kind = classifySourceRef(raw) || (forceLocal && normalizeWorkspacePath(raw) ? "local" : null);
+    if (kind === "url") {
+      return (
+        `<a class="sy-source-cite" href="${escapeHtml(raw)}" `
+        + `target="_blank" rel="noreferrer">${escapeHtml(raw)}</a>`
+      );
+    }
+    if (kind === "local") {
+      const path = normalizeWorkspacePath(raw) || raw;
+      return (
+        `<a class="sy-source-cite" href="#file=${encodeURIComponent(path)}" `
+        + `data-open-path="${escapeHtml(path)}" `
+        + `title="Open with the system default app">${escapeHtml(raw)}</a>`
+      );
+    }
+    return escapeHtml(raw);
+  }
+
   function formatValue(v, key) {
     if (v == null) return '<span style="color:var(--text-faint)">—</span>';
+    const forceLocal = key === "sources" || key === "extracted_from";
     if (isCollapsibleList(key, v)) {
       const open = readSourcesOpen() ? " open" : "";
-      const items = v.map((item) => `<div>${escapeHtml(String(item))}</div>`).join("");
+      const items = v.map((item) => `<div>${formatSourceRef(item, true)}</div>`).join("");
       return `<details class="sy-prop-list"${open}><summary>${v.length} sources</summary>${items}</details>`;
     }
     if (Array.isArray(v)) {
-      return v.map(item => `<div>${escapeHtml(String(item))}</div>`).join('');
+      return v.map((item) => `<div>${formatSourceRef(item, forceLocal)}</div>`).join("");
     }
-    return escapeHtml(String(v));
+    return formatSourceRef(v, forceLocal);
   }
 
   function escapeHtml(s) {
