@@ -21,6 +21,10 @@ frontend/.vite/
 .idea/
 .vscode/
 
+# VS Code plugin experiment lives only on exp/vscode-plugin. Do not ship.
+/switchbay.code-workspace
+/extensions/
+
 # ── workspace runtime (when this repo is opened as its own workspace) ──
 .workbench/
 
