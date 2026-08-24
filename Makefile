@@ -8,7 +8,7 @@
 .PHONY: install sync sync-semantic sync-semantic-torch sync-frontend \
         dev-daemon dev-frontend build-frontend install-service \
         uninstall-service start stop restart status refresh test test-py check e2e \
-        enterprise-local open-local enterprise-bake
+        enterprise-local open-local enterprise-bake vscode-compile
 
 PYDIR := $(CURDIR)/src
 
@@ -58,6 +58,12 @@ dev-daemon: sync
 
 dev-frontend:
 	pnpm --dir frontend run dev
+
+# VS Code plugin experiment (exp/vscode-plugin). Compiles the extension
+# host; does not start the PWA daemon.
+vscode-compile:
+	pnpm --dir extensions/switchbay install --frozen-lockfile
+	pnpm --dir extensions/switchbay run compile
 
 # Production build: the daemon serves frontend/dist at / (so the PWA
 # installs from the always-on daemon, no vite). Run this before

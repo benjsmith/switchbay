@@ -19,7 +19,13 @@ frontend/.vite/
 # ── editor / os ──
 .DS_Store
 .idea/
-.vscode/
+# Local editor junk, but keep the plugin debug launch config.
+/.vscode/*
+!/.vscode/launch.json
+!/.vscode/tasks.json
+
+# ── vscode plugin experiment (compiled output) ──
+extensions/**/out/
 
 # ── workspace runtime (when this repo is opened as its own workspace) ──
 .workbench/

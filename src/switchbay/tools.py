@@ -1392,6 +1392,10 @@ def _daemon_json(
     import urllib.error
     import urllib.request
 
+    from . import plugin_tools
+    if plugin_tools.is_plugin_profile():
+        return plugin_tools.daemon_unavailable()
+
     # Scope live-tab HTTP to the agent workspace (not only daemon focus).
     url = f"http://127.0.0.1:{_daemon_port()}{path}"
     if workspace is not None and method.upper() == "GET":
@@ -2058,6 +2062,10 @@ def _ask_thread(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     import urllib.request
     import uuid as _uuid
 
+    from . import plugin_tools
+    if plugin_tools.is_plugin_profile():
+        return plugin_tools.daemon_unavailable()
+
     message = str(payload.get("message") or "").strip()
     if not message:
         return {"ok": False, "error": "message is required"}
@@ -2112,6 +2120,10 @@ def _propose_split(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     import os
     import urllib.error
     import urllib.request
+
+    from . import plugin_tools
+    if plugin_tools.is_plugin_profile():
+        return plugin_tools.daemon_unavailable()
 
     pages = payload.get("pages")
     if not isinstance(pages, list) or not pages:

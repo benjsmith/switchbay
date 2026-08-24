@@ -129,13 +129,19 @@ def main() -> int:
 
     # Allowed tools come from the rail-default agent's allowlist by
     # default; can be overridden via CSWY_ALLOWED_TOOLS (comma-
-    # separated) for narrower presets later.
+    # separated) for narrower presets later. CSWY_PROFILE=vscode|plugin
+    # uses the daemon-free plugin allowlist so MCP never HTTP-hangs on
+    # :8765 when spawned from the VS Code extension.
     raw_allow = os.environ.get("CSWY_ALLOWED_TOOLS")
     if raw_allow:
         allowed = [t.strip() for t in raw_allow.split(",") if t.strip()]
     else:
-        from .agents import rail_default
-        allowed = list(rail_default.ALLOWED_TOOLS)
+        from . import plugin_tools
+        if plugin_tools.is_plugin_profile():
+            allowed = list(plugin_tools.ALLOWED_TOOLS)
+        else:
+            from .agents import rail_default
+            allowed = list(rail_default.ALLOWED_TOOLS)
     log.info("mcp server up: workspace=%s allowed=%s", workspace, allowed)
 
     for line in sys.stdin:

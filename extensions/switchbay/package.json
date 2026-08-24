@@ -1,0 +1,135 @@
+{
+  "name": "switchbay",
+  "displayName": "Switch Bay",
+  "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon.",
+  "version": "0.0.1",
+  "publisher": "switchbay",
+  "license": "LicenseRef-FSL-1.1-ALv2",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Switch Bay",
+      "properties": {
+        "switchbay.repoRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the Switch Bay checkout (Python src + .venv). Empty = parent of this extension."
+        },
+        "switchbay.pythonPath": {
+          "type": "string",
+          "default": "",
+          "description": "Python that can import switchbay (usually <repo>/.venv/bin/python)."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "switchbay",
+          "title": "Switch Bay",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "switchbay": [
+        {
+          "id": "switchbay.wiki",
+          "name": "Wiki"
+        },
+        {
+          "id": "switchbay.projects",
+          "name": "Projects"
+        }
+      ]
+    },
+    "viewsWelcome": [
+      {
+        "view": "switchbay.wiki",
+        "contents": "Open a folder that has a `wiki/` directory (a curiosity-engine workspace).\n[Open Folder](command:vscode.openFolder)"
+      }
+    ],
+    "commands": [
+      {
+        "command": "switchbay.openGraph",
+        "title": "Switch Bay: Open Graph"
+      },
+      {
+        "command": "switchbay.openPreview",
+        "title": "Switch Bay: Open Wiki Preview"
+      },
+      {
+        "command": "switchbay.openAgents",
+        "title": "Switch Bay: Open Agent Dashboard"
+      },
+      {
+        "command": "switchbay.fireThrusters",
+        "title": "Switch Bay: Fire Thrusters"
+      },
+      {
+        "command": "switchbay.rebuildViewer",
+        "title": "Switch Bay: Rebuild Wiki Viewer"
+      },
+      {
+        "command": "switchbay.openPage",
+        "title": "Switch Bay: Open Wiki Page"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "switchbay.openPreview",
+          "when": "resourceExtname == .md && resourcePath =~ /wiki/",
+          "group": "navigation"
+        }
+      ]
+    },
+    "chatParticipants": [
+      {
+        "id": "switchbay.participant",
+        "fullName": "Switch Bay",
+        "name": "switchbay",
+        "description": "Knowledge-graph workbench over this folder (CE, wiki tools, Auto).",
+        "isSticky": true,
+        "commands": [
+          {
+            "name": "thrusters",
+            "description": "Arm Mars Hopper"
+          },
+          {
+            "name": "curate",
+            "description": "Curate the wiki (Auto orchestration)"
+          },
+          {
+            "name": "plot",
+            "description": "Author Vega-Lite plots as wiki figures"
+          },
+          {
+            "name": "deck",
+            "description": "Author an HTML slideshow"
+          },
+          {
+            "name": "sketch",
+            "description": "Author a sketch (companion extension)"
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "20.19.43",
+    "@types/vscode": "1.134.0",
+    "typescript": "5.5.4"
+  }
+}

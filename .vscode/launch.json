@@ -1,0 +1,17 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Switch Bay",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/extensions/switchbay"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/extensions/switchbay/out/**/*.js"
+      ],
+      "preLaunchTask": "switchbay-compile"
+    }
+  ]
+}
