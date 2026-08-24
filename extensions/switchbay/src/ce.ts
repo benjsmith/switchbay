@@ -1,7 +1,7 @@
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import * as vscode from "vscode";
 import { pythonBin, repoRoot, srcDir } from "./paths";
 
@@ -48,9 +48,8 @@ export function readCachedGraph(workspace: string): GraphData | null {
   try {
     const data = JSON.parse(fs.readFileSync(p, "utf8")) as GraphData;
     if (!data || !Array.isArray(data.nodes)) return null;
-    // wiki_render emits nodes-only when kuzu is missing. Rewire from
-    // resolved wikilinks already in body_html so the classic force
-    // graph has edges without a daemon or graph.py rebuild.
+    // wiki_render emits nodes-only when the build interpreter lacks
+    // kuzu. Edges live in ``.curator/graph.kuzu`` (WikiLink / Depicts).
     return ensureGraphEdges(data, workspace);
   } catch {
     return null;
@@ -141,8 +140,73 @@ function harvestFromWikiMarkdown(
   walk(wiki);
 }
 
-/** Fill `edges` + `degree` from wikilinks when CE's cache is nodes-only. */
+function graphKuzuPath(workspace: string): string {
+  return path.join(workspace, ".curator", "graph.kuzu");
+}
+
+/** Interpreter that can `import kuzu` — workspace .venv first (it wrote the db). */
+export function pythonWithKuzu(workspace: string): string | undefined {
+  const cands: string[] = [
+    path.join(workspace, ".venv", "bin", "python"),
+    path.join(workspace, ".venv", "bin", "python3"),
+    path.join(workspace, ".venv", "Scripts", "python.exe"),
+  ];
+  const ce = ceRoot();
+  if (ce) {
+    cands.push(
+      path.join(ce, ".venv", "bin", "python"),
+      path.join(ce, ".venv", "bin", "python3"),
+      path.join(ce, ".venv", "Scripts", "python.exe"),
+    );
+  }
+  return cands.find((p) => fs.existsSync(p));
+}
+
+function dumpKuzuScript(): string {
+  return path.join(__dirname, "..", "scripts", "dump_kuzu_edges.py");
+}
+
+type EdgeCache = { key: string; edges: GraphData["edges"] };
+let kuzuEdgeCache: EdgeCache | null = null;
+
+/** WikiLink + Depicts from ``.curator/graph.kuzu``. Null if unreadable. */
+export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
+  const db = graphKuzuPath(workspace);
+  if (!fs.existsSync(db)) return null;
+  const py = pythonWithKuzu(workspace);
+  const script = dumpKuzuScript();
+  if (!py || !fs.existsSync(script)) return null;
+  let st: fs.Stats;
+  try { st = fs.statSync(db); } catch { return null; }
+  const key = `${db}:${st.mtimeMs}:${st.size}`;
+  if (kuzuEdgeCache?.key === key) return kuzuEdgeCache.edges;
+  const r = spawnSync(py, [script, db], {
+    encoding: "utf8",
+    timeout: 15000,
+    maxBuffer: 32 * 1024 * 1024,
+    windowsHide: true,
+  });
+  if (r.status !== 0) return null;
+  try {
+    const edges = JSON.parse(r.stdout || "[]") as GraphData["edges"];
+    if (!Array.isArray(edges)) return null;
+    kuzuEdgeCache = { key, edges };
+    return edges;
+  } catch {
+    return null;
+  }
+}
+
+/** Prefer kuzu WikiLink/Depicts; fall back to body wikilinks if no db. */
 export function ensureGraphEdges(data: GraphData, workspace?: string): GraphData {
+  if (workspace) {
+    const fromKuzu = readKuzuEdges(workspace);
+    if (fromKuzu !== null) {
+      data.edges = fromKuzu;
+      applyDegrees(data);
+      return data;
+    }
+  }
   if (!Array.isArray(data.edges) || data.edges.length === 0) {
     data.edges = harvestWikilinkEdges(data, workspace);
   }
@@ -229,7 +293,10 @@ export function rebuildViewer(
   workspace: string,
 ): Promise<{ ok: boolean; text: string }> {
   const repo = repoRoot(context);
-  const py = pythonBin(repo);
+  // wiki_render._build_graph imports kuzu; Switch Bay's venv does not
+  // ship it. Use the workspace (or CE skill) interpreter that wrote
+  // graph.kuzu so data.json gets WikiLink/Depicts edges.
+  const py = pythonWithKuzu(workspace) || pythonBin(repo);
   const renderPy = path.join(ceRoot() || "", "scripts", "wiki_render.py");
   const outDir = path.dirname(dataJsonPath(workspace));
   const wiki = path.join(workspace, "wiki");
