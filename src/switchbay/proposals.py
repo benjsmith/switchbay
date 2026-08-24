@@ -221,3 +221,47 @@ def apply_comments(workspace: Path, pid: str, comments: str) -> dict[str, Any] |
         except OSError:
             pass
     return update(workspace, pid, comments=note, body=body)
+
+
+def comment_and_keep(workspace: Path, pid: str, comments: str) -> dict[str, Any] | None:
+    """Record reviewer comments, keep the provisional page, mark accepted.
+
+    Comments stay on the page and on the store entry so the next
+    curation cycle can read them via ``recent_review_feedback``.
+    """
+    if apply_comments(workspace, pid, comments) is None:
+        return None
+    return accept(workspace, pid)
+
+
+def accept_all_proposed(workspace: Path) -> list[dict[str, Any]]:
+    """Finalize every open proposal (close/ignore = keep)."""
+    done: list[dict[str, Any]] = []
+    for e in list_proposals(workspace):
+        if e.get("status") != "proposed":
+            continue
+        kept = accept(workspace, str(e.get("id") or ""))
+        if kept is not None:
+            done.append(kept)
+    return done
+
+
+def recent_review_feedback(workspace: Path, *, limit: int = 12) -> list[str]:
+    """Accepted Reviews comments, newest first, for the next curate prompt."""
+    rows = [
+        e for e in list_proposals(workspace)
+        if e.get("status") == "accepted" and str(e.get("comments") or "").strip()
+    ]
+    rows.sort(key=lambda e: float(e.get("accepted_at") or e.get("created_at") or 0), reverse=True)
+    out: list[str] = []
+    for e in rows[:limit]:
+        title = str(e.get("title") or e.get("path") or "page")
+        note = " ".join(str(e.get("comments") or "").split())
+        if len(note) > 240:
+            note = note[:237] + "…"
+        out.append(f"{title}: {note}")
+    return out
+
+
+def has_proposed(workspace: Path) -> bool:
+    return any(e.get("status") == "proposed" for e in list_proposals(workspace))

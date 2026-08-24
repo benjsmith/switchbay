@@ -5,20 +5,21 @@ description: >-
   workspaces (slideshows/<slug>/, wikilink [[slideshow:slug|title]]). Prefer
   markdown authoring (H1/H2 + lists + image: + figure wikilinks + ### Voiceover)
   via slideshow_from_md. Use when the user asks for an HTML presentation,
-  slideshow, media-rich topic deck, or wiki-linked presentation — NOT Sketch
-  kind:deck / Excalidraw decks.
+  slideshow, media-rich topic deck, or wiki-linked presentation. Sketch
+  files are ordinary diagrams, not slides.
 ---
 
 # HTML slideshow skill (Switch Bay)
 
-## Do not confuse with Sketch decks
+HTML slideshows are the only presentation surface.
 
 | Surface | Where | Open |
 |---------|--------|------|
-| **Sketch deck** | `kind: deck` analyses + Excalidraw | Sketch tab |
 | **HTML slideshow** | `slideshows/<slug>/` | Slideshow tab |
+| **Sketch** | `.workbench/sketches/` | Sketch tab (diagrams / whiteboards) |
 
-Wikilink for HTML only: **`[[slideshow:slug|title]]`** — never `[[deck:…]]`.
+Wikilink: **`[[slideshow:slug|title]]`**. Export PDF from the Slideshow tab
+(one 16:9 page per slide, `vault/exports/<slug>.pdf`).
 
 ---
 

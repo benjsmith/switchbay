@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { useSelection } from "../selection/SelectionContext";
 import { useTabs } from "../center/TabsContext";
 import { notifyHtmlDeckOpen } from "../widgets/htmldeck/htmlDeckOpen";
+import { getLastRevealPath, resolveInFileTree } from "../lib/localPath";
 
 type FileNode = {
   name: string;
@@ -246,6 +247,7 @@ export default function FileBrowser({
   // Bumped whenever selection changes to a page path — drives the
   // scroll-into-view + transient highlight effect below.
   const [revealTick, setRevealTick] = useState(0);
+  const [revealedPath, setRevealedPath] = useState<string | null>(null);
   const [menu, setMenu] = useState<CtxMenu | null>(null);
   // Clamped on-screen position; set in the layout effect below
   // once we can measure the rendered menu's box.
@@ -359,18 +361,41 @@ export default function FileBrowser({
     return set;
   }, [inspectedPackages, filtered, filterActive]);
 
+  const filesRef = useRef(files);
+  filesRef.current = files;
+
+  const revealPath = useCallback((raw: string) => {
+    const full = resolveInFileTree(raw, filesRef.current);
+    if (!full) return;
+    setRevealedPath(full);
+    setExpanded((cur) => {
+      const next = new Set(cur);
+      for (const a of ancestorDirs(full)) next.add(a);
+      return next;
+    });
+    setRevealTick((t) => t + 1);
+  }, []);
+
+  useEffect(() => {
+    const pending = getLastRevealPath();
+    if (pending) revealPath(pending);
+    const onReveal = (ev: Event) => {
+      const path = String((ev as CustomEvent<{ path?: string }>).detail?.path || "");
+      if (path) revealPath(path);
+    };
+    window.addEventListener("sy:reveal-file", onReveal);
+    return () => window.removeEventListener("sy:reveal-file", onReveal);
+  }, [revealPath]);
+
   // When the active selection points at a page path (likely from
   // a wiki-sidebar click), expand the file-browser tree to reveal
   // that file and scroll it into view with a brief highlight.
-  // Verifies wiki ↔ file sync visually — the file IS there, here's
-  // where on disk.
   useEffect(() => {
     if (selection?.kind !== "page") return;
     const raw = selection.path;
     if (!raw) return;
-    // selection paths arrive both as `wiki/foo.md` and `foo.md` —
-    // normalise to the file-tree shape.
     const full = raw.startsWith("wiki/") ? raw : `wiki/${raw}`;
+    setRevealedPath(full);
     setExpanded((cur) => {
       const next = new Set(cur);
       for (const a of ancestorDirs(full)) next.add(a);
@@ -379,14 +404,10 @@ export default function FileBrowser({
     setRevealTick((t) => t + 1);
   }, [selection]);
 
-  // Side-effect: after revealTick bumps, scroll the matching row
-  // into view and add a transient pulse class.
   useEffect(() => {
     if (revealTick === 0) return;
-    if (selection?.kind !== "page") return;
-    const raw = selection.path;
-    if (!raw) return;
-    const full = raw.startsWith("wiki/") ? raw : `wiki/${raw}`;
+    const full = revealedPath;
+    if (!full) return;
     const tid = window.setTimeout(() => {
       const row = document.querySelector<HTMLElement>(
         `[data-fb-path="${cssEscapeAttr(full)}"]`,
@@ -394,10 +415,11 @@ export default function FileBrowser({
       if (!row) return;
       row.scrollIntoView({ behavior: "smooth", block: "center" });
       row.classList.add("sy-fb-row--pulse");
+      row.classList.add("sy-fb-row--active");
       window.setTimeout(() => row.classList.remove("sy-fb-row--pulse"), 1600);
     }, 60);
     return () => window.clearTimeout(tid);
-  }, [revealTick, selection]);
+  }, [revealTick, revealedPath]);
 
   // Clamp the context menu inside the viewport. The raw
   // clientX/clientY at right-click can sit close enough to the
@@ -620,9 +642,8 @@ export default function FileBrowser({
       return;
     }
     // wiki/.md files → set page selection AND flip to the Editor tab
-    // so the user lands on the doc they clicked. Analyses, Sketch
-    // decks and plain pages all route to Editor — the SketchTab
-    // self-detects deck mode from the selection.
+    // so the user lands on the doc they clicked. Analyses, leftover
+    // kind: deck pages, and plain pages all route to Editor.
     if (path.startsWith("wiki/") && path.endsWith(".md")) {
       const slug = path.slice("wiki/".length, -".md".length);
       setSelection({ kind: "page", id: slug, path: path.slice("wiki/".length) });
@@ -630,8 +651,8 @@ export default function FileBrowser({
       return;
     }
     // A sketch's PNG export — open the parent Sketch in the Sketch
-    // tab so a click on the PNG produced by → Sketch deck actually
-    // takes the user to its editable source. Both conventions: the
+    // tab so a click on the PNG takes the user to its editable source.
+    // Both conventions: the
     // CE-native wiki/figures/_assets/ home and the legacy root
     // figures/ (pre-migration workspaces).
     if (
@@ -901,8 +922,9 @@ export default function FileBrowser({
       && (!isPkg || isInspected)
       && node.children.length > 0;
     const isSelected =
-      selection?.kind === "page" &&
-      (`wiki/${selection.path}` === node.path || selection.path === node.path);
+      revealedPath === node.path
+      || (selection?.kind === "page" &&
+        (`wiki/${selection.path}` === node.path || selection.path === node.path));
     const onContext = (ev: React.MouseEvent) => {
       ev.preventDefault();
       ev.stopPropagation();

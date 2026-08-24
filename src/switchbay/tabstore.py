@@ -338,8 +338,7 @@ def add_report_tab(workspace: Path) -> dict[str, Any] | None:
 
 
 def remove_report_tab(workspace: Path) -> bool:
-    """Drop the Reviews tab from mode.json (the tab's own ✕ close).
-    Pending proposals stay on disk; a later draft re-adds the tab."""
+    """Drop the Reviews tab from mode.json (the tab's own ✕ close)."""
     path = workspace / ".workbench" / "mode.json"
     if not path.is_file():
         return False

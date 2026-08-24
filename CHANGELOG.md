@@ -3,6 +3,42 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-25 — v0.11.0 — Slideshows, Reviews, and install hardening
+
+**Migration:** leftover `kind: deck` wiki pages are kept as ordinary
+documents; their sketches stay in the Sketch library. Presentations
+are HTML slideshows under `slideshows/<slug>/`. **Breaking:** sketch-deck
+authoring tools (`make_slides_from_doc`, `compose_analysis`,
+`author_slide`) and Sketch-tab deck mode are removed. Use
+`create_slideshow` / **→ Slideshow** and `author_sketch` instead.
+
+### Added
+
+- HTML slideshows as the only presentation surface, with a Slideshow
+  tab, markdown-from-doc creation, and **Save as PDF** (one 16:9 page
+  per slide, fonts and local assets resolved).
+- Reviews tab as the only proposal surface: provisional wiki writes,
+  reject restores prior content, comments keep the page and feed the
+  next curation cycle, close/ignore keeps remaining drafts.
+- Clicking a local source or `(vault:…)` citation switches the sidebar
+  to Files, expands ancestors, and highlights the row.
+
+### Changed
+
+- Installs consume locked `uv.lock` / `pnpm-lock.yaml`; pnpm 11 build
+  scripts are an explicit allowlist.
+- Enterprise Add Workspace may run only the bundled Curiosity Engine
+  `scripts/setup.sh` through a narrow trusted path.
+- `/curate` uses the adaptive orchestrator; Copilot-only runs can
+  still spread work across distinct available models.
+- Agent Space keeps the last DAG while idle and pages concurrent root
+  DAGs. Atlas mounts individual nodes on the first frame.
+
+### Fixed
+
+- Proposal accept/reject cards no longer appear in the rail.
+- Sketch tab is a library of ordinary drawings, not a slide carousel.
+
 ## 2026-08-24 — v0.10.0 — Auto orchestration
 
 **Migration:** none. **Breaking:** none. Explicit `n≥2` fan-out and

@@ -172,7 +172,7 @@ def save_sketch(
         # Fall back to a server-side Pillow raster when the caller
         # didn't supply a canonical PNG. Keeps `figures/<id>.png`
         # in sync with the JSON for agent-authored slides
-        # (`author_slide` doesn't ship a PNG since it has no canvas
+        # (`author_sketch` doesn't ship a PNG since it has no canvas
         # mounted); the Sketch tab still overwrites this with the
         # canonical Excalidraw export the next time the slide is
         # opened.

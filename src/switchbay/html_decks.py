@@ -1,7 +1,6 @@
 """Workspace HTML slideshows (outside the wiki tree).
 
-Sketch decks remain ``kind: deck`` in the Sketch tab. These are a
-**different** product surface: self-contained HTML slideshows.
+These self-contained HTML packages are the only presentation surface.
 
 Convention::
 
@@ -10,7 +9,7 @@ Convention::
       *.mp4, *.png, …     # media siblings (relative URLs from HTML)
       deck.json           # optional metadata {title, wiki_topics}
 
-Wiki pages link with (NOT ``deck:`` — that word is reserved for Sketch)::
+Wiki pages link with::
 
   [[slideshow:transformers-media-test|Transformers presentation]]
 

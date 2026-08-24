@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { GraphData } from "../widgets/graph/types";
 import FileBrowser from "./FileBrowser";
 import SourceBrowser from "./SourceBrowser";
@@ -72,6 +72,11 @@ export default function Sidebar({ data, error, filesVersion }: Props) {
   // provenance tree.
   const [view, setView] = useState<"files" | "sources">("files");
   const { uploading, dragOver, dropProps, ingestOne } = useIngestDrop();
+  useEffect(() => {
+    const onReveal = () => setView("files");
+    window.addEventListener("sy:reveal-file", onReveal);
+    return () => window.removeEventListener("sy:reveal-file", onReveal);
+  }, []);
 
   return (
     // display:contents — the wrapper adds DnD without touching the

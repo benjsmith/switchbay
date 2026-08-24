@@ -677,12 +677,12 @@ def rasterize_scene_png(scene: dict[str, Any]) -> bytes:
     `exportToBlob` (rough.js stroke, Virgil handwritten font). We
     don't have that runtime in Python. This produces a clean
     Pillow render of the same scene — rectangles, ellipses, lines
-    and wrapped text — so the deck doc's `<img src=figures/<id>.png>`
-    references resolve as soon as `author_slide` returns, instead
-    of showing broken-image placeholders until the user mounts each
-    canvas. The Sketch tab's render-on-demand pass still overwrites
-    this with the canonical Excalidraw raster the first time the
-    user opens the slide.
+    and wrapped text — so `<img src=figures/<id>.png>` references
+    resolve as soon as `author_sketch` returns, instead of showing
+    broken-image placeholders until the user mounts each canvas.
+    The Sketch tab's render-on-demand pass still overwrites this
+    with the canonical Excalidraw raster the first time the user
+    opens the sketch.
     """
     from PIL import Image, ImageDraw
     img = Image.new("RGB", (CANVAS_W, CANVAS_H), color=_hex(_bg_of(scene)))

@@ -19,11 +19,13 @@ Don't run `python` / `pip` / `npm` directly — use `make` for Python and
 
 ## Common slips to avoid
 
-- Don't add a `kind: slides` ontology back, **nor a reveal.js "Slides"
-  tab** (removed as flaky + redundant). Sketch decks (`kind: deck`),
-  authored/viewed in the **Sketch tab carousel**, are the only deck
-  surface; reveal.js / pptx are *export* targets (`deck_export.py`), not
-  a tab or parallel format.
+- Don't add a `kind: slides` ontology or a sketch-as-slide-deck
+  workflow. HTML slideshows (`slideshows/<slug>/`, Slideshow tab) are
+  the only presentation surface; Save as PDF writes 16:9 pages to
+  `vault/exports/`. The Sketch tab is a library of ordinary Excalidraw/
+  drawio sketches. Legacy `kind: deck` wiki pages stay on disk as
+  degraded documents — do not delete them, and do not reintroduce
+  Sketch-tab deck mode.
 - The `curiosity-engine` skill is a **read-only upstream dependency** —
   Switch Bay consumes its retrieval/graph substrate (shell out, read its
   DBs); never modify or re-implement it.

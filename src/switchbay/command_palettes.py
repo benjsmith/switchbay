@@ -1,7 +1,7 @@
 """Slash-command tool palettes for local models.
 
 A local run that came from a slash (or an internal command like deck
-populate) gets a *command* desk instead of the RAM chat/curate list.
+authoring) gets a *command* desk instead of the RAM chat/curate list.
 Shipped maps cover the agent-backed slashes; user ``.md`` commands
 inherit a shipped map by alias or by mentioning tool names. Workspace
 overrides live in ``.workbench/state/command_palettes.json`` and are
@@ -53,10 +53,8 @@ SHIPPED: dict[str, tuple[str, ...] | None] = {
         "propose_wiki_page",
     ),
     "deck": _WIKI_READ + (
-        "make_slides_from_doc",
-        "make_slides_from_docs",
-        "compose_analysis",
-        "author_slide",
+        "create_slideshow",
+        "author_sketch",
         "sketch_context",
         "sketch_show",
     ),
@@ -99,7 +97,7 @@ DESCRIPTIONS: dict[str, str] = {
     "curate": "Wiki curator — RAM-scaled tools unless you override",
     "ingest": "Drain vault/raw/ into wiki/sources/",
     "add-source": "Copy or paste into the vault, then ingest",
-    "deck": "Sketch deck authoring (populate / create-deck)",
+    "deck": "HTML slideshow authoring plus ordinary sketches",
     "plot": "Vega-Lite plots (Plot-from-table, or a user command)",
     "lint": "CE lint, naming, small page edits",
     "report": "Rich HTML report (dropped on small local rungs)",
@@ -107,7 +105,7 @@ DESCRIPTIONS: dict[str, str] = {
 
 # Keyword → shipped palette when a user command doesn't name tools.
 _HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
-    (re.compile(r"\b(author_slide|make_slides|excalidraw|slide deck)\b", re.I), "deck"),
+    (re.compile(r"\b(create_slideshow|author_sketch|excalidraw|slide deck)\b", re.I), "deck"),
     (re.compile(r"\b(slides?|deck)\b", re.I), "deck"),
     (re.compile(r"\b(save_plot|vega-?lite|histogram|scatterplot)\b", re.I), "plot"),
     (re.compile(r"\b(ce_lint|lint the wiki)\b", re.I), "lint"),

@@ -35,7 +35,7 @@ import uuid
 from . import (
     a2a, action_buttons, admin_policy, agent_rules, analyses, app_settings, atomicio, capture, cebridge,
     ce_tools, command_palettes,
-    commands, conversations, curation_history, dbintrospect, deck_export,
+    commands, conversations, curation_history, dbintrospect,
     demo_workspace,
     duckdb_starters, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
@@ -803,6 +803,11 @@ async def _activate(app: web.Application, new_path: Path) -> None:
     # tab. Best-effort — failure just means the first hit pays
     # the build cost the way it did before.
     asyncio.create_task(_warm_curation_history(new_path))
+    try:
+        if await asyncio.to_thread(proposals.has_proposed, new_path):
+            await asyncio.to_thread(tabstore.add_report_tab, new_path)
+    except Exception:  # noqa: BLE001
+        log.exception("reviews tab restore on workspace switch failed")
     # One-shot figures-convention migration (2026-07-05): legacy
     # workspace-root `figures/` moves into `wiki/figures/_assets/`
     # with wiki refs rewritten, so CE/CM tooling resolves assets
@@ -2579,11 +2584,9 @@ async def handle_analysis_get(request: web.Request) -> web.Response:
 
 
 async def handle_analysis_by_slide(request: web.Request) -> web.Response:
-    """Find the analysis (if any) whose `slides[]` contains a given
-    sketch id. Used by the Sketch tab to auto-enter deck mode when
-    the user activates a sketch that belongs to a deck — without
-    this they have to find the deck doc and click ↗ Sketch
-    explicitly, which is easy to miss after a workspace switch."""
+    """Find a leftover analysis/deck wiki page whose `slides[]`
+    contains a given sketch id. Sketch tab no longer enters deck
+    mode; this remains for wiki/legacy lookup only."""
     workspace: Path = request.app["workspace"]
     sid = request.query.get("sketch_id", "").strip()
     if not sid:
@@ -2597,363 +2600,10 @@ async def handle_analysis_by_slide(request: web.Request) -> web.Response:
     return web.json_response({"analysis": None})
 
 
-async def handle_analysis_from_doc(request: web.Request) -> web.Response:
-    """Scaffold an analysis page from a source markdown doc. Walks the
-    doc's H1/H2 headings; one placeholder sketch per heading. The
-    actual scene authoring (real Excalidraw shapes for each heading's
-    content) is the agent's job — kicked off as a follow-up rail
-    instruction. This endpoint just sets up the artifact so the
-    Sketch tab has something to enter deck-mode on."""
-    workspace: Path = request.app["workspace"]
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "invalid json"}, status=400)
-    source_path = str(body.get("path") or "").strip()
-    if not source_path:
-        return web.json_response({"error": "path required"}, status=400)
-    src = analyses.resolve_doc_path(workspace, source_path)
-    if src is None:
-        return web.json_response(
-            {"error": f"source doc not in workspace: {source_path}"},
-            status=400,
-        )
-    try:
-        text = src.read_text(encoding="utf-8")
-    except OSError as e:
-        return web.json_response({"error": str(e)}, status=400)
-    # Re-derive the workspace-relative path from what we actually
-    # resolved so the analysis's `sources:` list reflects the canonical
-    # location, not whatever shape the request happened to send in.
-    source_path = str(src.resolve().relative_to(workspace.resolve()))
-
-    fm, page_body = analyses.parse_frontmatter(text)
-
-    # Detect project-home pages via CE convention: frontmatter
-    # `kind: project` OR title starting with `[proj]`. These get a
-    # purpose-built deck template (Introduction → themes → Latest
-    # Updates → Summary → Next Steps) rather than the per-heading
-    # scaffold that fits prose-shaped docs.
-    is_project_home = (
-        str(fm.get("kind") or "").lower() == "project"
-        or str(fm.get("title") or "").strip().lower().startswith("[proj]")
-    )
-    project_name = ""
-    if is_project_home:
-        # CE writes `projects: [<name>]` in the home-page frontmatter;
-        # fall back to the file stem if the field is missing.
-        proj_field = fm.get("projects") or []
-        if isinstance(proj_field, list) and proj_field:
-            project_name = str(proj_field[0])
-        else:
-            project_name = src.stem
-
-    if is_project_home:
-        # Fixed structured outline for project decks. The populate
-        # agent fills each placeholder from the project's tagged
-        # pages + the home page's prose; theme slides get filled
-        # with the agent's segmentation of the project's content.
-        section_titles = [
-            "Introduction",
-            "Theme 1",
-            "Theme 2",
-            "Theme 3",
-            "Latest Updates",
-            "Summary",
-            "Next Steps",
-        ]
-        deck_title = project_name or src.stem
-    else:
-        # Shared heading → section logic with make_slides_from_doc:
-        # ≥3 H2s keep per-heading slides; 0 H2s get a generic spine;
-        # 1–2 H2s (typical CE analysis: long prose + "Open questions")
-        # get spine + named H2s so the deck isn't a single card.
-        doc_title, section_titles = tools.deck_section_titles_from_body(
-            page_body, fallback_title=src.stem,
-        )
-        deck_title = doc_title
-
-    # Create one blank Excalidraw sketch per section. The agent (or
-    # user) fills these in afterwards; the scaffold's job is just to
-    # establish the deck so Sketch-tab deck-mode has something to nav.
-    slide_ids: list[str] = []
-    for title in section_titles or [deck_title]:
-        seed = {"elements": [], "appState": {"name": title}, "files": {}}
-        rec = sketches.save_sketch(
-            workspace, name=title, kind="excalidraw", data=seed,
-        )
-        slide_ids.append(rec["id"])
-
-    analysis = analyses.save_analysis(
-        workspace,
-        title=deck_title,
-        slides=slide_ids,
-        sources=[source_path],
-        is_deck=True,
-        deck_template=("project-overview" if is_project_home else None),
-        deck_project=(project_name or None),
-    )
-    # The deck just appeared in `wiki/analyses/`; the graph viewer's
-    # data.json doesn't know about it yet. Schedule a background
-    # rebuild so the sidebar + graph pick it up without forcing the
-    # user to /rescan. Best-effort — failures log but don't block.
-    try:
-        asyncio.create_task(_after_wiki_write(
-            request.app, workspace, str(analysis.get("path") or ""),
-        ))
-    except Exception:  # noqa: BLE001
-        log.exception("graph rebuild scheduling failed (deck creation)")
-    return web.json_response({"analysis": analysis})
-
-
-async def handle_analysis_populate(request: web.Request) -> web.Response:
-    """Kick a background agent run that authors each placeholder slide
-    in an analysis using `author_slide`. Used by the editor's "→ Slides"
-    button (and Graph modal counterpart) so a freshly-scaffolded deck
-    fills in automatically rather than leaving the user with N empty
-    canvases.
-
-    Returns immediately with a `run_id` the frontend can use to show a
-    spinner next to the deck title and link the user to the live
-    transcript in the Agent Dashboard."""
-    workspace: Path = request.app["workspace"]
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "invalid json"}, status=400)
-    analysis_path = str(body.get("analysis_path") or "").strip()
-    if not analysis_path:
-        return web.json_response(
-            {"error": "analysis_path required"}, status=400,
-        )
-    analysis = analyses.load_analysis(workspace, analysis_path)
-    if analysis is None:
-        return web.json_response(
-            {"error": f"analysis not found: {analysis_path}"}, status=404,
-        )
-    slides = analysis.get("slides") or []
-    sources = analysis.get("sources") or []
-    # Recovery path: a failed prior populate + reconcile used to wipe
-    # the deck to `slides: []`, leaving a dead badge that Repopulate
-    # couldn't restart. Re-scaffold placeholders from the first
-    # source (or a generic outline) so the agent has targets again.
-    if not slides:
-        src0 = sources[0] if sources else None
-        if isinstance(src0, str) and src0.strip():
-            try:
-                scaffolded = await asyncio.to_thread(
-                    tools._scaffold_one_doc, workspace, src0,
-                )
-                slides = list(scaffolded.get("slide_ids") or [])
-            except Exception as e:  # noqa: BLE001
-                log.warning(
-                    "populate re-scaffold from source failed for %s: %s",
-                    analysis_path, e,
-                )
-                slides = []
-        if not slides:
-            # Generic four-slide outline when the source is missing or
-            # has no headings — same fallback as handle_analysis_from_doc.
-            for title in (
-                "Introduction", "Key Points", "Evidence", "Next Steps",
-            ):
-                seed = {
-                    "elements": [],
-                    "appState": {"name": title},
-                    "files": {},
-                }
-                rec = await asyncio.to_thread(
-                    sketches.save_sketch,
-                    workspace,
-                    name=title,
-                    kind="excalidraw",
-                    data=seed,
-                )
-                slides.append(str(rec["id"]))
-        try:
-            updated = await asyncio.to_thread(
-                analyses.set_slides,
-                workspace,
-                analysis["path"],
-                slides,
-            )
-            if updated is not None:
-                analysis = updated
-                slides = list(analysis.get("slides") or slides)
-        except Exception:  # noqa: BLE001
-            log.exception(
-                "populate re-scaffold set_slides failed for %s", analysis_path,
-            )
-            return web.json_response(
-                {"error": "analysis has no placeholder slides to populate"},
-                status=400,
-            )
-        if not slides:
-            return web.json_response(
-                {"error": "analysis has no placeholder slides to populate"},
-                status=400,
-            )
-
-    # Construct the agent prompt. The rail-default agent already knows
-    # author_slide / make_slides_from_doc; we just need to point it at
-    # this analysis specifically and the source doc(s) it should draw
-    # from. Avoid asking it to add or remove slides — populate only.
-    deck_template = analysis.get("deck_template")
-    deck_project = analysis.get("deck_project")
-    sources_clause = (
-        f"Source doc(s): {', '.join(sources)}." if sources
-        else "There are no source docs declared on this analysis — "
-             "use the analysis's title + slide names as your guide."
-    )
-
-    palette_clause = (
-        "Pick ONE accent colour and use it for every author_slide "
-        "call: `black` (default), `red`, `green`, `blue`, `orange`. "
-        "These are Excalidraw's stock toolbar colours — the user can "
-        "re-recolour without leaving the default palette. Pass it in "
-        "the `slots` object as `accent`. Don't override fonts or add "
-        "background fills."
-    )
-
-    # Shared with rail-default SYSTEM_PROMPT plain-language rules;
-    # restated here so populate runs (which are task-prompt-heavy)
-    # don't bury the rule under layout instructions.
-    clarity_clause = (
-        "Plain language (non-negotiable for every slide):\n"
-        "  · Avoid jargon and domain acronyms unless truly ubiquitous "
-        "(AI, CPU, PDF, HTTP, SQL). Spell out RLVR, RAG, RLHF, CoT, "
-        "and similar shorthand.\n"
-        "  · If an acronym is necessary, define it on FIRST use in "
-        "the deck: \"retrieval-augmented generation (RAG)\". Later "
-        "slides may use the short form.\n"
-        "  · Prefer the expanded form on titles and cards when space "
-        "allows. Never leave a bare undefined acronym on a bullet.\n"
-        "  · Do not invent new acronyms or stack several obscure ones "
-        "in one line."
-    )
-
-    if deck_template == "project-overview" and deck_project:
-        # Project-home deck: the placeholder slides have fixed names
-        # (Introduction / Theme 1-3 / Latest Updates / Summary / Next
-        # Steps). The agent reads project member pages + the home
-        # page itself to fill each section.
-        prompt = (
-            f"Populate the project-overview deck at "
-            f"`{analysis['path']}`. It covers the `{deck_project}` "
-            f"project. {sources_clause} The deck is scaffolded with "
-            f"{len(slides)} placeholder slides whose names are "
-            f"`Introduction`, `Theme 1`, `Theme 2`, `Theme 3`, "
-            f"`Latest Updates`, `Summary`, `Next Steps`.\n\n"
-            f"{palette_clause}\n\n"
-            f"{clarity_clause}\n\n"
-            f"Use the recall_rail tool to pull recent project log "
-            f"entries (search `.curator/log.md` for the project name), "
-            f"and read wiki pages tagged `projects: [{deck_project}]` "
-            f"to ground each slide. Then call `author_slide` once "
-            f"per placeholder, in order, with these guidelines:\n"
-            f"  · Introduction: layout `section` — full-bleed cover "
-            f"that names the project; `label` = project name, "
-            f"`subtitle` = a one-line tagline.\n"
-            f"  · Theme 1-3: pick `bullets`, `two_column`, `cards`, "
-            f"or `paragraph` per theme based on shape of content. "
-            f"Vary across themes — don't make all three bullets. "
-            f"Pass `name` to rename each placeholder from `Theme N` "
-            f"to the theme name.\n"
-            f"  · Latest Updates: layout `bullets` — 3-5 entries "
-            f"pulled from recent curator-log entries (newest first), "
-            f"each ≤ 8 words.\n"
-            f"  · Summary: layout `stat` if the project has a "
-            f"headline number worth elevating, else `paragraph` — "
-            f"a 3-sentence synthesis.\n"
-            f"  · Next Steps: layout `bullets`. Pull from "
-            f"`type: todo-list` pages tagged to the project; if "
-            f"none, author 3 plausible directions and rename the "
-            f"slide to `Suggested Next Steps`.\n\n"
-            f"Don't add or remove slides; only update the existing "
-            f"placeholders. Keep prose terse — bullets ≤ 8 words, "
-            f"body paragraphs 3-4 sentences."
-        )
-    else:
-        prompt = (
-            f"Populate the analysis at `{analysis['path']}`. It was just "
-            f"scaffolded with {len(slides)} placeholder Excalidraw slides "
-            f"by make_slides_from_doc. {sources_clause}\n\n"
-            f"{palette_clause}\n\n"
-            f"{clarity_clause}\n\n"
-            f"For each slide id in the analysis frontmatter (in order), "
-            f"call `author_slide` with that `sketch_id` and a layout "
-            f"chosen from {{title, bullets, two_column, quote, section, "
-            f"paragraph, stat, cards}} that fits the heading and source "
-            f"content. Vary the layouts across the deck — don't repeat "
-            f"`bullets` for every slide. Don't add or remove slides; "
-            f"only update the existing placeholders. Keep prose terse "
-            f"— bullets ≤ 8 words, body paragraphs 3-4 sentences."
-        )
-
-    # Pre-mint a run_id so the response can return it before the
-    # asyncio task gets scheduled. _dispatch_chat will register the
-    # run with this id and broadcast `RUN_STARTED` shortly.
-    run_id = f"run-{uuid.uuid4().hex[:8]}"
-
-    # Snapshot every sketch in the workspace BEFORE the run kicks
-    # off so the reconcile pass can tell which ones the agent
-    # touched. Capture is synchronous (the runner is async-scheduled
-    # via create_task) — by the time the agent's first author_slide
-    # writes, this dict is already frozen.
-    sketches_snapshot: dict[str, int] = {
-        str(s.get("id") or ""): int(s.get("updated_at") or 0)
-        for s in sketches.list_sketches(workspace)
-        if s.get("id")
-    }
-
-    async def _runner() -> None:
-        try:
-            await _dispatch_chat(
-                request.app, ws=None, text=prompt,
-                input_excerpt=f"populate {analysis['path']}",
-                run_id=run_id,
-                command="deck",
-            )
-        except Exception:  # noqa: BLE001
-            log.exception("populate-analysis run %s crashed", run_id)
-        finally:
-            try:
-                await _reconcile_populate_deck(
-                    request.app, analysis["path"], sketches_snapshot,
-                )
-            except Exception:  # noqa: BLE001
-                log.exception(
-                    "populate reconcile crashed for run %s", run_id,
-                )
-
-    task = asyncio.create_task(_runner())
-    task.add_done_callback(_make_dispatch_error_surface(request.app, run_id))
-
-    # Tag the run with the analysis path so a Delete-deck action can
-    # find + cancel it without scanning input_excerpt. _dispatch_chat
-    # registers the row asynchronously — wait briefly for it to land
-    # then attach the field. If the run finishes before we get
-    # there, that's fine: the registry entry was already gone.
-    async def _tag_run() -> None:
-        await asyncio.sleep(0)
-        runs = request.app.get("runs") or {}
-        rec = runs.get(run_id)
-        if rec is not None:
-            rec["analysis_path"] = analysis["path"]
-            rec["kind"] = "populate-deck"
-    asyncio.create_task(_tag_run())
-
-    return web.json_response({
-        "run_id": run_id,
-        "analysis": analysis,
-    })
-
-
 async def handle_analysis_delete(request: web.Request) -> web.Response:
-    """Tear a deck down completely: cancel any active populate run,
-    delete every member sketch (+ its PNG), then delete the analysis
-    page itself. The right-click → Delete deck affordance on the
-    deck badge calls this."""
+    """Tear a leftover analysis/deck wiki page down: cancel any
+    tagged run, delete member sketches, then delete the page.
+    Sketch tab no longer exposes this; kept for API/legacy use."""
     workspace: Path = request.app["workspace"]
     path = request.query.get("path", "").strip()
     if not path:
@@ -3422,7 +3072,7 @@ async def handle_skill_open_in_editor(request: web.Request) -> web.Response:
 
 async def handle_skill_from_thread(request: web.Request) -> web.Response:
     """"Save this thread as a skill" — draft a SKILL.md from a thread's
-    transcript via a background agent, mirroring make_slides_from_doc.
+    transcript via a background agent.
 
     Body: {thread_id?, name?}. Gathers the thread's user/assistant turns,
     then dispatches a headless agent instructed to distill the workflow
@@ -3638,6 +3288,9 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
             cap = 400
         prof = await asyncio.to_thread(_curator_profile, workspace, cap)
         extra_system = _curator_profile_system(prof)
+        fb = await asyncio.to_thread(_review_feedback_system, workspace)
+        if fb:
+            extra_system = (extra_system + "\n\n" + fb).strip()
 
     label = pid or _resolve_default_provider()
     try:
@@ -4412,53 +4065,6 @@ async def handle_packs_pip_install(request: web.Request) -> web.Response:
         "stderr": stderr.decode("utf-8", errors="replace")[-4000:],
         "packages": pkgs,
     })
-
-
-async def handle_deck_export_pptx(request: web.Request) -> web.Response:
-    """Export a Sketch deck (`kind: deck`) to vault/exports/<slug>.pptx
-    via python-pptx. Body: `{path: "<analysis-path>"}`. Returns the
-    output path relative to the workspace so the Sketch tab can toast
-    it (and the user can open it in Keynote / PowerPoint)."""
-    workspace: Path = request.app["workspace"]
-    try:
-        body_json = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "invalid json"}, status=400)
-    deck_path = str(body_json.get("path") or "").strip()
-    if not deck_path:
-        return web.json_response({"error": "path required"}, status=400)
-    try:
-        out = deck_export.to_pptx(workspace, deck_path)
-    except FileNotFoundError as e:
-        return web.json_response({"error": str(e)}, status=404)
-    except ValueError as e:
-        return web.json_response({"error": str(e)}, status=400)
-    rel = out.resolve().relative_to(workspace.resolve()).as_posix()
-    await _broadcast(request.app, protocol.files_changed())
-    return web.json_response({"ok": True, "path": rel})
-
-
-async def handle_deck_export_html(request: web.Request) -> web.Response:
-    """Export a Sketch deck to vault/exports/<slug>.html (single-file
-    standalone reveal.js with PNGs base64-embedded). Same request /
-    response shape as the pptx variant."""
-    workspace: Path = request.app["workspace"]
-    try:
-        body_json = await request.json()
-    except json.JSONDecodeError:
-        return web.json_response({"error": "invalid json"}, status=400)
-    deck_path = str(body_json.get("path") or "").strip()
-    if not deck_path:
-        return web.json_response({"error": "path required"}, status=400)
-    try:
-        out = deck_export.to_html(workspace, deck_path)
-    except FileNotFoundError as e:
-        return web.json_response({"error": str(e)}, status=404)
-    except ValueError as e:
-        return web.json_response({"error": str(e)}, status=400)
-    rel = out.resolve().relative_to(workspace.resolve()).as_posix()
-    await _broadcast(request.app, protocol.files_changed())
-    return web.json_response({"ok": True, "path": rel})
 
 
 async def handle_user_tabs_list(request: web.Request) -> web.Response:
@@ -7905,6 +7511,21 @@ def _curator_profile_system(profile: str) -> str:
     )
 
 
+def _review_feedback_system(workspace: Path) -> str:
+    """Honor recent Reviews comments on the next curation wave."""
+    try:
+        lines = proposals.recent_review_feedback(workspace)
+    except Exception:  # noqa: BLE001
+        return ""
+    if not lines:
+        return ""
+    body = "\n".join(f"- {ln}" for ln in lines)
+    return (
+        "Reviewer feedback from recent Reviews (honor when writing or "
+        "revising pages; do not wait for more review):\n" + body
+    )
+
+
 def _ce_action_provider(workspace: Path) -> tuple[str | None, str | None]:
     """Which provider runs the ORCHESTRATOR of a CE action (curate /
     ingest / add-source).
@@ -10253,11 +9874,10 @@ async def _dispatch_chat(
     final_done: tuple[int | None, int | None, str | None] = (None, None, None)
     usage_in = 0
     usage_out = 0
-    # Run-start fence for create_report: a capable model may render a rich
-    # HTML report via the tool (in-daemon for HTTP providers, in the MCP
-    # subprocess for claude_code/codex). Neither path can broadcast, so we
-    # scan for reports created after this fence at run-end and open them.
-    _report_fence = time.time()
+    # Run-start artifact fence: registry tools may execute in-daemon or in an
+    # MCP subprocess. Neither storage handler broadcasts, so scan new reports
+    # and slideshows at run-end and open their transient tabs consistently.
+    _artifact_fence = time.time()
 
     # No functional limit — loop detection (below) is what stops a run early.
     # `turns_cap` is only the last-resort safety backstop; callers may raise it
@@ -10750,10 +10370,20 @@ async def _dispatch_chat(
             log.exception("micro-edit feedback broadcast failed")
         # Open any rich report this run produced (newest last → focused).
         new_reports = await asyncio.to_thread(
-            reports.created_since, workspace, _report_fence)
+            reports.created_since, workspace, _artifact_fence)
         for meta in new_reports:
             await _open_report_tab(app, workspace, meta["id"],
                                    meta.get("title") or "Report")
+        new_slideshows = await asyncio.to_thread(html_decks.list_decks, workspace)
+        for meta in new_slideshows:
+            if float(meta.get("updated_at") or 0) <= _artifact_fence:
+                continue
+            await _open_html_deck_tab(
+                app,
+                workspace,
+                str(meta["slug"]),
+                str(meta.get("title") or meta["slug"]),
+            )
         # Vet any page proposals this run staged. propose_* tools run
         # in-daemon for HTTP providers but in the MCP subprocess for
         # claude_code / grok — neither surfaces to a per-tool hook, so
@@ -10762,7 +10392,7 @@ async def _dispatch_chat(
             staged = await asyncio.to_thread(proposals.list_proposals, workspace)
             for p in staged:
                 if (p.get("status") == "proposed" and p.get("review") is None
-                        and (p.get("created_at") or 0) > _report_fence):
+                        and (p.get("created_at") or 0) > _artifact_fence):
                     asyncio.create_task(_vet_proposal(
                         app, workspace, str(p["id"]), thread_id, run_id))
         except Exception:  # noqa: BLE001
@@ -11006,30 +10636,17 @@ async def _vet_proposal(app: web.Application, workspace: Path, pid: str,
             await asyncio.to_thread(proposals.update, workspace, pid, review=verdict)
             entry = {**entry, "review": verdict}
         title = entry.get("title") or entry.get("path")
-        one = (verdict or {}).get("one_line") or ""
-        # Ensure the Reviews tab exists, but do not steal focus — the
-        # user may be in the graph, notes, or another agent thread.
+        # Ensure the Reviews tab exists, but do not steal focus and do
+        # not put a rail card or notice on the chat. Reviews hydrates
+        # when the user switches there.
         await asyncio.to_thread(tabstore.add_report_tab, workspace)
-        # Only the focused workspace's rail should see this. A
-        # background Auto in another vault still files the draft;
-        # Reviews hydrates when the user switches there.
         if _is_focused_workspace(app, workspace):
             await _broadcast(app, _hello_payload(app))
             await _broadcast(app, protocol.custom({
-                "type": "page_proposal_review", "id": pid,
-                "op": entry.get("op"), "kind": entry.get("kind"),
+                "type": "page_proposal_queued", "id": pid,
                 "title": title, "path": entry.get("path"),
-                "body": entry.get("body"), "review": verdict,
                 "workspace": str(workspace),
             }))
-            await _broadcast(app, protocol.notice(
-                f"↯ Draft “{title}” is in Reviews"
-                + (f" — {one}" if one else "") + ".",
-                kind="chat",
-                workspace=str(workspace),
-                run_id=run_id,
-                thread_id=thread_id,
-            ))
         rel = str(entry.get("path") or "")
         if entry.get("written") and rel:
             _schedule_after_wiki_write(app, workspace, rel)
@@ -11167,15 +10784,29 @@ async def handle_intro_close(request: web.Request) -> web.Response:
 
 
 async def handle_reviews_close(request: web.Request) -> web.Response:
-    """Close the Reviews tab (its own ✕). Queue stays on disk; a later
-    proposal or create_report re-adds the tab. Focus Graph so the pane
-    doesn't blank."""
+    """Close the Reviews tab. Remaining proposed pages stay on disk
+    (close/ignore = keep) and are marked accepted. Focus Graph so the
+    pane doesn't blank."""
     workspace: Path = request.app["workspace"]
+    kept = await asyncio.to_thread(proposals.accept_all_proposed, workspace)
+    for e in kept:
+        rel = str(e.get("path") or "")
+        if rel.startswith("wiki/") or rel == proposals.CHARTER_REL:
+            try:
+                await _after_wiki_write(request.app, workspace, rel)
+            except Exception:  # noqa: BLE001
+                log.exception("reviews-close wiki write follow-up failed")
+        await _broadcast(request.app, protocol.custom({
+            "type": "page_proposal_resolved", "id": e.get("id"),
+            "decision": "accept",
+        }))
     removed = await asyncio.to_thread(tabstore.remove_report_tab, workspace)
     if removed:
         await _broadcast(request.app, _hello_payload(request.app))
         await _broadcast(request.app, protocol.nav("graph", {}, "Graph"))
-    return web.json_response({"ok": True, "removed": removed})
+    return web.json_response({
+        "ok": True, "removed": removed, "accepted": len(kept),
+    })
 
 
 async def _open_intro_tab(
@@ -11253,6 +10884,68 @@ async def handle_slideshow_close(request: web.Request) -> web.Response:
         await _broadcast(request.app, _hello_payload(request.app))
         await _broadcast(request.app, protocol.nav("graph", {}, "Graph"))
     return web.json_response({"ok": True, "removed": removed})
+
+
+async def handle_slideshow_pdf(request: web.Request) -> web.Response:
+    """Render every HTML slide to one 16:9 PDF page under vault/exports."""
+    workspace: Path = request.app["workspace"]
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    slug = str((body or {}).get("slug") or "").strip()
+    if not html_decks.is_valid_slug(slug):
+        return web.json_response({"error": "invalid slideshow slug"}, status=400)
+    if await asyncio.to_thread(html_decks.entry_html, workspace, slug) is None:
+        return web.json_response({"error": "slideshow not found"}, status=404)
+    node = shutil.which("node")
+    renderer = (
+        Path(__file__).resolve().parents[2]
+        / "frontend" / "scripts" / "render-slideshow-pdf.mjs"
+    )
+    if not node or not renderer.is_file():
+        return web.json_response(
+            {"error": "PDF renderer is not installed"}, status=503,
+        )
+    exports = workspace / "vault" / "exports"
+    await asyncio.to_thread(exports.mkdir, parents=True, exist_ok=True)
+    destination = exports / f"{slug}.pdf"
+    temporary = exports / f".{slug}.rendering.pdf"
+    port = int(request.app.get("daemon_port") or 8765)
+    url = f"http://127.0.0.1:{port}/api/slideshows/{slug}/index.html"
+    proc: asyncio.subprocess.Process | None = None
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            node,
+            str(renderer),
+            url,
+            str(temporary),
+            cwd=str(renderer.parent.parent),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        output, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+        if proc.returncode != 0 or not temporary.is_file():
+            detail = output.decode(errors="replace")[-1600:]
+            return web.json_response({
+                "error": "PDF rendering failed",
+                "detail": detail or "Install the Playwright Chromium browser.",
+            }, status=500)
+        await asyncio.to_thread(os.replace, temporary, destination)
+    except asyncio.TimeoutError:
+        if proc is not None:
+            proc.kill()
+            await proc.communicate()
+        return web.json_response({"error": "PDF rendering timed out"}, status=504)
+    finally:
+        if temporary.is_file():
+            await asyncio.to_thread(temporary.unlink)
+    await _broadcast(request.app, protocol.files_changed())
+    return web.json_response({
+        "ok": True,
+        "path": destination.relative_to(workspace).as_posix(),
+        "bytes": destination.stat().st_size,
+    })
 
 
 # ── Library (reports · slideshows · worksheets) ─────────────────────
@@ -11775,16 +11468,24 @@ async def handle_proposal_decide(request: web.Request) -> web.Response:
         await asyncio.to_thread(
             proposals.update, workspace, pid, body=new_body.strip())
     if comments or decision in ("comment", "save"):
+        if decision in ("comment", "save"):
+            e = await asyncio.to_thread(
+                proposals.comment_and_keep, workspace, pid, comments)
+            if e is None:
+                return web.json_response({"error": "unknown proposal"}, status=404)
+            rel = str(e.get("path") or "")
+            if rel.startswith("wiki/") or rel == proposals.CHARTER_REL:
+                asyncio.create_task(
+                    _after_wiki_write(request.app, workspace, rel))
+            await _broadcast(request.app, protocol.custom({
+                "type": "page_proposal_resolved", "id": pid,
+                "decision": "accept",
+            }))
+            return web.json_response({"ok": True, "status": e.get("status")})
         e = await asyncio.to_thread(
             proposals.apply_comments, workspace, pid, comments)
         if e is None:
             return web.json_response({"error": "unknown proposal"}, status=404)
-        if decision in ("comment", "save"):
-            rel = str(e.get("path") or "")
-            if e.get("written") and rel.startswith("wiki/"):
-                asyncio.create_task(
-                    _after_wiki_write(request.app, workspace, rel))
-            return web.json_response({"ok": True, "status": e.get("status")})
     if decision == "accept":
         e = await asyncio.to_thread(proposals.accept, workspace, pid)
     elif decision in ("dismiss", "reject"):
@@ -11997,25 +11698,18 @@ def _artifact_for_tool(
     if name == "sheet_set_values":
         origin = str(out.get("origin") or tinput.get("origin") or "sheet")
         return protocol.artifact("univer", f"sheet · {origin}", None)
-    if name in ("make_slides_from_doc", "make_slides_from_docs", "compose_analysis"):
-        a = out.get("analysis") if isinstance(out.get("analysis"), dict) else {}
-        path = a.get("path")
-        title = str(
-            a.get("title") or tinput.get("name") or tinput.get("title") or "deck",
-        )
-        sel = (
-            {"kind": "page", "id": str(path), "path": str(path)}
-            if isinstance(path, str) and path else None
-        )
-        return protocol.artifact("sketch", f"deck · {title}", sel)
-    if name == "author_slide":
+    if name == "create_slideshow":
+        slug = str(out.get("slug") or tinput.get("slug") or "")
+        title = str(out.get("title") or tinput.get("title") or slug or "slideshow")
+        return protocol.artifact("html-deck", f"slideshow · {title}", None)
+    if name == "author_sketch":
         sid = out.get("sketch_id") or tinput.get("sketch_id")
-        sname = str(out.get("name") or tinput.get("name") or "slide")
+        sname = str(out.get("name") or tinput.get("name") or "sketch")
         sel = (
             {"kind": "sketch", "id": str(sid), "name": sname}
             if isinstance(sid, str) and sid else None
         )
-        return protocol.artifact("sketch", f"slide · {sname}", sel)
+        return protocol.artifact("sketch", f"sketch · {sname}", sel)
     if name == "read_wiki_page":
         rel = str(out.get("page") or tinput.get("page") or "").replace("\\", "/")
         if "wiki/" in rel:
@@ -14125,109 +13819,6 @@ def _log_user_turn(app: web.Application, workspace: Path, text: str) -> None:
     _submit_conv_write(app, _write)
 
 
-async def _reconcile_populate_deck(
-    app: web.Application,
-    analysis_path: str,
-    sketches_before: dict[str, int],
-) -> None:
-    """Sweep up an autopopulate run's output and align the analysis
-    frontmatter with what the agent actually wrote.
-
-    The populate prompt asks the agent to update existing placeholders
-    via `author_slide(sketch_id=...)`. Models routinely sidestep that —
-    they author N fresh sketches without sketch_id, leaving the
-    analysis's `slides:` list pointing only at the original placeholder
-    (broken image references in the rendered deck doc; orphan sketches
-    in the workspace that never reach the deck).
-
-    `sketches_before` is a `{id: updated_at}` snapshot from before the
-    run started. After the run we:
-      1. Identify every sketch touched during the run (new id, or
-         `updated_at` advanced).
-      2. Append touched sketches that aren't already in `slides:` —
-         in creation order so the deck reads in the order the agent
-         authored them.
-      3. Drop entries from `slides:` whose sketch is still empty
-         (`elements: []`). Those are the placeholders the agent
-         ignored, which would otherwise render as broken figure links
-         in the analysis doc.
-
-    Best-effort: any failure logs + swallows so the populate's normal
-    completion path isn't blocked."""
-    workspace: Path | None = app.get("workspace")
-    if workspace is None:
-        return
-    analysis = analyses.load_analysis(workspace, analysis_path)
-    if analysis is None:
-        return
-    current_slides = [str(s) for s in (analysis.get("slides") or [])]
-    all_meta = sketches.list_sketches(workspace)
-    by_created: dict[str, int] = {
-        str(s["id"]): int(s.get("created_at") or 0) for s in all_meta
-    }
-    touched: list[str] = []
-    for s in all_meta:
-        sid = str(s.get("id") or "")
-        if not sid:
-            continue
-        ut_now = int(s.get("updated_at") or 0)
-        ut_before = sketches_before.get(sid)
-        if ut_before is None or ut_before != ut_now:
-            touched.append(sid)
-    to_append = sorted(
-        [sid for sid in touched if sid not in current_slides],
-        key=lambda sid: by_created.get(sid, 0),
-    )
-    # Order-preserving dedup: a deck must never list the same sketch
-    # twice. `to_append` already excludes ids in current_slides, but
-    # guard the concatenation too so re-runs / odd states can't leave
-    # duplicates in the frontmatter.
-    proposed = list(dict.fromkeys(current_slides + to_append))
-    cleaned: list[str] = []
-    for sid in proposed:
-        try:
-            rec = sketches.get_sketch(workspace, sid)
-        except ValueError:
-            continue
-        if rec is None:
-            continue
-        data = rec.get("data")
-        elements = (
-            data.get("elements") if isinstance(data, dict) else None
-        ) or []
-        if not elements:
-            continue
-        cleaned.append(sid)
-    # If the agent authored nothing usable, LEAVE the original
-    # placeholders alone. Dropping every empty id yields `slides: []`
-    # — a dead deck whose empty canvases linger as unselectable
-    # library orphans (second-run failure mode). Only prune empties
-    # when at least one non-empty slide remains to carry the deck.
-    if not cleaned:
-        log.info(
-            "populate reconcile: no non-empty slides for %s; "
-            "keeping %d placeholder(s)",
-            analysis_path, len(current_slides),
-        )
-        return
-    if cleaned == current_slides:
-        return
-    try:
-        analyses.set_slides(workspace, analysis["path"], cleaned)
-    except Exception:  # noqa: BLE001
-        log.exception(
-            "populate reconcile: set_slides failed for %s", analysis["path"],
-        )
-        return
-    try:
-        asyncio.create_task(_rebuild_graph_async(app))
-    except Exception:  # noqa: BLE001
-        log.exception("graph rebuild scheduling failed (populate reconcile)")
-    try:
-        await _broadcast(app, protocol.files_changed())
-    except Exception:  # noqa: BLE001
-        log.exception("files_changed broadcast failed (populate reconcile)")
-
 
 def _schedule_after_wiki_write(
     app: web.Application, workspace: Path, rel: str | None = None,
@@ -14540,7 +14131,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             "slideshow-from-md", "slideshow_from_md",
                         ):
                             # /slideshows [slug] — list or open HTML slideshow
-                            # from slideshows/<slug>/ (NOT Sketch kind:deck).
+                            # from slideshows/<slug>/.
                             # /slideshow from-md <path.md> [slug] — build from MD
                             ws_path = request.app["workspace"]
                             arg = (sargs or "").strip().split()
@@ -14606,8 +14197,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                         "No HTML slideshows yet. They live in "
                                         "`slideshows/<slug>/` (outside the wiki). "
                                         "Author MD then `/slideshow from-md notes/deck.md`, "
-                                        "or link with `[[slideshow:slug|title]]`. "
-                                        "(Sketch decks stay kind: deck.)",
+                                        "or link with `[[slideshow:slug|title]]`.",
                                         kind="slash",
                                     ))
                                 else:
@@ -14877,6 +14467,14 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                     _cap,
                                 )
                                 extra_system = _curator_profile_system(prof)
+                                fb = await asyncio.to_thread(
+                                    _review_feedback_system,
+                                    request.app["workspace"],
+                                )
+                                if fb:
+                                    extra_system = (
+                                        extra_system + "\n\n" + fb
+                                    ).strip()
                             if cp_pid:
                                 try:
                                     cp_label = llmgateway.get(cp_pid).LABEL
@@ -15382,8 +14980,6 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/analyses", handle_analyses_list)
     app.router.add_get("/api/analysis", handle_analysis_get)
     app.router.add_get("/api/analysis/by-slide", handle_analysis_by_slide)
-    app.router.add_post("/api/analysis/from-doc", handle_analysis_from_doc)
-    app.router.add_post("/api/analysis/populate", handle_analysis_populate)
     app.router.add_post("/api/analysis/append-slide", handle_analysis_append)
     app.router.add_post("/api/analysis/note", handle_analysis_set_note)
     app.router.add_post("/api/analysis", handle_analysis_set_slides)
@@ -15426,8 +15022,6 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/permission/allow", handle_permission_allow_list)
     app.router.add_post("/api/permission/allow", handle_permission_allow_add)
     app.router.add_delete("/api/permission/allow", handle_permission_allow_delete)
-    app.router.add_post("/api/decks/export/pptx", handle_deck_export_pptx)
-    app.router.add_post("/api/decks/export/html", handle_deck_export_html)
     app.router.add_get(
         "/api/packs/{name}/files/{path:.*}", handle_pack_file,
     )
@@ -15487,10 +15081,11 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/provider-retry/decide", handle_provider_retry_decide)
     app.router.add_post("/api/proposals/{proposal_id}/preview", handle_proposal_preview)
     app.router.add_get("/api/report/{report_id}", handle_report_get)
-    # HTML slideshows (slideshows/<slug>/) — not Sketch kind:deck exports
+    # HTML slideshows (slideshows/<slug>/)
     app.router.add_get("/api/slideshows", handle_decks_list)
     app.router.add_post("/api/slideshows/open", handle_deck_open)
     app.router.add_post("/api/slideshows/close", handle_slideshow_close)
+    app.router.add_post("/api/slideshows/pdf", handle_slideshow_pdf)
     app.router.add_post("/api/slideshows/from-md", handle_slideshow_from_md)
     app.router.add_get("/api/slideshows/{slug}", handle_deck_file)
     app.router.add_get("/api/slideshows/{slug}/{path:.*}", handle_deck_file)
@@ -15612,6 +15207,15 @@ def build_app(workspace: Path) -> web.Application:
         except Exception:  # noqa: BLE001
             log.exception("intro seed failed")
     app.on_startup.append(_seed_intro_tab)
+
+    async def _seed_reviews_tab(_app: web.Application) -> None:
+        ws: Path = _app["workspace"]
+        try:
+            if await asyncio.to_thread(proposals.has_proposed, ws):
+                await asyncio.to_thread(tabstore.add_report_tab, ws)
+        except Exception:  # noqa: BLE001
+            log.exception("reviews tab restore on boot failed")
+    app.on_startup.append(_seed_reviews_tab)
 
     # A never-curated wiki (the freshly-seeded demo, or a hand-authored
     # one) has no `.curator/graph.kuzu`, and viewer.sh only READS that —

@@ -78,23 +78,6 @@ export type RailEntry =
     }
   | {
       id: number;
-      source: "proposal";
-      prop_id: string;
-      op: string;
-      kind: string;
-      title: string;
-      path: string;
-      body: string;
-      review: {
-        verdict?: string;
-        confidence?: number;
-        issues?: string[];
-        one_line?: string;
-      } | null;
-      state: "pending" | "accepted" | "dismissed";
-    }
-  | {
-      id: number;
       /** A run failed on a transient/capacity/billing provider error;
        *  offer a one-click retry on another keyed provider (#12). */
       source: "provider_retry";
@@ -924,9 +907,6 @@ export default function Rail({
           if (e.source === "decision") {
             return <DecisionRow key={e.id} entry={e} />;
           }
-          if (e.source === "proposal") {
-            return <ProposalRow key={e.id} entry={e} />;
-          }
           if (e.source === "provider_retry") {
             return <ProviderRetryRow key={e.id} entry={e} />;
           }
@@ -1556,106 +1536,6 @@ export function DecisionRow(props: {
   );
 }
 
-
-export function ProposalRow(props: {
-  entry: Extract<RailEntry, { source: "proposal" }>;
-}) {
-  const { entry } = props;
-  const [busy, setBusy] = useState(false);
-  const settled = entry.state !== "pending";
-  const verdict = (entry.review?.verdict || "review").toLowerCase();
-  const issues = entry.review?.issues || [];
-
-  const decide = async (decision: "accept" | "dismiss") => {
-    if (busy || settled) return;
-    setBusy(true);
-    try {
-      await fetch("/api/proposals/decide", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: entry.prop_id, decision }),
-      });
-      // Settled state arrives via page_proposal_resolved.
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const view = () => {
-    // Pop the proposed page + reviewer annotations into a Report tab.
-    void fetch(`/api/proposals/${encodeURIComponent(entry.prop_id)}/preview`, {
-      method: "POST",
-    });
-  };
-
-  return (
-    <div
-      className={
-        "sy-rail-entry sy-rail-permission"
-        + (entry.state === "accepted" ? " sy-rail-permission--approved" : "")
-        + (entry.state === "dismissed" ? " sy-rail-permission--denied" : "")
-      }
-    >
-      <span className="sy-rail-prefix" data-kind="permission">✎</span>
-      <div className="sy-rail-permission-body">
-        <div className="sy-rail-permission-head">
-          <span className="sy-rail-permission-tool">
-            Proposed {entry.kind} page — <code>{entry.title}</code>
-          </span>
-          <span className={"sy-kind-chip sy-proposal-verdict sy-proposal-verdict--" + verdict}>
-            {verdict}
-          </span>
-        </div>
-        {entry.review?.one_line && (
-          <div className="sy-rail-decision-text">{entry.review.one_line}</div>
-        )}
-        {issues.length > 0 && (
-          <details className="sy-rail-decision-proposal">
-            <summary>reviewer's objections ({issues.length})</summary>
-            <ul className="sy-proposal-issues">
-              {issues.map((it, i) => <li key={i}>{it}</li>)}
-            </ul>
-          </details>
-        )}
-        {!settled && (
-          <div className="sy-rail-permission-actions">
-            <button
-              type="button"
-              className="sy-rail-permission-btn sy-rail-permission-btn--approve"
-              disabled={busy}
-              onClick={() => void decide("accept")}
-              title="File this page into the wiki"
-            >
-              Accept — file page
-            </button>
-            <button
-              type="button"
-              className="sy-rail-permission-btn sy-rail-permission-btn--deny"
-              disabled={busy}
-              onClick={() => void decide("dismiss")}
-              title="Discard this proposal — nothing is written"
-            >
-              Reject
-            </button>
-            <button
-              type="button"
-              className="sy-rail-permission-btn"
-              onClick={view}
-              title="Open the proposed page + annotations in a Report tab"
-            >
-              ↗ View
-            </button>
-          </div>
-        )}
-        {settled && (
-          <span className="sy-rail-permission-resolved">
-            {entry.state === "accepted" ? "✓ filed" : "✗ rejected"}
-          </span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 export function LocalModelsCheckRow(props: {
   entry: Extract<RailEntry, { source: "local_models_check" }>;

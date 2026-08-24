@@ -59,10 +59,12 @@ export default function ReportTab() {
     const onResolved = () => { void loadQueue(); };
     window.addEventListener("sy:open-report", onOpen);
     window.addEventListener("sy:proposal-resolved", onResolved);
+    window.addEventListener("sy:proposal-queued", onResolved);
     const iv = window.setInterval(() => void loadQueue(), 8000);
     return () => {
       window.removeEventListener("sy:open-report", onOpen);
       window.removeEventListener("sy:proposal-resolved", onResolved);
+      window.removeEventListener("sy:proposal-queued", onResolved);
       window.clearInterval(iv);
     };
   }, [loadQueue]);
@@ -103,7 +105,7 @@ export default function ReportTab() {
       const b = await r.json().catch(() => ({} as { error?: string }));
       if (!r.ok) { setErr(b.error || `HTTP ${r.status}`); return; }
       window.dispatchEvent(new CustomEvent("sy:proposal-resolved"));
-      if (decision !== "comment") await loadQueue();
+      await loadQueue();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -218,7 +220,7 @@ export default function ReportTab() {
             </button>
           )}
           <button type="button" className="sy-report-pop" onClick={() => void closeTab()}
-            title="Close the Reviews tab — reopen when a new draft lands">
+            title="Close Reviews — remaining drafts stay on disk (accepted)">
             ✕ close
           </button>
         </div>
@@ -243,14 +245,14 @@ export default function ReportTab() {
           <div className="sy-review-actions">
             <textarea
               className="sy-review-comment"
-              placeholder="Comments — written onto the page now; reject still reverts"
+              placeholder="Comments keep the page and feed the next curation wave; reject still reverts"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={3}
             />
             <div className="sy-review-btns">
               <button type="button" className="sy-confirm-btn" disabled={busy}
-                onClick={() => void decide("comment")}>Save comments</button>
+                onClick={() => void decide("comment")}>Comment & keep</button>
               <button type="button" className="sy-confirm-btn sy-confirm-btn--primary" disabled={busy}
                 onClick={() => void decide("accept")}>Accept</button>
               <button type="button" className="sy-confirm-btn" disabled={busy}

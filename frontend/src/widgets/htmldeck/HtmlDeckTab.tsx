@@ -7,7 +7,7 @@ import {
 
 /**
  * Workspace HTML slideshows live in `slideshows/<slug>/` (outside the
- * wiki; NOT Sketch kind:deck). Sandboxed iframe at
+ * wiki and independent of the Sketch collection). Sandboxed iframe at
  * `/api/slideshows/<slug>/index.html` so relative media resolve.
  *
  * Open via: File browser · `[[slideshow:slug|title]]` · `/slideshow <slug>`.
@@ -21,6 +21,7 @@ import {
 export default function HtmlDeckTab() {
   const [show, setShow] = useState<HtmlDeckShow | null>(() => getLastHtmlDeckOpen());
   const [closing, setClosing] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     // Re-read in case notify landed between first render and effect.
@@ -69,7 +70,7 @@ export default function HtmlDeckTab() {
             <div className="sy-report-glyph">▦</div>
             <p>
               HTML <strong>slideshows</strong> land here (separate from Sketch
-              decks). They live in <code>slideshows/&lt;slug&gt;/</code> and link
+              files). They live in <code>slideshows/&lt;slug&gt;/</code> and link
               from wiki pages with{" "}
               <code>[[slideshow:slug|title]]</code>. List with{" "}
               <code>/slideshows</code>; open with{" "}
@@ -82,6 +83,30 @@ export default function HtmlDeckTab() {
   }
 
   const src = `/api/slideshows/${encodeURIComponent(show.slug)}/index.html`;
+
+  const savePdf = async () => {
+    setExporting(true);
+    try {
+      const response = await fetch("/api/slideshows/pdf", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: show.slug }),
+      });
+      const body = await response.json().catch(() => ({})) as {
+        path?: string; error?: string; detail?: string;
+      };
+      if (!response.ok) {
+        throw new Error(body.detail || body.error || `HTTP ${response.status}`);
+      }
+      window.dispatchEvent(new CustomEvent("sy:rail-system-tip", {
+        detail: { text: `Saved slideshow PDF to \`${body.path}\`.`, focus: false },
+      }));
+    } catch (error) {
+      window.alert(`PDF export failed: ${(error as Error).message}`);
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <div className="sy-report-host">
@@ -99,6 +124,16 @@ export default function HtmlDeckTab() {
         >
           ⤢ fullscreen
         </a>
+        <button
+          className="sy-report-pop"
+          type="button"
+          style={{ marginLeft: 0, cursor: "pointer" }}
+          onClick={() => void savePdf()}
+          disabled={exporting}
+          title="Save one 16:9 PDF page per slide under vault/exports"
+        >
+          {exporting ? "rendering…" : "↓ save PDF"}
+        </button>
         <button
           className="sy-report-pop"
           type="button"

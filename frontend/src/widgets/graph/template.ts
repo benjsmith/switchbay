@@ -65,7 +65,7 @@ export const template = /* html */ `
 
 <div id="modal-backdrop" class="hidden" aria-hidden="true"></div>
 <div id="modal" class="hidden" role="dialog" aria-modal="true" aria-hidden="true" data-tour="node-modal">
-  <button id="modal-slides" class="icon-btn modal-slides" title="Scaffold a Sketch deck from this doc" aria-label="Make sketch deck" style="display:none">
+  <button id="modal-slides" class="icon-btn modal-slides" title="Create an HTML slideshow from this doc" aria-label="Make HTML slideshow" style="display:none">
     <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="2.5" y="3.5" width="11" height="7.5" rx="1"/>
       <line x1="5" y1="13.5" x2="11" y2="13.5"/>

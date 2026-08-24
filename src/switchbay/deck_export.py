@@ -1,18 +1,12 @@
-"""Export targets for Sketch decks (kind: deck).
+"""Legacy export helpers for leftover Sketch decks (kind: deck).
 
-Sketch decks are authored in the Sketch tab as `kind: deck` analyses
-with one Excalidraw scene per slot; PNG exports live under
-`figures/<sketch-id>.png`. This module turns one of those decks into
-a portable artefact:
+HTML slideshows are the product presentation surface (Slideshow tab,
+vault/exports PDF). This module remains so existing on-disk kind: deck
+pages can still be turned into pptx/html by hand; product routes no
+longer call it.
 
-  · to_pptx → vault/exports/<slug>.pptx (one image-fullbleed PPTX
-    slide per slot, slot label as the slide title)
-  · to_html → vault/exports/<slug>.html (single-file standalone
-    reveal.js HTML with PNGs base64-embedded so the file is
-    self-contained)
-
-PDF export is deferred to Phase 5 (LibreOffice headless OR puppeteer
-render — both add a heavy dependency we want to avoid until needed).
+  · to_pptx → vault/exports/<slug>.pptx
+  · to_html → vault/exports/<slug>.html (standalone reveal.js)
 """
 
 from __future__ import annotations

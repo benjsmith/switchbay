@@ -144,7 +144,7 @@ function buildSteps(): Step[] {
       title: "Node → tools",
       body:
         "A page opens in the graph modal. From here you can jump to the "
-        + "Editor, scaffold or open a Sketch deck, or send tables to "
+        + "Editor, create an HTML slideshow, or send tables to "
         + "Sheet/Plot. (On an empty wiki this step is a preview — "
         + "curate first, or use the sample workspace when shipped.)",
       target: "[data-tour='node-modal']",

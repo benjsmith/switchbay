@@ -11,13 +11,11 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-_STRONG_ONLY_TOOLS = {"create_report"}
+_STRONG_ONLY_TOOLS = {"create_report", "create_slideshow"}
 _LOCAL_NEVER_TOOLS = _STRONG_ONLY_TOOLS | {
     "create_report",
-    "make_slides_from_doc",
-    "make_slides_from_docs",
-    "compose_analysis",
-    "author_slide",
+    "create_slideshow",
+    "author_sketch",
     "save_plot",
     "sheet_context",
     "sheet_select",

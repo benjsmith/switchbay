@@ -11,9 +11,11 @@ import {
   getBreadcrumb, subscribe as subscribeBreadcrumb,
   type ProjectBreadcrumb,
 } from "../projects/breadcrumb";
-import { setDeckRun } from "../sketch/deckRuns";
 import CodeView, { detectLanguage, LANGUAGE_CHOICES, type CodeLanguage } from "./CodeView";
 import { notifyHtmlDeckOpen } from "../htmldeck/htmlDeckOpen";
+import {
+  classifySourceRef, revealWorkspaceFile,
+} from "../../lib/localPath";
 
 // Markdown view mode, driven by the chevron handle on the pane divider.
 // Ordered raw → split → rendered. The chevrons move the split the way
@@ -54,10 +56,6 @@ export default function EditorTab() {
   const hasGraphTab = useMemo(() => tabs.some((t) => t.kind === "graph"), [tabs]);
   const hasProjectsTab = useMemo(() => tabs.some((t) => t.kind === "projects"), [tabs]);
   const hasSheetTab = useMemo(() => tabs.some((t) => t.kind === "univer"), [tabs]);
-  const hasSketchTab = useMemo(
-    () => tabs.some((t) => t.kind === "sketch"),
-    [tabs],
-  );
 
   // Track the project the current page was opened from. Set by the
   // Projects tab when the user clicks a row; cleared when the user
@@ -71,10 +69,8 @@ export default function EditorTab() {
   const projectBackLink = breadcrumb && path && breadcrumb.path === path
     ? breadcrumb : null;
 
-  // In-flight lock for the → Sketch deck button. Prevents a second
-  // click (when the daemon's frontmatter walk takes a moment on a big
-  // workspace) from scaffolding a duplicate deck.
-  const [creatingSketchDeck, setCreatingSketchDeck] = useState(false);
+  // In-flight lock for HTML slideshow creation.
+  const [creatingSlideshow, setCreatingSlideshow] = useState(false);
   // Code-mode language. Auto-detected from path + content on each
   // new load; the toolbar selector lets the user override.
   const [langOverride, setLangOverride] = useState<CodeLanguage | null>(null);
@@ -401,61 +397,42 @@ export default function EditorTab() {
             ↗ Graph
           </button>
         )}
-        {hasSketchTab && path && (
+        {path && (
           <button
             type="button"
             className="sy-editor-btn"
-            disabled={creatingSketchDeck}
-            aria-busy={creatingSketchDeck}
+            disabled={creatingSlideshow}
+            aria-busy={creatingSlideshow}
             onClick={async () => {
-              // Scaffold a Sketch (Excalidraw) deck from this doc's
-              // H1/H2 headings and route into the Sketch tab; the
-              // autopopulate agent fills the scenes from prose.
-              if (creatingSketchDeck) return;
-              setCreatingSketchDeck(true);
+              if (creatingSlideshow) return;
+              setCreatingSlideshow(true);
               try {
-                const r = await fetch("/api/analysis/from-doc", {
+                const r = await fetch("/api/slideshows/from-md", {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ path }),
+                  body: JSON.stringify({ path, open: true, generate_media: false }),
                 });
                 if (!r.ok) {
-                  window.alert(`Sketch deck scaffold failed: HTTP ${r.status}`);
+                  const err = await r.json().catch(() => ({})) as { error?: string };
+                  window.alert(`Slideshow creation failed: ${err.error || `HTTP ${r.status}`}`);
                   return;
                 }
-                const j = (await r.json()) as {
-                  analysis: { slug: string; path: string; title: string };
-                };
-                setSelection({
-                  kind: "page",
-                  id: j.analysis.path,
-                  path: j.analysis.path,
-                });
-                switchToKind("sketch");
-                try {
-                  const pop = await fetch("/api/analysis/populate", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ analysis_path: j.analysis.path }),
-                  });
-                  if (pop.ok) {
-                    const pj = await pop.json() as { run_id?: string };
-                    if (pj.run_id) setDeckRun(j.analysis.path, pj.run_id);
-                  }
-                } catch { /* swallowed — deck created either way */ }
+                const j = (await r.json()) as { slug: string; title?: string };
+                notifyHtmlDeckOpen(j.slug, j.title || j.slug);
+                switchToKind("html-deck");
               } catch (e) {
-                window.alert(`Sketch deck scaffold failed: ${(e as Error).message}`);
+                window.alert(`Slideshow creation failed: ${(e as Error).message}`);
               } finally {
-                setCreatingSketchDeck(false);
+                setCreatingSlideshow(false);
               }
             }}
             title={
-              creatingSketchDeck
-                ? "Scaffolding the sketch deck — please wait"
-                : "Scaffold a Sketch (Excalidraw) deck from this doc's headings"
+              creatingSlideshow
+                ? "Creating the HTML slideshow — please wait"
+                : "Create an HTML slideshow from this document"
             }
           >
-            {creatingSketchDeck ? "creating…" : "→ Sketch deck"}
+            {creatingSlideshow ? "creating…" : "→ Slideshow"}
           </button>
         )}
         <button
@@ -477,6 +454,13 @@ export default function EditorTab() {
           {isSaving ? "Saving…" : "Save"}
         </button>
       </header>
+      {isMarkdownPage && String(properties.kind || "").toLowerCase() === "deck" && (
+        <div className="sy-vega-banner">
+          This is a leftover sketch-deck page. Its drawings remain in the
+          Sketch library; new presentations are HTML slideshows
+          ({creatingSlideshow ? "creating…" : "use → Slideshow above"}).
+        </div>
+      )}
       {!isMarkdownPage && (
         <div className="sy-editor-codebar">
           <span className="sy-editor-codebar-label">language</span>
@@ -570,9 +554,18 @@ export default function EditorTab() {
               <div
                 ref={previewRef}
                 className="sy-editor-preview"
-                onClick={(ev) =>
-                  syncSourceToPreview(ev, sourceRef.current, previewRef.current)
-                }
+                onClick={(ev) => {
+                  const a = (ev.target as HTMLElement).closest?.(
+                    "a[data-reveal-path]",
+                  ) as HTMLElement | null;
+                  if (a) {
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    revealWorkspaceFile(a.getAttribute("data-reveal-path") || "");
+                    return;
+                  }
+                  syncSourceToPreview(ev, sourceRef.current, previewRef.current);
+                }}
               >
                 <h1 className="sy-mdview-title">{title}</h1>
                 {typeof properties.extracted_from === "string" && properties.extracted_from && (
@@ -590,8 +583,10 @@ export default function EditorTab() {
                               {isCollapsibleList(k, v)
                                 ? <CollapsibleSources items={v.map(String)} />
                                 : Array.isArray(v)
-                                  ? v.map((item, i) => <div key={i}>{item}</div>)
-                                  : v}
+                                  ? v.map((item, i) => (
+                                    <div key={i}><SourceCite value={String(item)} /></div>
+                                  ))
+                                  : <SourceCite value={String(v)} />}
                             </td>
                           </tr>
                         ))}
@@ -625,9 +620,35 @@ function CollapsibleSources({ items }: { items: string[] }) {
       }}
     >
       <summary>{items.length} sources</summary>
-      {items.map((item, i) => <div key={i}>{item}</div>)}
+      {items.map((item, i) => (
+        <div key={i}><SourceCite value={item} /></div>
+      ))}
     </details>
   );
+}
+
+function SourceCite({ value }: { value: string }) {
+  const kind = classifySourceRef(value);
+  if (kind === "url") {
+    return (
+      <a href={value} target="_blank" rel="noreferrer" className="sy-source-cite">
+        {value}
+      </a>
+    );
+  }
+  if (kind === "local") {
+    return (
+      <button
+        type="button"
+        className="sy-source-cite"
+        onClick={() => revealWorkspaceFile(value)}
+        title="Show this file in the Files browser"
+      >
+        {value}
+      </button>
+    );
+  }
+  return <>{value}</>;
 }
 
 /** Provenance chip (D5): shown when the page's frontmatter carries
@@ -700,6 +721,16 @@ function ProvenanceChip({ source, pageHtml }: { source: string; pageHtml?: strin
       <span className="sy-prov-chip-label">
         from <code>{shortName}</code>
       </span>
+      {isInternal && (
+        <button
+          type="button"
+          className="sy-prov-chip-btn"
+          onClick={() => revealWorkspaceFile(source)}
+          title="Show this file in the Files browser"
+        >
+          show in Files
+        </button>
+      )}
       <button
         type="button"
         className="sy-prov-chip-btn"

@@ -1,7 +1,7 @@
 """High-quality HTML slideshow builder (provider-agnostic).
 
-Sketch decks remain ``kind: deck`` in the Sketch tab. These are a
-**different** product surface: self-contained HTML slideshows under
+Slideshows are the product's only presentation surface. They are
+self-contained HTML packages under
 ``slideshows/<slug>/``, opened in the Slideshow tab, wikilinked as
 ``[[slideshow:slug|title]]``.
 
@@ -379,6 +379,19 @@ h1{{
   text-transform:uppercase;color:var(--faint)}}
 audio{{width:100%}}
 .notes{{display:none}}
+@page{{size:13.333in 7.5in;margin:0}}
+@media print{{
+  html,body{{width:13.333in;height:auto;overflow:visible;background:var(--bg)}}
+  .deck{{position:static}}
+  .slide,.slide.active{{
+    position:relative;inset:auto;width:13.333in;height:7.5in;
+    opacity:1;visibility:visible;transform:none;z-index:auto;
+    page-break-after:always;break-after:page;overflow:hidden;
+    -webkit-print-color-adjust:exact;print-color-adjust:exact;
+  }}
+  .slide:last-child{{page-break-after:auto;break-after:auto}}
+  .topbar,.progress,.ctrls,.zone,audio{{display:none!important}}
+}}
 </style>
 </head>
 <body>
