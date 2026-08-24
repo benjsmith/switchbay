@@ -26,8 +26,8 @@ import AgentSpace, {
 
 const RUNS_POLL_MS = 2000;
 /** How long a completed run stays inspectable after leaving /active. */
-const RECENT_FINISHED_TTL_S = 15 * 60;
-const RECENT_FINISHED_MAX = 10;
+const RECENT_FINISHED_TTL_S = 60 * 60;
+const RECENT_FINISHED_MAX = 80;
 const LIVE_RUN_STATUSES = new Set([
   "running", "planning", "merging", "verifying", "expanding", "synthesizing",
   "waiting_limits",
@@ -306,6 +306,8 @@ export default function AgentDashboardTab() {
   // collapse afterwards isn't undone on the next poll tick.
   const [pendingExpand, setPendingExpand] = useState<string | null>(null);
   const [spaceSel, setSpaceSel] = useState<string>(CHIEF_ID);
+  const [spaceRootId, setSpaceRootId] = useState("");
+  const latestLiveSpaceRef = useRef("");
   const [deskOrg, setDeskOrg] = useState<{
     org: {
       orchestration_id?: string;
@@ -338,9 +340,10 @@ export default function AgentDashboardTab() {
     return () => { cancelled = true; window.clearInterval(id); };
   }, [focusedWs]);
 
-  const featured = useMemo(() => {
-    // Prefer live registry rows; keep recently-finished workers so the
-    // DAG doesn't collapse as they retire from /api/runs/active.
+  const runSpaces = useMemo(() => {
+    // Keep each root DAG independent. Active and recently-finished rows share
+    // a pool solely so children remain attached while they retire at slightly
+    // different poll ticks; groupRuns never mixes children across roots.
     const seen = new Set<string>();
     const pool: Run[] = [];
     for (const r of [...(runs ?? []), ...recentFinished]) {
@@ -348,18 +351,25 @@ export default function AgentDashboardTab() {
       seen.add(r.run_id);
       pool.push(r);
     }
-    if (pool.length === 0) return null;
+    if (pool.length === 0) return [];
     const groups = groupRuns(pool);
     const orch = groups.filter(
       (g) => isOrchestrationRun(g.parent, g.workers.length) && g.parent.provider !== "pty",
     );
-    if (orch.length === 0) return null;
-    const live = orch.filter(
-      (g) => isLiveRun(g.parent) || g.workers.some(isLiveRun),
-    );
-    const pick = live[0];
-    if (!pick) return null;
-    return { chief: pick.parent as SpaceRun, workers: pick.workers as SpaceRun[], idle: false };
+    return orch
+      .map((g) => {
+        const live = isLiveRun(g.parent) || g.workers.some(isLiveRun);
+        return {
+          id: g.parent.run_id,
+          chief: g.parent as SpaceRun,
+          workers: g.workers as SpaceRun[],
+          idle: false,
+          recent: !live,
+          live,
+        };
+      })
+      .sort((a, b) => Number(b.live) - Number(a.live)
+        || (b.chief.started_at ?? 0) - (a.chief.started_at ?? 0));
   }, [runs, recentFinished]);
 
   const standing = useMemo(() => {
@@ -383,10 +393,42 @@ export default function AgentDashboardTab() {
       workspace: deskOrg?.workspace,
       workspace_name: deskOrg?.workspace_name,
     };
-    return { chief, workers: [] as SpaceRun[], idle: true };
+    return {
+      id: chief.run_id,
+      chief,
+      workers: [] as SpaceRun[],
+      idle: true,
+      recent: false,
+      live: false,
+    };
   }, [deskOrg]);
 
-  const space = featured ?? standing;
+  const spaces = useMemo(() => {
+    const out = [...runSpaces];
+    if (standing && !out.some((s) => s.id === standing.id)) out.push(standing);
+    return out;
+  }, [runSpaces, standing]);
+
+  const latestLiveSpace = spaces.find((s) => s.live)?.id ?? "";
+  useEffect(() => {
+    if (latestLiveSpace && latestLiveSpace !== latestLiveSpaceRef.current) {
+      latestLiveSpaceRef.current = latestLiveSpace;
+      setSpaceRootId(latestLiveSpace);
+      return;
+    }
+    setSpaceRootId((cur) => (
+      cur && spaces.some((s) => s.id === cur) ? cur : (spaces[0]?.id ?? "")
+    ));
+  }, [latestLiveSpace, spaces]);
+
+  const spaceIndex = Math.max(0, spaces.findIndex((s) => s.id === spaceRootId));
+  const space = spaces[spaceIndex] ?? null;
+  const selectSpaceAt = useCallback((index: number) => {
+    if (spaces.length === 0) return;
+    const wrapped = (index + spaces.length) % spaces.length;
+    setSpaceRootId(spaces[wrapped]!.id);
+    setSpaceSel(CHIEF_ID);
+  }, [spaces]);
 
   useEffect(() => {
     setSpaceSel(CHIEF_ID);
@@ -433,16 +475,47 @@ export default function AgentDashboardTab() {
       )}
 
       {space && (
-        <AgentSpace
-          chief={space.chief}
-          workers={space.workers}
-          selectedId={spaceSel}
-          idle={space.idle}
-          onSelect={(id, runId) => {
-            setSpaceSel(id);
-            if (runId && id !== CHIEF_ID) setPendingExpand(runId);
-          }}
-        />
+        <div className="sy-agent-space-root">
+          {spaces.length > 1 && (
+            <nav className="sy-agent-space-nav" aria-label="Agent DAG roots">
+              <button
+                type="button"
+                className="sy-agents-row-btn"
+                onClick={() => selectSpaceAt(spaceIndex - 1)}
+                aria-label="Previous agent DAG"
+              >←</button>
+              <select
+                value={space.id}
+                onChange={(e) => setSpaceRootId(e.target.value)}
+                aria-label="Choose agent DAG"
+              >
+                {spaces.map((s, i) => (
+                  <option key={s.id} value={s.id}>
+                    {i + 1}/{spaces.length} · {s.live ? "live" : s.recent ? "recent" : "standing"} · {s.id}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="sy-agents-row-btn"
+                onClick={() => selectSpaceAt(spaceIndex + 1)}
+                aria-label="Next agent DAG"
+              >→</button>
+            </nav>
+          )}
+          <AgentSpace
+            key={space.id}
+            chief={space.chief}
+            workers={space.workers}
+            selectedId={spaceSel}
+            idle={space.idle}
+            recent={space.recent}
+            onSelect={(id, runId) => {
+              setSpaceSel(id);
+              if (runId && id !== CHIEF_ID) setPendingExpand(runId);
+            }}
+          />
+        </div>
       )}
 
       <Section
@@ -472,6 +545,7 @@ export default function AgentDashboardTab() {
                 autoExpandId={soloAutoExpandId(runs)}
                 focusedWs={focusedWs}
                 onInspect={(run) => {
+                  setSpaceRootId(run.parent_run_id || run.run_id);
                   if (!run.parent_run_id) setSpaceSel(CHIEF_ID);
                   else setSpaceSel(run.node_id || run.run_id);
                 }}
@@ -524,7 +598,7 @@ export default function AgentDashboardTab() {
         <Section
           title="Recently finished"
           count={recentFinished.length}
-          subtitle="kept ~15 min for inspection"
+          subtitle="kept ~60 min for inspection and Agent Space navigation"
         >
           <ul className="sy-agents-list">
             {recentFinished.map((r) => (

@@ -31,6 +31,7 @@ def test_enterprise_default_allows_copilot_and_local(enterprise_env):
     assert not admin_policy.provider_allowed("claude-code")
     assert not admin_policy.feature_enabled("in_app_update")
     assert not admin_policy.feature_enabled("ce_auto_setup")
+    assert admin_policy.feature_enabled("ce_bundled_setup")
     assert not admin_policy.feature_enabled("uv_python_install")
     assert admin_policy.feature_enabled("install_skills_npx")
     assert admin_policy.feature_enabled("interactive_terminal")

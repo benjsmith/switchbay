@@ -3575,6 +3575,27 @@ body {
   border-radius: 8px;
   padding: 10px 12px 12px;
 }
+.sy-agent-space-root {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.sy-agent-space-nav {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+.sy-agent-space-nav select {
+  min-width: 220px;
+  max-width: min(520px, 70vw);
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--bg-soft);
+  color: var(--text-muted);
+  font: 11px var(--font-mono);
+}
 .sy-agent-space-head {
   display: flex;
   align-items: baseline;

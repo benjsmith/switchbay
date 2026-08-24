@@ -47,7 +47,7 @@ ensure_node_pnpm() {
   # corepack ships with Node ≥16 and can activate pnpm without a global install.
   if command -v corepack >/dev/null 2>&1; then
     info "pnpm not found — enabling via corepack…"
-    corepack enable >/dev/null 2>&1 && corepack prepare pnpm@latest --activate >/dev/null 2>&1 || true
+    corepack enable >/dev/null 2>&1 && corepack prepare pnpm@11 --activate >/dev/null 2>&1 || true
   fi
   command -v pnpm >/dev/null 2>&1 || die "pnpm not found. Install it (\`corepack enable\` or \`npm i -g pnpm\`) and re-run."
   ok "pnpm $(pnpm --version)"
@@ -70,19 +70,19 @@ else
 fi
 export UV_PYTHON="$CE_PY"
 
-info "Python deps (uv sync)…"
-uv sync
+info "Python deps (uv sync, locked)…"
+uv sync --locked
 if [ "$SEMANTIC" = "1" ]; then
   info "Local semantic embeddings (fastembed / ONNX, ~150 MB)…"
-  uv sync --group semantic
+  uv sync --locked --group semantic
   ok "semantic embeddings enabled (fastembed)"
 else
   warn "Skipping local semantic embeddings — recall runs FTS-only."
   warn "Add them later with: make sync-semantic   (or bash scripts/install.sh --semantic)"
 fi
 
-info "Frontend deps + build…"
-pnpm --dir frontend install
+info "Frontend deps (reviewed build-script allowlist) + build…"
+pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend run build
 
 info "Curiosity-engine skill (global)…"

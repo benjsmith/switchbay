@@ -283,44 +283,104 @@ async def setup(workspace: Path) -> tuple[bool, str]:
     Pins the workspace venv to Python 3.13 so kuzu can install.
     """
     from . import admin_policy
-    if not admin_policy.feature_enabled("ce_auto_setup"):
-        return False, (
-            "CE setup.sh is disabled by admin policy. Pre-provision "
-            "workspace .venv on the builder, or enable ce_auto_setup. "
-            "See docs/enterprise.md."
-        )
     if not workspace.is_dir():
         return False, f"workspace path is not a directory: {workspace}"
-    installed, skill_msg = await asyncio.to_thread(install_skill)
-    if not installed:
-        return False, skill_msg
+    workspace = workspace.resolve(strict=True)
+
+    skill_msg = ""
     script = ce_root() / "scripts" / "setup.sh"
-    if not script.is_file():
-        return False, (
-            f"CE setup.sh not found at {script}. "
-            "Install the curiosity-engine skill: "
-            "`npx skills add -g -y benjsmith/curiosity-engine`"
-        )
+    if admin_policy.profile() == "enterprise":
+        if not admin_policy.feature_enabled("ce_bundled_setup"):
+            return False, (
+                "Bundled CE workspace setup is disabled by admin policy "
+                "(ce_bundled_setup). Pre-provision the workspace .venv."
+            )
+        trusted, trust_msg, resolved = _trusted_enterprise_setup_script(script)
+        if not trusted or resolved is None:
+            return False, trust_msg
+        script = resolved
+        skill_msg = f"trusted bundled curiosity-engine setup at {script}"
+    else:
+        if not admin_policy.feature_enabled("ce_auto_setup"):
+            return False, (
+                "CE setup.sh is disabled by admin policy (ce_auto_setup). "
+                "Pre-provision the workspace .venv. See docs/enterprise.md."
+            )
+        installed, skill_msg = await asyncio.to_thread(install_skill)
+        if not installed:
+            return False, skill_msg
+        script = ce_root() / "scripts" / "setup.sh"
+        if not script.is_file():
+            return False, (
+                f"CE setup.sh not found at {script}. "
+                "Install the curiosity-engine skill: "
+                "`npx skills add -g -y benjsmith/curiosity-engine`"
+            )
+        script = script.resolve(strict=True)
 
     pinned, pin_msg = await ensure_pinned_venv(workspace)
     if not pinned:
         return False, pin_msg
 
     env = _setup_env()
-    proc = await asyncio.create_subprocess_exec(
-        "bash",
-        str(script),
-        cwd=str(workspace),
-        env=env,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.STDOUT,
-    )
-    out, _ = await proc.communicate()
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "bash",
+            str(script),
+            "--yes",
+            cwd=str(workspace),
+            env=env,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+        )
+        out, _ = await asyncio.wait_for(proc.communicate(), timeout=900)
+    except asyncio.TimeoutError:
+        proc.kill()
+        await proc.communicate()
+        return False, "Trusted CE setup timed out after 15 minutes."
+    except OSError as e:
+        return False, f"Could not start trusted CE setup: {e}"
     text = out.decode(errors="replace")
     notes = skill_msg + "\n" + pin_msg + "\n" + text
     if proc.returncode != 0:
         return False, notes[-2000:]
     return True, notes[-2000:]
+
+
+def _trusted_enterprise_setup_script(
+    script: Path,
+) -> tuple[bool, str, Path | None]:
+    """Resolve and validate the one shell entry point enterprise may run.
+
+    The script must be the real ``vendor/curiosity-engine/scripts/setup.sh``
+    beneath the resolved, admin-owned Switch Bay install root. Symlink escapes,
+    global skills, workspace scripts, and missing install roots are rejected.
+    """
+    from . import admin_policy
+
+    install = admin_policy.install_root()
+    if install is None:
+        return False, (
+            "Enterprise CE setup requires a bundled skill under the resolved "
+            "Switch Bay install root; no install root is configured."
+        ), None
+    try:
+        install_real = install.resolve(strict=True)
+        vendor_real = (install_real / "vendor" / "curiosity-engine").resolve(strict=True)
+        vendor_real.relative_to(install_real)
+        expected = (vendor_real / "scripts" / "setup.sh").resolve(strict=True)
+        candidate = Path(script).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError):
+        return False, (
+            "Enterprise CE setup refused: the bundled setup path is missing "
+            "or resolves outside the Switch Bay install root."
+        ), None
+    if candidate != expected or not candidate.is_file():
+        return False, (
+            "Enterprise CE setup refused: only the bundled, resolved "
+            f"{expected} entry point is trusted; got {candidate}."
+        ), None
+    return True, "trusted bundled CE setup", candidate
 
 
 def read_cached(workspace: Path) -> dict[str, Any] | None:

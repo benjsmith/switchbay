@@ -20,7 +20,7 @@ jobs:
       - name: Set up Python
         run: uv python install 3.13
       - name: Sync (dev group)
-        run: uv sync --group dev
+        run: uv sync --locked --group dev
       - name: Unit tests
         run: uv run --no-sync pytest
       - name: Import smoke (daemon must import cleanly)
@@ -33,14 +33,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/setup@v2
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          version: 11
+          runtime: node@22
+          cache: true
+          install: false
       - name: Install
         run: pnpm --dir frontend install --frozen-lockfile
       - name: Typecheck + build

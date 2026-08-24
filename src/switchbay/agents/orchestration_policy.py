@@ -258,6 +258,27 @@ def extract_features(
     )
 
 
+def apply_task_context(
+    features: TaskFeatures,
+    *,
+    task_kind: str | None = None,
+    constrained: bool = False,
+) -> TaskFeatures:
+    """Apply product-known context that terse canned prompts cannot express.
+
+    A broad curator sweep spans wiki, vault, graph, verification, and a single
+    writing pass even when the dispatch prompt contains no literal questions.
+    Focused/local passes stay conservative and may remain one Run.
+    """
+    if task_kind == "curation":
+        features.graph = True
+        if not constrained:
+            features.research = True
+            features.difficulty = max(features.difficulty, 0.6)
+            features.n_subquestions = max(features.n_subquestions, 3)
+    return features
+
+
 def estimate_independence(features: TaskFeatures) -> str:
     if features.finance or features.science or features.consequence >= 0.5 or (
         features.research and features.difficulty >= 0.45

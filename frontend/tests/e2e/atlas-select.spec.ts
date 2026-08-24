@@ -48,6 +48,33 @@ async function clickAtlasNode(page: Page): Promise<void> {
   throw new Error("atlas click did not open a page in the Editor");
 }
 
+test("atlas requests individual hybrid nodes on its first frame", async ({ page }) => {
+  await page.addInitScript(() => {
+    const capture = () => {
+      const atlas = (window as unknown as { KnowledgeAtlas?: { mount?: Function } }).KnowledgeAtlas;
+      if (!atlas?.mount || (atlas.mount as { __captured?: boolean }).__captured) return false;
+      const original = atlas.mount.bind(atlas);
+      const wrapped = ((container: HTMLElement, opts: unknown) => {
+        (window as unknown as { __atlasMountOptions?: unknown }).__atlasMountOptions = opts;
+        return original(container, opts);
+      }) as typeof atlas.mount & { __captured?: boolean };
+      wrapped.__captured = true;
+      atlas.mount = wrapped;
+      return true;
+    };
+    const id = window.setInterval(() => { if (capture()) window.clearInterval(id); }, 0);
+  });
+  await page.goto("/?viewer=atlas");
+  await expect(page.locator(".atlas-minimap:not(.classic-minimap)")).toBeVisible({ timeout: 30_000 });
+  const config = await page.evaluate(() => (
+    (window as unknown as { __atlasMountOptions?: { config?: Record<string, unknown> } })
+      .__atlasMountOptions?.config
+  ));
+  expect(config?.layout).toBe("hybrid");
+  expect(Number(config?.coreCapacity)).toBeGreaterThan(0);
+  expect((config?.budget as { maxAggregates?: number })?.maxAggregates).toBe(0);
+});
+
 test("atlas node click in zen opens the Editor", async ({ page }) => {
   test.setTimeout(60_000);
   await page.goto("/");

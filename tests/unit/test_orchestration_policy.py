@@ -24,6 +24,27 @@ def test_simple_prompt_stays_n1():
     assert d.arm_id in ("single", "single_strong")
 
 
+def test_maximum_broad_curation_uses_multistage_policy():
+    feat = policy.extract_features(
+        "Run the curator over this workspace.", preference=1.0,
+        provider_diversity=1,
+    )
+    policy.apply_task_context(feat, task_kind="curation", constrained=False)
+    decision = policy.decide(feat, state=None)
+    assert decision.n_investigators >= 2
+    assert decision.include_verify is True
+    assert decision.strategy == "investigate_verify_synthesize"
+
+
+def test_focused_curation_can_remain_single():
+    feat = policy.extract_features(
+        "Curate notes.", preference=0.0, provider_diversity=1,
+    )
+    policy.apply_task_context(feat, task_kind="curation", constrained=True)
+    decision = policy.decide(feat, state=None)
+    assert decision.strategy == "single"
+
+
 def test_economy_stays_single_even_for_researchy_short():
     feat = policy.extract_features(
         "research the history of X", preference=0.05,
@@ -570,6 +591,22 @@ def test_plan_from_decision_single_is_one_node():
     plan = plan_from_decision("hi", d, [])
     assert len(plan.nodes) == 1
     assert plan.strategy == "single"
+
+
+def test_curation_plan_has_readers_and_one_ce_writer():
+    feat = policy.extract_features(RESEARCH, preference=1.0)
+    decision = policy.choose_initial_policy(feat)
+    tasks = policy.decompose_tasks(RESEARCH, decision.n_investigators, feat)
+    plan = plan_from_decision(
+        RESEARCH, decision, tasks, task_kind="curation",
+    )
+    investigators = [n for n in plan.nodes if n.kind == "investigate"]
+    curator = next(n for n in plan.nodes if n.role == "curator")
+    assert len(investigators) >= 2
+    assert all("ce_run" not in n.tools for n in investigators)
+    assert "ce_run" in curator.tools
+    assert "ce_graph_rebuild" in curator.tools
+    assert plan.decision["task_kind"] == "curation"
 
 
 def test_a_simple_task_n1_at_every_slider():

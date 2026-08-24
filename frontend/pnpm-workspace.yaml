@@ -1,0 +1,6 @@
+# pnpm 11 is deny-by-default for dependency install scripts. Keep every
+# decision explicit so a new transitive package cannot silently execute code.
+allowBuilds:
+  '@tailwindcss/oxide': true
+  esbuild: true
+  protobufjs: false

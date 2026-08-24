@@ -74,19 +74,24 @@ The DCO text you certify by signing off:
 
 ## Dependency install-script policy
 
-`frontend/package.json` runs pnpm in allowlist mode: only the packages in
-`pnpm.onlyBuiltDependencies` may run install scripts (`esbuild` and
-`@tailwindcss/oxide` — both fetch a platform binary and genuinely need one).
-Everything else is blocked, which is the default we want.
+`frontend/pnpm-workspace.yaml` runs pnpm 11 in deny-by-default allowlist mode.
+Only entries set to `true` in `allowBuilds` may run install scripts (`esbuild`
+and `@tailwindcss/oxide` — both fetch a platform binary and genuinely need
+one). Everything else is blocked.
 
 pnpm warns on each install about blocked scripts it hasn't been told about, so
-deliberate refusals go in `pnpm.ignoredBuiltDependencies` to keep `make install`
-output clean:
+deliberate refusals go in `allowBuilds` with value `false` to keep
+`make install` output clean:
 
 - **`protobufjs`** (transitive: `@grpc/grpc-js` → `@grpc/proto-loader`) — its
   `postinstall` only prints a version-scheme advisory to stderr. It writes no
   files and builds nothing, so skipping it is a no-op.
 
 When a new dependency trips this warning, read its install script before
-choosing a list: `onlyBuiltDependencies` if the package is genuinely unusable
-without it, `ignoredBuiltDependencies` (with a line here saying why) otherwise.
+setting the package to `true` or `false`; document the decision here. Never use
+`dangerouslyAllowAllBuilds`.
+
+Routine dependency commands consume committed locks: use `make sync` and
+`make sync-frontend` (`uv sync --locked` and `pnpm install
+--frozen-lockfile`). A maintainer intentionally changing Python dependencies
+must run `uv lock`, review `uv.lock`, and commit it with the dependency change.

@@ -19,26 +19,26 @@ install:
 	bash scripts/install.sh $(if $(SEMANTIC),--semantic,)
 
 sync:
-	uv sync
+	uv sync --locked
 
 # Opt-in local semantic embeddings (Tier-3 recall), LIGHT path: fastembed
 # (ONNX, no PyTorch), ~150 MB. Recall fail-softs to FTS-only without it.
 sync-semantic:
-	uv sync --group semantic
+	uv sync --locked --group semantic
 
 # Heavyweight semantic path: sentence-transformers + PyTorch (~450 MB).
 # Only if you need byte-exact interop with a curiosity-engine vault index.
 sync-semantic-torch:
-	uv sync --group semantic-torch
+	uv sync --locked --group semantic-torch
 
 sync-frontend:
-	pnpm --dir frontend install
+	pnpm --dir frontend install --frozen-lockfile
 
 # Hermetic Python unit suite (tests/unit). Syncs the dev group first so
 # pytest is available, then runs without re-resolving. tests/integration
 # is the live-daemon round-trip — run that one by hand.
 test test-py:
-	uv sync --group dev
+	uv sync --locked --group dev
 	uv run --no-sync pytest
 
 # Full pre-commit gate: unit tests + Python import smoke + frontend

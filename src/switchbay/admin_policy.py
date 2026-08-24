@@ -50,6 +50,7 @@ FEATURE_DEFAULTS_OPEN: dict[str, bool] = {
     "in_app_update": True,
     "install_skills_npx": True,
     "ce_auto_setup": True,
+    "ce_bundled_setup": True,
     "uv_python_install": True,
     "scan_other_app_caches": True,
     "hf_model_download": True,
@@ -69,6 +70,9 @@ FEATURE_DEFAULTS_ENTERPRISE: dict[str, bool] = {
     # VS Code parity: users may `npx`/`uvx skills add` unless IT locks it.
     "install_skills_npx": True,
     "ce_auto_setup": False,
+    # The vendored, install-root-pinned CE setup entry point is safe to run.
+    # This is distinct from permitting arbitrary/global skill setup scripts.
+    "ce_bundled_setup": True,
     "uv_python_install": False,
     "scan_other_app_caches": False,
     "hf_model_download": False,

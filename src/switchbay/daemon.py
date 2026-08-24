@@ -3614,7 +3614,8 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
     if not provider:
         pid, cp_model = _ce_action_provider(workspace)
 
-    is_local = bool(pid) and _provider_is_local(pid)
+    effective_pid = pid or _resolve_default_provider()
+    is_local = _provider_is_local(effective_pid)
     _lrung = None
     if is_local:
         _lcfg = await asyncio.to_thread(localllm.load_config)
@@ -3646,18 +3647,37 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
     run_model = cp_model or _effective_model(label)
     excerpt = f"[{action} · background · {plabel} · {run_model}] {args}".strip()
 
-    task = asyncio.create_task(_dispatch_chat(
-        request.app, None, ce_prompt,
-        provider_override=pid, model_override=cp_model,
-        input_excerpt=excerpt,
-        extra_system=extra_system or None,
-        command=action if is_local else None,
-    ))
+    is_curate = action in ("curate", "curator")
+    constrained = is_local or bool(args and len(args) <= 80 and "\n" not in args)
+    if is_curate:
+        raw_pref = body.get("preference")
+        try:
+            pref = float(raw_pref) if raw_pref is not None else None
+        except (TypeError, ValueError):
+            pref = None
+        task = asyncio.create_task(_dispatch_auto(
+            request.app, None, ce_prompt,
+            preference=pref,
+            provider_override=pid, model_override=cp_model,
+            input_excerpt=excerpt,
+            extra_system=extra_system or None,
+            command="curate",
+            task_kind="curation",
+            constrained=constrained,
+        ))
+    else:
+        task = asyncio.create_task(_dispatch_chat(
+            request.app, None, ce_prompt,
+            provider_override=pid, model_override=cp_model,
+            input_excerpt=excerpt,
+            extra_system=extra_system or None,
+            command=action if is_local else None,
+        ))
     task.add_done_callback(_make_dispatch_error_surface(request.app, None))
     return web.json_response({
         "ok": True, "action": action,
         "provider": label, "provider_label": plabel, "model": run_model,
-        "background": True,
+        "background": True, "orchestrated": is_curate and not constrained,
     })
 
 
@@ -9142,6 +9162,13 @@ async def _dispatch_auto(
     *, preference: float | None = None,
     workspace_override: Path | None = None,
     thread_id_override: str | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    input_excerpt: str | None = None,
+    extra_system: str | None = None,
+    command: str | None = None,
+    task_kind: str | None = None,
+    constrained: bool = False,
 ) -> str | None:
     """Default chat path: Auto orchestration.
 
@@ -9164,11 +9191,16 @@ async def _dispatch_auto(
         preference=pref,
         provider_diversity=_keyed_provider_count(),
     )
+    features = orchestration_policy.apply_task_context(
+        features, task_kind=task_kind, constrained=constrained,
+    )
     try:
         state = orchestration_policy.load_state(workspace)
     except Exception:  # noqa: BLE001
         state = None
     decision = orchestration_policy.decide(features, state=state)
+    if task_kind:
+        decision.reason = f"{task_kind}: {decision.reason}"
     plain_single = (
         decision.strategy == "single"
         and not decision.include_verify
@@ -9176,10 +9208,20 @@ async def _dispatch_auto(
         and decision.n_investigators <= 1
     )
     if plain_single:
+        await _chat_notice(
+            app, ws,
+            f"Auto: single run — {decision.reason}.",
+            kind="chat", workspace=str(workspace),
+        )
         t0 = time.time()
         run_id = await _dispatch_chat(
             app, ws, text, workspace_override=workspace_override,
             thread_id_override=thread_id_override,
+            provider_override=provider_override,
+            model_override=model_override,
+            input_excerpt=input_excerpt,
+            extra_system=extra_system,
+            command=command,
         )
         if run_id:
             usage = (app.get("run_usage") or {}).pop(run_id, {}) or {}
@@ -9206,7 +9248,7 @@ async def _dispatch_auto(
             }, workspace)
         return run_id
 
-    pid = _resolve_default_provider()
+    pid = provider_override or _resolve_default_provider()
     try:
         provider = llmgateway.get(pid)
     except llmgateway.ProviderError as e:
@@ -9221,14 +9263,17 @@ async def _dispatch_auto(
         return None
 
     parent_run_id = f"run-{uuid.uuid4().hex[:8]}"
-    model = _effective_model(pid) or provider.PROVIDER.get("default_model")
+    model = (
+        model_override or _effective_model(pid)
+        or provider.PROVIDER.get("default_model")
+    )
     n = decision.n_investigators
     runs: dict[str, dict[str, Any]] = app.setdefault("runs", {})
     runs[parent_run_id] = {
         "run_id": parent_run_id,
         "provider": pid,
         "model": model,
-        "input_excerpt": f"[auto {decision.strategy}] {text[:100]}",
+        "input_excerpt": input_excerpt or f"[auto {decision.strategy}] {text[:100]}",
         "started_at": time.time(),
         "last_chunk_at": time.time(),
         "tool_count": 0,
@@ -9244,6 +9289,8 @@ async def _dispatch_auto(
         "preference": pref,
         "decision_reason": decision.reason,
         "independence": decision.independence,
+        "command": command,
+        "task_kind": task_kind,
     }
     _remember_run_workspace(app, parent_run_id, workspace)
 
@@ -9340,6 +9387,7 @@ async def _dispatch_auto(
             orchestration_id=parent_run_id,
             allocations=allocations,
             method_hints=hints,
+            task_kind=task_kind,
         )
         plan.features = features.to_dict()
         if parent_run_id in runs:
@@ -9396,7 +9444,16 @@ async def _dispatch_auto(
         ))
         runs.pop(parent_run_id, None)
         try:
-            await _dispatch_chat(app, ws, text)
+            await _dispatch_chat(
+                app, ws, text,
+                workspace_override=workspace_override,
+                thread_id_override=thread_id_override,
+                provider_override=provider_override,
+                model_override=model_override,
+                input_excerpt=input_excerpt,
+                extra_system=extra_system,
+                command=command,
+            )
         except Exception:  # noqa: BLE001
             log.exception("single-run fallback also failed")
     finally:
@@ -14790,7 +14847,8 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                         cp_pid, cp_model = _ce_action_provider(
                             request.app["workspace"],
                         )
-                        _ce_local = bool(cp_pid) and _provider_is_local(cp_pid)
+                        _ce_effective_pid = cp_pid or _resolve_default_provider()
+                        _ce_local = _provider_is_local(_ce_effective_pid)
                         _lrung = None
                         if _ce_local:
                             _lcfg = await asyncio.to_thread(localllm.load_config)
@@ -14844,18 +14902,33 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                 f"[{sname.lower()} · background] "
                                 f"{sargs}"
                             ).strip()
-                            t = asyncio.create_task(
-                                _dispatch_chat(
+                            _is_curate = sname.lower() in ("curate", "curator")
+                            _constrained = _ce_local or bool(
+                                sargs.strip()
+                                and len(sargs.strip()) <= 80
+                                and "\n" not in sargs
+                            )
+                            if _is_curate:
+                                t = asyncio.create_task(_dispatch_auto(
+                                    request.app, None, ce_prompt,
+                                    preference=pref,
+                                    provider_override=cp_pid,
+                                    model_override=cp_model,
+                                    input_excerpt=excerpt,
+                                    extra_system=extra_system or None,
+                                    command="curate",
+                                    task_kind="curation",
+                                    constrained=_constrained,
+                                ))
+                            else:
+                                t = asyncio.create_task(_dispatch_chat(
                                     request.app, None, ce_prompt,
                                     provider_override=cp_pid,
                                     model_override=cp_model,
                                     input_excerpt=excerpt,
                                     extra_system=extra_system or None,
-                                    command=(
-                                        sname.lower() if _ce_local else None
-                                    ),
-                                ),
-                            )
+                                    command=sname.lower() if _ce_local else None,
+                                ))
                             t.add_done_callback(
                                 _make_dispatch_error_surface(request.app, None),
                             )

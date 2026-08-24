@@ -30,15 +30,13 @@ jobs:
       - name: Python 3.13
         run: uv python install 3.13
       - name: Sync
-        run: uv sync
-      - uses: pnpm/action-setup@v4
+        run: uv sync --locked
+      - uses: pnpm/setup@v2
         with:
-          version: 10
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: pnpm
-          cache-dependency-path: frontend/pnpm-lock.yaml
+          version: 11
+          runtime: node@22
+          cache: true
+          install: false
       - name: Frontend
         run: |
           pnpm --dir frontend install --frozen-lockfile

@@ -125,3 +125,16 @@ Do not manufacture a v0.10.1 release merely to replace the mistaken Switchyard w
 - Review actions never enter the rail and rollback/feedback semantics pass.
 - Local source clicks reveal the exact file-browser row.
 - `make check` passes and the release diff contains no demo, benchmark, generated, cache, or private planning artifacts.
+
+## Implementation checkpoint — 2026-08-24
+
+Acceptance items 1–7 have been implemented on the Switchbay branch before beginning the slideshow migration:
+
+- normal Python and frontend installs consume immutable lockfiles, with pnpm 11 build scripts governed by the checked-in narrow allowlist;
+- enterprise setup trusts only the resolved bundled Curiosity Engine setup script with exact argv, scrubbed environment, and timeout enforcement;
+- broad curation now uses the adaptive orchestrator, including single-writer curation plans and visible reasons for conservative single-agent dispatch;
+- Copilot-only plans retain distinct available model assignments and the Agent Space UI displays provider/model data;
+- live, recent, and persisted Agent Space roots are isolated and navigable with previous/next and an explicit picker;
+- Atlas receives an individual-node, zero-aggregate budget before its first engine frame.
+
+Focused backend tests and the pnpm 11 production build pass. Browser acceptance for the UI portions remains part of the final completion gate. This checkpoint deliberately precedes the riskier HTML-slideshow-only migration and does not constitute a release.

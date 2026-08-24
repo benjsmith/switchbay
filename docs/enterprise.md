@@ -39,6 +39,7 @@ Copy it to one of the paths above. Own it as root, mode `0644`.
   "features": {
     "in_app_update": false,
     "ce_auto_setup": false,
+    "ce_bundled_setup": true,
     "hf_model_download": false
   }
 }
@@ -68,6 +69,7 @@ Provider ids: `github_copilot`, `llamacpp`, `mlx`, `ollama`,
 | `in_app_update` | off | Settings → Update runs `git pull` / `npx skills` as the user |
 | `install_skills_npx` | **on** (IT may set false) | `npx` / `uvx skills add` like VS Code. Restrict with `skills.allowlist` (`*` or a list of refs / globs). |
 | `ce_auto_setup` | off | CE `scripts/setup.sh` + `uv venv` per workspace |
+| `ce_bundled_setup` | **on** (IT may set false) | Allows only `<install-root>/vendor/curiosity-engine/scripts/setup.sh`, after real-path validation, with fixed non-interactive argv and a scrubbed environment. Global, workspace, symlink-escaped, or otherwise arbitrary scripts remain blocked. |
 | `uv_python_install` | off | `uv python install 3.13` (downloads a toolchain) |
 | `scan_other_app_caches` | off | Walks `~/Library/Containers/*/…/huggingface` (TCC + EDR) |
 | `interactive_terminal` | **on** | Rail shell (POSIX PTY / Windows ConPTY). Same default as VS Code. |
@@ -89,8 +91,13 @@ launch and again when a workspace has no CE `.venv`.
 
 This branch:
 
-- Does **not** call `uv python install`, `uv venv`, `npx skills add`, or
-  CE `setup.sh` unless the matching feature is explicitly enabled.
+- Does **not** call `uv python install` or `npx skills add` unless the matching
+  feature is explicitly enabled.
+- In enterprise mode, Add Workspace may create its pinned `.venv` and run only
+  the resolved, vendored CE `scripts/setup.sh --yes`. The trusted script must
+  remain under the resolved Switch Bay install root; global skills, workspace
+  hooks, symlink escapes, and arbitrary shell commands are rejected. Set
+  `ce_bundled_setup: false` to require fully pre-provisioned workspaces.
 - The launchd/systemd unit already invokes
   `<repo>/.venv/bin/python -m switchbay serve` — **not** `uv run`.
 - Settings → Update is hidden and the endpoint returns 403.
@@ -104,10 +111,9 @@ builder, not on the employee Mac):
 3. The curiosity-engine skill already on disk
    (`…/skills/curiosity-engine/scripts/setup.sh` present) — copy from
    the builder, do not `npx skills add` on the endpoint.
-4. Optional: a **workspace template** whose `.venv` is pre-created so
-   first open never runs `setup.sh`. With `ce_auto_setup: false`, a
-   wiki without that venv still opens; the graph is nodes-only until
-   IT provisions kuzu.
+4. Optional: a **workspace template** whose `.venv` is pre-created so first
+   open never runs `setup.sh`. Otherwise Add Workspace can use only the
+   validated vendored setup entry point while `ce_bundled_setup` is enabled.
 5. `admin.json` at the MDM path.
 
 The employee machine then starts Python. No `uv`, no `pnpm`, no
@@ -138,7 +144,7 @@ On the **builder**:
 git clone --branch enterprise <url> /opt/switchbay
 cd /opt/switchbay
 uv python install 3.13
-uv sync
+uv sync --locked
 pnpm --dir frontend install --frozen-lockfile
 pnpm --dir frontend run build
 # vendor CE skill into the image, e.g. /opt/switchbay/vendor/curiosity-engine

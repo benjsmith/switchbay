@@ -56,14 +56,5 @@
     "typescript": "^5.5.4",
     "vite": "^5.4.2"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild",
-      "@tailwindcss/oxide"
-    ],
-    "ignoredBuiltDependencies": [
-      "protobufjs"
-    ]
-  },
   "license": "LicenseRef-FSL-1.1-ALv2"
 }

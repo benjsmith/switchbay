@@ -547,7 +547,7 @@ def _sync_and_build(repo: Path) -> None:
                 f"make build-frontend failed: {(build.stderr or build.stdout or '')[-400:]}"
             )
         return
-    uv = _run(["uv", "sync"], cwd=repo, timeout=180)
+    uv = _run(["uv", "sync", "--locked"], cwd=repo, timeout=180)
     if uv.returncode != 0:
         raise UpdateError(f"uv sync failed: {(uv.stderr or uv.stdout or '')[-400:]}")
     pnpm = _run(

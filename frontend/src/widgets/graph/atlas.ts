@@ -43,7 +43,17 @@ type AtlasGlobal = {
     container: HTMLElement,
     opts: {
       data: GraphData;
-      config?: { layout?: string; corpusSize?: number; budget?: { maxEdges?: number } };
+      config?: {
+        layout?: string;
+        corpusSize?: number;
+        coreCapacity?: number;
+        maxVisibleNodes?: number;
+        budget?: {
+          maxNodes?: number;
+          maxAggregates?: number;
+          maxEdges?: number;
+        };
+      };
       onOpenItem?: (id: string) => void;
       onEvent?: (event: AtlasEvent) => void;
     },
@@ -299,6 +309,7 @@ export function mountAtlas(
     ...data,
     palette: paletteFromCss(data.palette ?? {}),
   };
+  const corpusSize = pageCount(data);
   const handle = api.mount(container, {
     data: themed,
     config: {
@@ -307,8 +318,20 @@ export function mountAtlas(
       // (not type-cluster bubbles). Boundary drag is lens traversal
       // (nodes/s), not a pan of the middle graph.
       layout: "hybrid",
-      corpusSize: pageCount(data),
-      budget: { maxEdges: Math.max(900, (data.edges || []).length) },
+      corpusSize,
+      // The vendored engine otherwise opens at its generic 460-node budget,
+      // emits legacy type aggregates, and only requests the full hybrid scene
+      // after the first wheel/resize event. Pin the initial capacity to this
+      // corpus before start(), and explicitly disable aggregate placeholders.
+      // ResizeObserver keeps the same capacity, so first mount, remount, and
+      // viewport changes all render the identical individual-node scene.
+      coreCapacity: Math.max(1, corpusSize),
+      maxVisibleNodes: Math.max(1, corpusSize),
+      budget: {
+        maxNodes: Math.max(1, corpusSize),
+        maxAggregates: 0,
+        maxEdges: Math.max(900, (data.edges || []).length),
+      },
     },
     onOpenItem: openAtlasPage,
     onEvent: (event) => {

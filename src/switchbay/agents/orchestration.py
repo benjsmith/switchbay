@@ -94,6 +94,14 @@ SYNTH_TOOLS: tuple[str, ...] = (
     "create_report", "propose_wiki_page", "propose_page_edit",
 )
 
+# Curation keeps one writer: investigators independently inspect the wiki,
+# vault, and graph; the final curator alone may run CE mutations/proposals.
+CURATE_SYNTH_TOOLS: tuple[str, ...] = (
+    "propose_wiki_page", "propose_page_edit",
+    "ce_run", "ce_sweep", "ce_ingest", "ce_graph_rebuild",
+    "ce_lint", "ce_planner", "ce_score_diff", "ce_scrub_check",
+)
+
 INVESTIGATE_SYSTEM = (
     "You are an independent investigator on one slice of a larger "
     "request. Sibling investigators are not visible to you — do not "
@@ -196,6 +204,20 @@ SYNTH_SYSTEM = (
     "when a specific gap remains that another investigate / verify / "
     "synthesize wave could close. Do not emit yes to be polite, and "
     "do not emit no as a habit."
+)
+
+CURATE_SYNTH_SYSTEM = (
+    "You are the sole writing curator for a multi-stage curation run. "
+    "Independent investigators already inspected the workspace using "
+    "read-only wiki, graph, vault, and source tools. Reconcile their "
+    "structured findings, then use the supplied curiosity-engine tools to "
+    "apply a bounded curator wave. Search before writing; preserve sourced "
+    "claims and existing user work; never invent evidence or delete pages. "
+    "Low-confidence writes must use the proposal flow. Finish with a concise "
+    "summary of pages changed, proposals opened, lint/graph status, and any "
+    "unresolved gaps.\nOBJECTIVE_MET: yes only when the requested curation "
+    "wave and graph rebuild are complete; otherwise emit OBJECTIVE_MET: no "
+    "followed by the concrete remaining gap."
 )
 
 _OBJECTIVE_MET_RE = re.compile(
@@ -511,6 +533,7 @@ def narrow_tools(
     parent: set[str] | None = None,
     allow_execute: bool = False,
     allow_synth: bool = False,
+    allow_curate: bool = False,
 ) -> list[str]:
     """Child authority is an equal or narrower subset of the parent.
 
@@ -524,6 +547,10 @@ def narrow_tools(
     extra = [t for t in EXECUTE_TOOLS if t in parent_set] if allow_execute else []
     if allow_synth:
         extra = extra + [t for t in SYNTH_TOOLS if t in parent_set and t not in extra]
+    if allow_curate:
+        extra = extra + [
+            t for t in CURATE_SYNTH_TOOLS if t in parent_set and t not in extra
+        ]
     special = set(extra)
     if not requested:
         return list(allow) + extra
@@ -574,7 +601,10 @@ def validate_plan(plan: OrchestrationPlan) -> list[str]:
             if t in WRITE_TOOLS:
                 if n.kind == "execute" and t in EXECUTE_TOOLS:
                     continue
-                if n.kind == "synthesize" and t in SYNTH_TOOLS:
+                if n.kind == "synthesize" and (
+                    t in SYNTH_TOOLS
+                    or (n.role == "curator" and t in CURATE_SYNTH_TOOLS)
+                ):
                     continue
                 errors.append(f"{n.node_id}: write tool {t!r} not allowed")
             elif t not in PARENT_ALLOW and t not in READ_ONLY_TOOLS:
@@ -624,6 +654,7 @@ def repair_plan(plan: OrchestrationPlan) -> OrchestrationPlan:
             n.tools,
             allow_execute=(n.kind == "execute"),
             allow_synth=(n.kind == "synthesize"),
+            allow_curate=(n.kind == "synthesize" and n.role == "curator"),
         )
         if n.graph_access == "read" and not n.tools:
             n.tools = narrow_tools(
@@ -777,6 +808,7 @@ def plan_from_decision(
     orchestration_id: str | None = None,
     allocations: list[tuple[str, str | None]] | None = None,
     method_hints: list[str] | None = None,
+    task_kind: str | None = None,
 ) -> OrchestrationPlan:
     oid = orchestration_id or f"run-{uuid.uuid4().hex[:8]}"
     plain_single = (
@@ -915,15 +947,20 @@ def plan_from_decision(
         ))
         join = ["verify"]
 
+    is_curation = task_kind == "curation"
+    synth_tools = (
+        narrow_tools(list(CURATE_SYNTH_TOOLS), allow_curate=True)
+        if is_curation else narrow_tools(list(SYNTH_TOOLS), allow_synth=True)
+    )
     nodes.append(PlanNode(
         node_id="synth",
         kind="synthesize",
         objective=objective,
         dependencies=list(join),
-        role="synthesizer",
+        role="curator" if is_curation else "synthesizer",
         difficulty="hard" if decision.include_verify else "normal",
         ladder_hint="hard" if decision.preference >= 0.6 else "normal",
-        tools=narrow_tools(list(SYNTH_TOOLS), allow_synth=True),
+        tools=synth_tools,
         graph_access="none",
         independence="low",
         output_contract="synthesis",
@@ -936,7 +973,7 @@ def plan_from_decision(
         objective=objective,
         preference=decision.preference,
         features=decision.features,
-        decision=decision.to_dict(),
+        decision={**decision.to_dict(), "task_kind": task_kind},
         allow_expand=decision.allow_expand,
         bounds=OrchestrationBounds(
             max_concurrency=min(
@@ -1792,6 +1829,8 @@ def _system_for(node: PlanNode) -> str:
     if node.kind == "verify":
         return VERIFY_SYSTEM
     if node.kind == "synthesize":
+        if node.role == "curator":
+            return CURATE_SYNTH_SYSTEM
         return SYNTH_SYSTEM
     if node.kind == "reduce":
         return REDUCE_SYSTEM
@@ -1846,6 +1885,18 @@ def _user_prompt(
                 extra = "\n\n" + "\n\n".join(desk)
         if interrupt:
             extra = extra + "\n\n" + interrupt
+        if node.role == "curator":
+            return (
+                f"Curation objective: {node.objective}\n\n"
+                "Independent workspace findings:\n"
+                + blackboard.compact_for_prompt(
+                    role="synthesize", max_chars=10_000,
+                )
+                + extra
+                + "\n\nRun one bounded curator wave with the supplied CE "
+                "tools. Keep reviews non-blocking and rebuild/lint the graph "
+                "before reporting completion."
+            )
         return (
             f"Original request: {node.objective}\n\n"
             "Verified findings (classified rows; minority/unsupported "
@@ -1911,8 +1962,14 @@ async def _run_agent_node(
 
     allow_exec = node.kind == "execute"
     allow_synth = node.kind == "synthesize"
+    allow_curate = allow_synth and node.role == "curator"
     tool_names = (
-        narrow_tools(node.tools, allow_execute=allow_exec, allow_synth=allow_synth)
+        narrow_tools(
+            node.tools,
+            allow_execute=allow_exec,
+            allow_synth=allow_synth,
+            allow_curate=allow_curate,
+        )
         if node.tools or node.graph_access == "read" or allow_exec or allow_synth
         else []
     )

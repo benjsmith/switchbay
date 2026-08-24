@@ -116,6 +116,8 @@ type Props = {
   onSelect: (id: string, runId: string | null) => void;
   /** Standing desk roster — last effective org, no live activity. */
   idle?: boolean;
+  /** Completed root retained for paging; unlike standing, it is historical. */
+  recent?: boolean;
 };
 
 const KIND_COLOR: Record<string, string> = {
@@ -255,7 +257,9 @@ function baseNode(partial: Omit<SpaceNode, "x" | "y" | "tx" | "ty" | "tokensOut"
   };
 }
 
-export default function AgentSpace({ chief, workers, selectedId, onSelect, idle = false }: Props) {
+export default function AgentSpace({
+  chief, workers, selectedId, onSelect, idle = false, recent = false,
+}: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const nodesRef = useRef<Map<string, SpaceNode>>(new Map());
@@ -830,6 +834,8 @@ export default function AgentSpace({ chief, workers, selectedId, onSelect, idle 
         <span className="sy-agents-subtitle">
           {idle
             ? "Standing desk — last effective org, at rest. A new run can replace this roster."
+            : recent
+            ? "Recently completed DAG — use the root picker to inspect concurrent and earlier runs."
             : "Amber halo = writing tokens · blue halo = reading · dots on edges are token flow"}
         </span>
       </div>
@@ -891,7 +897,7 @@ export default function AgentSpace({ chief, workers, selectedId, onSelect, idle 
             </>
           ) : isChief ? (
             <>
-              <h4>{idle ? "Standing desk" : "Chief of staff"}</h4>
+              <h4>{idle ? "Standing desk" : recent ? "Completed chief" : "Chief of staff"}</h4>
               <p className="sy-agent-space-lead">
                 {orgLead}
               </p>

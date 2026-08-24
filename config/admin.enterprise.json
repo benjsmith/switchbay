@@ -26,6 +26,7 @@
     "interactive_terminal": true,
     "agent_run_command": true,
     "ce_auto_setup": false,
+    "ce_bundled_setup": true,
     "uv_python_install": false,
     "scan_other_app_caches": false,
     "hf_model_download": false,
