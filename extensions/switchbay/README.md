@@ -8,22 +8,25 @@ hypothesis, keep/drop list, and verdict criteria.
 
 ## Debug
 
-From the Switch Bay repo root in VS Code. F5 runs a shell compile via
-`extensions/switchbay/node_modules/.bin/tsc` (not `npm`), so Dock-launched
-VS Code no longer fails with exit 127 when `npm`/`pnpm` are missing from
-the GUI PATH.
+**F5 only works in the Switch Bay checkout**, on branch `exp/vscode-plugin`,
+with launch config **Switch Bay**. If you get a “Select debugger” list
+(Chrome / Node / Edge), you are in the wrong window or the wrong branch.
 
-After F5, open the **curiosity-engine folder** in the Extension Development
-Host (File → Open Folder), then click the Switch Bay activity-bar icon.
-Wiki should list pages grouped by type. If it still shows the empty
-welcome, Output → **Switch Bay** and the refresh button on the Wiki view.
+1. In a **normal** VS Code window (title is `switchbay`, **not**
+   `[Extension Development Host]`), `git checkout exp/vscode-plugin`.
+2. File → Open Workspace from File → `switchbay.code-workspace`
+   (or open the repo folder so `.vscode/launch.json` loads).
+3. Run and Debug (`⇧⌘D`) → dropdown **Switch Bay** → green play.
+   Do not press F5 on the Welcome tab inside the Extension Development Host.
+4. A second window titled `[Extension Development Host]` opens. **There**,
+   File → Open Folder on your CE workspace (`curiosity-test`). Then click
+   the Switch Bay activity-bar icon.
 
-From the Switch Bay repo root in VS Code:
+Compile uses `extensions/switchbay/node_modules/.bin/tsc` via a login
+shell (not `npm`), so Dock-launched VS Code should not exit 127.
 
-1. `pnpm --dir extensions/switchbay install`
-2. F5 (launch config **Switch Bay**)
-3. In the Extension Development Host, open a CE workspace if this repo is not one
-4. Confirm `lsof -i :8765` is empty
+If Wiki is still empty after that, Output → **Switch Bay**, then the
+refresh control on the Wiki view.
 
 Chat: `@switchbay` — slashes `/thrusters`, `/curate`, `/plot`, `/deck`, `/sketch`.
 

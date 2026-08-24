@@ -79,11 +79,13 @@ Hard rules:
 
 ## How to run the spike
 
-Open this repo (or a CE workspace folder) in VS Code, then **Run →
-Start Debugging** on the `Switch Bay` launch config in
-`extensions/switchbay/.vscode/launch.json` (F5). A second Extension
-Development Host window opens. There is no daemon to start. Confirm
-nothing is listening on `:8765`.
+Open **this** checkout on `exp/vscode-plugin` (File → Open Workspace
+from File → `switchbay.code-workspace`), then Run and Debug → **Switch
+Bay**. Do not F5 inside the `[Extension Development Host]` window — that
+folder has no launch config, so VS Code shows the Chrome/Node picker.
+
+A second Extension Development Host window opens. Open your CE folder
+there. Nothing listens on `:8765`.
 
 Compile:
 
