@@ -138,3 +138,13 @@ Acceptance items 1–7 have been implemented on the Switchbay branch before begi
 - Atlas receives an individual-node, zero-aggregate budget before its first engine frame.
 
 Focused backend tests and the pnpm 11 production build pass. Browser acceptance for the UI portions remains part of the final completion gate. This checkpoint deliberately precedes the riskier HTML-slideshow-only migration and does not constitute a release.
+
+## Implementation checkpoint — 2026-08-25
+
+Acceptance items 8–10 are implemented in the uncommitted working tree targeting v0.11.0:
+
+- HTML slideshows are the only presentation surface; Sketch is a drawing library; leftover `kind: deck` pages degrade in the Editor; PDF export is 16:9 via Playwright.
+- Page proposals never enter the rail; Reviews close/ignore/comment keep; reject restores; comments feed the next curate prompt.
+- Local source and vault citations reveal and highlight the Files-browser row.
+
+Do not tag or publish from this note alone.

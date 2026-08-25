@@ -28,6 +28,10 @@ frontend/.vite/
 extensions/**/out/
 extensions/**/media/graph/
 
+# VS Code plugin experiment lives only on exp/vscode-plugin. Do not ship.
+/switchbay.code-workspace
+/extensions/
+
 # ── workspace runtime (when this repo is opened as its own workspace) ──
 .workbench/
 
@@ -48,6 +52,8 @@ docs/vscode-plugin.md
 
 # ── machine-level admin policy drop-in (never commit a live copy) ──
 /admin.json
+/admin.baked.json
+/SWITCHBAY_PROFILE
 
 # ── regenerable / local-only ──
 docs/*.pdf

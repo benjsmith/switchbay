@@ -62,7 +62,7 @@ Scope (hardwired — repeat back to the user if they ask):
     by the daemon even if you try. Stay inside the workspace cwd
     (`find . …` only if you must). To locate a Python package, import:
     `python -c "import pkg, os; print(os.path.dirname(pkg.__file__))"`
-    — never `find`. Prefer Switch Bay MCP tools (author_slide,
+    — never `find`. Prefer Switch Bay MCP tools (author_sketch,
     search_wiki, …) over shell discovery.
   · The only side-effects you may produce are via the tools listed
     below. Anything that looks like a write or shell command — even
@@ -82,11 +82,12 @@ Wiki = the knowledge base (READ THIS FIRST for knowledge questions):
   · Ground your answer in what the pages actually say; if the wiki is
     thin on the topic, say so briefly rather than padding.
 
-HTML slideshows (NOT Sketch kind:deck):
+HTML slideshows (the only presentation surface):
   · Live under slideshows/<slug>/; open with /slideshow <slug> or
     [[slideshow:slug|title]] on a wiki page (## Presentations section).
-  · Always generate via slideshow_html.write_slideshow (intro-grade
-    design system) — never raw bullet HTML. See docs/skills/html-slideshow.
+  · Always generate via create_slideshow or slideshow_html.write_slideshow
+    (intro-grade design system) — never raw bullet HTML, never a Sketch
+    deck. See docs/skills/html-slideshow. Sketches are diagrams/whiteboards.
 
 Rich answers → the Report tab (create_report):
   · When your answer is document-shaped — an ANALYSIS, comparison,
@@ -198,30 +199,17 @@ Switch Bay tools you may call:
     remember a habit ("when I say X, /view Y"), call register_rule.
     The daemon will run the action on every future match without
     consulting you. Rules persist across sessions.
-  · make_slides_from_doc(path, name?) / make_slides_from_docs(paths, title?)
-    Scaffold a sketcher slide deck from one or more source markdown
-    docs. Each H1/H2 heading becomes a placeholder Excalidraw slide;
-    a CE-shaped analysis page (kind: analysis, slides: [...]) at
-    wiki/<slug>.md is the deck's spine. Sketch tab enters deck mode
-    when the user opens the analysis. Use for "make slides from X",
-    "turn these docs into a deck", "analyse A, B, C and show as
-    slides" — for the analyse case, do the analysis first (writing
-    your synthesis into a fresh wiki page), then call
-    make_slides_from_doc on that synthesis page.
-  · compose_analysis(title, slides, sources?, body?)
-    Remix path: build a NEW deck referencing existing sketches by
-    id, in whatever order tells the story. Different decks can
-    share slides — the same library powers many narratives. Use
-    when the user wants a new presentation from existing material
-    ("make a board deck using slides X, Y, Z").
-  · author_slide(layout, slots, sketch_id?, name?)
-    Fill a slide with a real Excalidraw scene. Layouts: title,
-    bullets, two_column, quote, section, paragraph, stat, cards.
-    After make_slides_from_doc has scaffolded placeholders, walk
-    through them with sketch_id=<placeholder>. If sketch_id is
-    omitted, defaults to the VISIBLE slide (sketch focus) — use
-    that for "fix this slide" / "change the title on the current
-    slide". sketch_context() first; sketch_show to jump slides.
+  · create_slideshow(title, slides, slug?, wiki_topics?)
+    The ONLY presentation authoring path. Creates a self-contained
+    HTML package under slideshows/<slug>/ and opens the Slideshow tab.
+    Use it for every request for slides, a deck, or a presentation.
+    Vary title/media/split/cards/bullets/close layouts; keep content
+    concise and source-aware. Never create a Sketch deck or an
+    analysis page with a slides array.
+  · author_sketch(layout, slots, sketch_id?, name?)
+    Create or update an ordinary Excalidraw sketch in the workspace
+    collection. This is diagram/whiteboard authoring, not presentation
+    authoring. Use sketch_context() first when editing the visible sketch.
   · save_plot(name, spec) / plot_context / plot_update / plot_show
     New plots: save_plot or plot_update. Tweaking the visible chart:
     plot_context() → edit the returned spec → plot_update(id, spec).
@@ -244,9 +232,9 @@ Switch Bay tools you may call:
     Color-by-category needs a visible color legend (do not set
     legend:null on every layer). Short axis titles; row-facet
     headers go on top (`header.labelOrient: "top"`).
-  · sketch_context() / sketch_show(sketch_id|slide_index)
-    THE Sketch/deck path for the visible slide. Context first,
-    then author_slide(sketch_id=…) for small content edits.
+  · sketch_context() / sketch_show(sketch_id)
+    The path for the visible ordinary sketch. Context first, then
+    author_sketch(sketch_id=…) for small content edits.
 
 Live-tab rule (all of Sheet / Table / Plot / Sketch):
   When the user refers to "this", "the selected cell", "the chart",
@@ -418,13 +406,10 @@ ALLOWED_TOOLS = [
     # capable models (gated out for local in tools_for_provider) — a small
     # model can't produce artifact-quality HTML.
     "create_report",
-    # Sketcher slide-deck tools (N.1). Agent uses these when the
-    # user says "make slides from foo.md", "turn these docs into a
-    # deck", or "compose a deck from these existing sketches".
-    "make_slides_from_doc",
-    "make_slides_from_docs",
-    "compose_analysis",
-    "author_slide",
+    # HTML slideshow is the only presentation path. Sketches remain an
+    # independent workspace collection for diagrams and whiteboards.
+    "create_slideshow",
+    "author_sketch",
     # Skill discovery + loading. Frontmatter first; full body only
     # when covered_by tools are not enough.
     "list_skills",
@@ -462,7 +447,7 @@ ALLOWED_TOOLS = [
 
 # Tools offered only to capable (non-local) models. The local model
 # can't produce artifact-quality HTML, so don't tempt it with the tool.
-_STRONG_ONLY_TOOLS = {"create_report"}
+_STRONG_ONLY_TOOLS = {"create_report", "create_slideshow"}
 
 _LOCAL_TOOL_BLURBS: dict[str, str] = {
     "propose_wiki_page": (
@@ -491,21 +476,14 @@ _LOCAL_TOOL_BLURBS: dict[str, str] = {
         "One-shot wiki health snapshot (counts, inboxes). Call once "
         "to orient, then search/read/propose scaffolds. Do not loop."
     ),
-    "author_slide": (
-        "Fill one slide: layout + slots + sketch_id. Layouts: title, "
+    "author_sketch": (
+        "Fill one sketch: layout + slots + sketch_id. Layouts: title, "
         "bullets, two_column, quote, section, paragraph, stat, cards. "
-        "Bullets ≤8 words. Same accent colour on every slide."
+        "Use for diagrams and whiteboards, never presentation decks."
     ),
-    "make_slides_from_doc": (
-        "Scaffold placeholder slides from one markdown doc (H1/H2 → "
-        "one sketch each). Then author_slide to fill them."
-    ),
-    "make_slides_from_docs": (
-        "Scaffold one deck from several markdown docs, in order. Then "
-        "author_slide to fill placeholders."
-    ),
-    "compose_analysis": (
-        "Bind existing sketches into a deck (analysis page + slide ids)."
+    "create_slideshow": (
+        "Create an HTML slideshow package. Title + slides array. "
+        "Layouts: title, media, split, cards, bullets, close."
     ),
     "save_plot": (
         "Save a Vega-Lite spec to the Plot tab. Inline data.values; "

@@ -11,6 +11,7 @@
  */
 import { sanitizeHtml } from "../../../lib/sanitizeHtml";
 import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "../../editor/previewLists";
+import { classifySourceRef, normalizeWorkspacePath, openWorkspaceFile } from "../../../lib/localPath";
 
 window.Modal = (function () {
   let pages = {};
@@ -18,20 +19,21 @@ window.Modal = (function () {
   let onClose = null;
   let currentPageId = null;
 
-  // Slides button is only meaningful for prose pages — figures and
-  // tables don't carry the heading structure the from-doc scaffold
-  // walks, so we hide it for those types instead of failing on click.
+  // Slideshow button is only meaningful for prose pages — figures and
+  // tables don't carry heading structure, so we hide it for those types
+  // instead of failing on click.
   const SLIDES_HIDDEN_TYPES = new Set(['figure', 'table']);
 
-  function init(data) {
+  function init(data, rootEl) {
     pages = data.pages || {};
-    modal = document.querySelector('#modal');
-    backdrop = document.querySelector('#modal-backdrop');
-    closeBtn = document.querySelector('#modal-close');
-    titleEl = document.querySelector('#modal-title');
-    propsEl = document.querySelector('#modal-properties');
-    bodyEl = document.querySelector('#modal-body');
-    slidesBtn = document.querySelector('#modal-slides');
+    const root = rootEl || document;
+    modal = root.querySelector('#modal');
+    backdrop = root.querySelector('#modal-backdrop');
+    closeBtn = root.querySelector('#modal-close');
+    titleEl = root.querySelector('#modal-title');
+    propsEl = root.querySelector('#modal-properties');
+    bodyEl = root.querySelector('#modal-body');
+    slidesBtn = root.querySelector('#modal-slides');
 
     backdrop.addEventListener('click', close);
     closeBtn.addEventListener('click', close);
@@ -54,6 +56,21 @@ window.Modal = (function () {
         window.location.hash = '#page=' + encodeURIComponent(target);
       }
     });
+
+    // Frontmatter sources → OS default app (Preview / browser / …).
+    // Bind on the modal (capture) so a remounted Graph tab still hits
+    // these links even if #modal-properties was queried too early.
+    if (modal) {
+      modal.addEventListener('click', (ev) => {
+        const a = ev.target.closest && ev.target.closest('a.sy-source-cite[data-open-path]');
+        if (!a || !modal.contains(a)) return;
+        const path = a.getAttribute('data-open-path');
+        if (!path) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+        void openWorkspaceFile(path);
+      }, true);
+    }
   }
 
   function open(pageId) {
@@ -106,32 +123,19 @@ window.Modal = (function () {
     if (window.Edit) Edit.updateForPage(page);
     if (slidesBtn) {
       const hide = SLIDES_HIDDEN_TYPES.has(String(page.type || ''));
-      // Two title-prefix shapes determine the affordance:
-      //   · `[deck] …` → existing Sketch (Excalidraw) deck. Button
-      //                  opens it in the Sketch tab.
-      //   · anything else (analyses, prose pages) → scaffold a new
-      //                  Sketch deck from this doc's headings.
-      const lowered = String(page.title || '').trim().toLowerCase();
-      const isSketchDeck = lowered.startsWith('[deck]');
       slidesBtn.style.display = hide ? 'none' : '';
-      slidesBtn.dataset.mode = isSketchDeck ? 'open-deck' : 'scaffold';
+      slidesBtn.dataset.mode = 'slideshow';
       slidesBtn.setAttribute(
         'title',
-        isSketchDeck
-          ? 'Open this Sketch deck in the Sketch tab'
-          : 'Scaffold a Sketch deck from this doc',
+        'Create an HTML slideshow from this doc',
       );
-      slidesBtn.setAttribute(
-        'aria-label',
-        isSketchDeck ? 'Open Sketch deck' : 'Make sketch deck',
-      );
+      slidesBtn.setAttribute('aria-label', 'Make HTML slideshow');
     }
     return true;
   }
 
   /* Resolve the wiki path for the currently-open page, normalising
-   * the optional `wiki/` prefix. Shared between the reveal.js and
-   * Sketch-deck button handlers. */
+   * the optional `wiki/` prefix. */
   function currentDocPath() {
     if (!currentPageId) return null;
     const page = pages[currentPageId];
@@ -143,71 +147,33 @@ window.Modal = (function () {
     return docPath || null;
   }
 
-  /* On a Sketch-deck page (kind: deck): open the existing deck in the
-   * Sketch tab. Otherwise: scaffold a new Sketch deck from this doc's
-   * headings and route the user into Sketcher, then kick the
-   * autopopulate agent against the new deck.
-   *
-   * The vanilla-JS world doesn't know about React state — we bridge
-   * via the same `sy:open-as-deck` / `sy:register-deck-run` custom
-   * events the rest of the app uses. */
+  /* Create an HTML slideshow from this doc and open the Slideshow tab.
+   * Legacy `kind: deck` wiki pages are treated the same way: their
+   * member sketches stay in the Sketch library. */
   async function onSlidesClick() {
     const docPath = currentDocPath();
     if (!docPath) {
-      console.warn('Modal: page has no path; cannot scaffold deck');
+      console.warn('Modal: page has no path; cannot build slideshow');
       return;
     }
     slidesBtn.disabled = true;
     try {
-      if (slidesBtn.dataset.mode === 'open-deck') {
-        try {
-          const existing = await fetch(
-            `/api/analysis?path=${encodeURIComponent(docPath)}`,
-          );
-          if (existing.ok) {
-            const ej = await existing.json();
-            const a = ej && ej.analysis;
-            if (a) {
-              window.dispatchEvent(new CustomEvent('sy:open-as-deck', {
-                detail: { path: a.path, title: a.title, slug: a.slug, analysis: a },
-              }));
-            }
-          }
-        } catch (_) { /* fall through */ }
-        return;
-      }
-      const r = await fetch('/api/analysis/from-doc', {
+      const r = await fetch('/api/slideshows/from-md', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: docPath }),
+        body: JSON.stringify({ path: docPath, open: true, generate_media: false }),
       });
       if (!r.ok) {
-        console.warn('Modal: from-doc failed', r.status);
+        console.warn('Modal: slideshow from-md failed', r.status);
         return;
       }
       const body = await r.json();
-      const a = body.analysis;
-      if (!a) return;
-      window.dispatchEvent(new CustomEvent('sy:open-as-deck', {
-        detail: { path: a.path, title: a.title, slug: a.slug, analysis: a },
+      if (!body || !body.slug) return;
+      window.dispatchEvent(new CustomEvent('sy:open-as-slideshow', {
+        detail: { slug: body.slug, title: body.title || body.slug },
       }));
-      try {
-        const pop = await fetch('/api/analysis/populate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ analysis_path: a.path }),
-        });
-        if (pop.ok) {
-          const pj = await pop.json();
-          if (pj && pj.run_id) {
-            window.dispatchEvent(new CustomEvent('sy:register-deck-run', {
-              detail: { analysis_path: a.path, run_id: pj.run_id },
-            }));
-          }
-        }
-      } catch (e) { console.warn('Modal: populate failed', e); }
     } catch (e) {
-      console.warn('Modal: sketch-deck scaffold crashed', e);
+      console.warn('Modal: slideshow scaffold crashed', e);
     } finally {
       slidesBtn.disabled = false;
     }
@@ -416,17 +382,38 @@ window.Modal = (function () {
     return `<span class="prop-icon"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="3" y1="5" x2="13" y2="5"/><line x1="3" y1="8" x2="13" y2="8"/><line x1="3" y1="11" x2="13" y2="11"/></svg></span>`;
   }
 
+  function formatSourceRef(item, forceLocal) {
+    const raw = String(item);
+    const kind = classifySourceRef(raw) || (forceLocal && normalizeWorkspacePath(raw) ? "local" : null);
+    if (kind === "url") {
+      return (
+        `<a class="sy-source-cite" href="${escapeHtml(raw)}" `
+        + `target="_blank" rel="noreferrer">${escapeHtml(raw)}</a>`
+      );
+    }
+    if (kind === "local") {
+      const path = normalizeWorkspacePath(raw) || raw;
+      return (
+        `<a class="sy-source-cite" href="#file=${encodeURIComponent(path)}" `
+        + `data-open-path="${escapeHtml(path)}" `
+        + `title="Open with the system default app">${escapeHtml(raw)}</a>`
+      );
+    }
+    return escapeHtml(raw);
+  }
+
   function formatValue(v, key) {
     if (v == null) return '<span style="color:var(--text-faint)">—</span>';
+    const forceLocal = key === "sources" || key === "extracted_from";
     if (isCollapsibleList(key, v)) {
       const open = readSourcesOpen() ? " open" : "";
-      const items = v.map((item) => `<div>${escapeHtml(String(item))}</div>`).join("");
+      const items = v.map((item) => `<div>${formatSourceRef(item, true)}</div>`).join("");
       return `<details class="sy-prop-list"${open}><summary>${v.length} sources</summary>${items}</details>`;
     }
     if (Array.isArray(v)) {
-      return v.map(item => `<div>${escapeHtml(String(item))}</div>`).join('');
+      return v.map((item) => `<div>${formatSourceRef(item, forceLocal)}</div>`).join("");
     }
-    return escapeHtml(String(v));
+    return formatSourceRef(v, forceLocal);
   }
 
   function escapeHtml(s) {

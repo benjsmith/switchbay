@@ -15,8 +15,9 @@ PYDIR := $(CURDIR)/src
 # One-command install for a fresh clone: prerequisites (auto-installs uv;
 # checks node/pnpm) → Python deps → frontend build → always-on service.
 # Add SEMANTIC=1 to also pull the light fastembed embeddings (~150 MB).
+# Add ENTERPRISE_USER=1 for a tester enterprise overlay (repo admin.json, no sudo).
 install:
-	bash scripts/install.sh $(if $(SEMANTIC),--semantic,)
+	bash scripts/install.sh $(if $(SEMANTIC),--semantic,) $(if $(ENTERPRISE_USER),--enterprise-user,)
 
 sync:
 	uv sync --locked
@@ -105,8 +106,10 @@ build-frontend:
 # lives in src/switchbay/service.py; these targets are mac/Linux make
 # conveniences. On Windows run `python -m switchbay service <action>`.
 # install builds the frontend first so the daemon has something to serve.
+# ENTERPRISE_USER=1 stamps <repo>/admin.json (tester enterprise, no sudo).
+ENTERPRISE_USER ?=
 install-service: build-frontend
-	PYTHONPATH=$(PYDIR) uv run --no-sync python -m switchbay service install
+	PYTHONPATH=$(PYDIR) uv run --no-sync python -m switchbay service install $(if $(ENTERPRISE_USER),--enterprise-user,)
 uninstall-service:
 	PYTHONPATH=$(PYDIR) uv run --no-sync python -m switchbay service uninstall
 start:
@@ -141,8 +144,13 @@ open-local:
 #        COPILOT_HOST=github.example.com
 PAYLOAD ?=
 COPILOT_HOST ?= github.com
+IN_APP_UPDATE ?=
+UPDATE_REPO ?=
 enterprise-bake:
 	@test -n "$(PAYLOAD)" || (echo "set PAYLOAD= to the unzipped CI tree or archive"; exit 1)
 	PYTHONPATH=$(PYDIR) uv run --no-sync python scripts/bake_enterprise.py \
 		--payload $(PAYLOAD) --copilot-host $(COPILOT_HOST) \
-		--out dist/bake $(if $(ALLOW_HF),--allow-hf,) $(if $(VENDOR_CE),--vendor-ce $(VENDOR_CE),)
+		--out dist/bake $(if $(ALLOW_HF),--allow-hf,) \
+		$(if $(IN_APP_UPDATE),--in-app-update,) \
+		$(if $(UPDATE_REPO),--update-repo $(UPDATE_REPO),) \
+		$(if $(VENDOR_CE),--vendor-ce $(VENDOR_CE),)

@@ -25,8 +25,9 @@ import re
 import sys
 
 from . import (
-    agent_rules, analyses, conversations, duckdb_starters,
+    agent_rules, conversations, duckdb_starters,
     plots, proposals, reports, sketches, skillkit, slide_layouts,
+    slideshow_from_md, slideshow_html,
 )
 
 ToolHandler = Callable[[Path, dict[str, Any]], dict[str, Any] | str]
@@ -225,6 +226,95 @@ register(Tool(
         "required": ["title", "summary", "html"],
     },
     handler=_create_report,
+))
+
+
+def _create_slideshow(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    title = str(payload.get("title") or "").strip()
+    raw_slides = payload.get("slides")
+    if not title:
+        return {"ok": False, "error": "title is required"}
+    if not isinstance(raw_slides, list) or not raw_slides:
+        return {"ok": False, "error": "slides must be a non-empty array"}
+    if not all(isinstance(slide, dict) for slide in raw_slides):
+        return {"ok": False, "error": "every slide must be an object"}
+    slug = str(payload.get("slug") or "").strip()
+    if not slug:
+        slug = slideshow_from_md.slugify(title)
+    topics = payload.get("wiki_topics")
+    if not isinstance(topics, list):
+        topics = []
+    result = slideshow_html.write_slideshow(
+        workspace,
+        slug,
+        title=title,
+        slides=[dict(slide) for slide in raw_slides],
+        wiki_topics=[str(topic) for topic in topics],
+    )
+    try:
+        from . import orchestrator_fs
+        orchestrator_fs.remember_landed(workspace, str(result["path"]))
+    except Exception:  # noqa: BLE001
+        pass
+    return {
+        **result,
+        "note": (
+            "Slideshow opened in its tab. Your chat reply should be a "
+            "short summary; the presentation lives in slideshows/."
+        ),
+    }
+
+
+register(Tool(
+    name="create_slideshow",
+    description=(
+        "Create the product's only presentation format: a self-contained "
+        "HTML slideshow under slideshows/<slug>/ and open it in the "
+        "Slideshow tab. Use for every request to make slides, a deck, or "
+        "a presentation. Supply concise, visual slide objects; vary layouts "
+        "among title, media, split, cards, bullets, and close. Local media "
+        "paths must be relative to the slideshow package. Do not create "
+        "Sketch decks or analysis pages with slides arrays."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["title", "slides"],
+        "properties": {
+            "title": {"type": "string"},
+            "slug": {
+                "type": "string",
+                "description": "Optional URL-safe package name; derived from title by default.",
+            },
+            "wiki_topics": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+            "slides": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "required": ["heading"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "layout": {
+                            "type": "string",
+                            "enum": ["title", "media", "split", "cards", "bullets", "close"],
+                        },
+                        "eyebrow": {"type": "string"},
+                        "heading": {"type": "string"},
+                        "lede": {"type": "string"},
+                        "bullets": {"type": "array"},
+                        "cards": {"type": "array"},
+                        "media": {"type": "string"},
+                        "media_kind": {"type": "string", "enum": ["image", "video"]},
+                        "cite": {"type": "string"},
+                        "notes": {"type": "string"},
+                    },
+                },
+            },
+        },
+    },
+    handler=_create_slideshow,
 ))
 
 
@@ -545,261 +635,7 @@ register(Tool(
 ))
 
 
-# ── Slide-deck tools (rail-driven side of N.1) ──────────────────────
-
-
-# Heading regex used by both make_slides_from_doc and make_slides_from_docs
-# to chunk source markdown into placeholder slides.
-_HEADING_RE = re.compile(r"^(#{1,2})\s+(.*\S)\s*$", re.MULTILINE)
-
-# Generic spine when a source has few/no H2s (common for CE analyses:
-# one long prose block under the H1, then a single "Open questions"
-# H2). Without this, → Sketch deck yields a 1-slide "deck".
-_GENERIC_DECK_SPINE = ("Introduction", "Key Points", "Evidence", "Next Steps")
-# At least this many real H2s before we trust headings alone.
-_MIN_HEADING_SLIDES = 3
-
-
-def deck_section_titles_from_body(body: str, *, fallback_title: str = "Untitled") -> tuple[str, list[str]]:
-    """Derive (doc_title, section_titles) for a sketch-deck scaffold.
-
-    · ≥3 H2s → one slide per H2 (well-structured docs).
-    · 0 H2s  → generic 4-slide spine (prose/property-shaped pages).
-    · 1–2 H2s → generic intro spine + the real H2s as trailing slides
-      so a long analysis with only "Open questions" still gets a
-      full deck for the populate agent to fill.
-    """
-    headings = [m.group(2).strip() for m in _HEADING_RE.finditer(body or "")]
-    doc_title = headings[0] if headings else fallback_title
-    sub = headings[1:] if headings else []
-    if len(sub) >= _MIN_HEADING_SLIDES:
-        return doc_title, sub
-    if not sub:
-        return doc_title, list(_GENERIC_DECK_SPINE)
-    # Sparse headings: keep a 3-slide content spine, then the named
-    # H2s (deduped, case-insensitive) so e.g. "Open questions" lands
-    # as the final card instead of being the *only* card.
-    spine = ["Introduction", "Key Points", "Evidence"]
-    seen = {s.lower() for s in spine}
-    tail: list[str] = []
-    for h in sub:
-        key = h.lower()
-        if key in seen:
-            continue
-        tail.append(h)
-        seen.add(key)
-    if not tail:
-        tail = ["Next Steps"]
-    return doc_title, spine + tail
-
-
-def _scaffold_one_doc(workspace: Path, doc_path: str) -> dict[str, Any]:
-    """Read a doc, derive section titles, create a placeholder
-    Excalidraw sketch per section. Returns (doc_title, [sketch_id...]).
-    Doesn't write the analysis page itself — caller composes the
-    final analysis (single-doc OR multi-doc)."""
-    src = analyses.resolve_doc_path(workspace, doc_path)
-    if src is None:
-        raise ValueError(f"source doc not in workspace: {doc_path}")
-    text = src.read_text(encoding="utf-8")
-    _, body = analyses.parse_frontmatter(text)
-    doc_title, section_titles = deck_section_titles_from_body(
-        body, fallback_title=src.stem,
-    )
-    slide_ids: list[str] = []
-    for title in section_titles or [doc_title]:
-        seed = {"elements": [], "appState": {"name": title}, "files": {}}
-        rec = sketches.save_sketch(
-            workspace, name=title, kind="excalidraw", data=seed,
-        )
-        slide_ids.append(rec["id"])
-    return {"doc_title": doc_title, "slide_ids": slide_ids}
-
-
-def _make_slides_from_doc(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    path = str(payload.get("path") or "").strip()
-    if not path:
-        return {"ok": False, "error": "path is required"}
-    try:
-        scaffolded = _scaffold_one_doc(workspace, path)
-    except ValueError as e:
-        return {"ok": False, "error": str(e)}
-    name = str(payload.get("name") or "").strip() or scaffolded["doc_title"]
-    a = analyses.save_analysis(
-        workspace, title=name, slides=scaffolded["slide_ids"], sources=[path],
-    )
-    return {
-        "ok": True,
-        "analysis": {
-            "slug": a["slug"], "path": a["path"], "title": a["title"],
-            "slides": a["slides"], "sources": a["sources"],
-        },
-        "next_step_hint": (
-            f"Each slide is a placeholder Excalidraw scene named after a "
-            f"heading. To fill them in, open the analysis page in the "
-            f"Sketch tab — the user can author the scenes by hand, or "
-            f"you can update them via further conversation. PNG exports "
-            f"land in figures/<sketch-id>.png the next time each slide "
-            f"is rendered."
-        ),
-    }
-
-
-register(Tool(
-    name="make_slides_from_doc",
-    description=(
-        "Scaffold a sketcher slide deck from a single source markdown "
-        "doc. Walks the doc's H1/H2 headings; one placeholder Excalidraw "
-        "sketch per heading. Writes a CE-shaped analysis page at "
-        "wiki/<slug>.md (kind: analysis, slides: [...], sources: [...]) "
-        "that's the deck's spine — Sketch tab enters deck mode when the "
-        "user opens it. Use when the user says things like 'make slides "
-        "from foo.md' or 'turn the design doc into a deck'."
-    ),
-    input_schema={
-        "type": "object",
-        "required": ["path"],
-        "properties": {
-            "path": {
-                "type": "string",
-                "description": "Workspace-relative path to the source doc, e.g. 'wiki/q4-churn.md'.",
-            },
-            "name": {
-                "type": "string",
-                "description": "Deck title; defaults to the doc's first H1 (or filename when none).",
-            },
-        },
-    },
-    handler=_make_slides_from_doc,
-))
-
-
-def _make_slides_from_docs(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    raw_paths = payload.get("paths")
-    if not isinstance(raw_paths, list) or not all(isinstance(p, str) for p in raw_paths):
-        return {"ok": False, "error": "paths must be a list of doc paths"}
-    if not raw_paths:
-        return {"ok": False, "error": "paths is empty"}
-    title = str(payload.get("title") or "").strip()
-    all_slide_ids: list[str] = []
-    doc_titles: list[str] = []
-    for path in raw_paths:
-        try:
-            s = _scaffold_one_doc(workspace, path)
-        except ValueError as e:
-            return {"ok": False, "error": str(e)}
-        all_slide_ids.extend(s["slide_ids"])
-        doc_titles.append(s["doc_title"])
-    if not title:
-        # Compose a deck title from the source doc titles, capped at
-        # something readable. The agent / user can rename via the
-        # Sketch tab's inline title input afterwards.
-        if len(doc_titles) == 1:
-            title = doc_titles[0]
-        elif len(doc_titles) <= 3:
-            title = " · ".join(doc_titles)
-        else:
-            title = f"{doc_titles[0]} (+ {len(doc_titles) - 1} more)"
-    a = analyses.save_analysis(
-        workspace, title=title, slides=all_slide_ids, sources=list(raw_paths),
-    )
-    return {
-        "ok": True,
-        "analysis": {
-            "slug": a["slug"], "path": a["path"], "title": a["title"],
-            "slides": a["slides"], "sources": a["sources"],
-        },
-        "doc_titles": doc_titles,
-    }
-
-
-register(Tool(
-    name="make_slides_from_docs",
-    description=(
-        "Multi-source variant: scaffold one slide deck spanning N source "
-        "docs. Each doc's headings contribute a section to the deck in "
-        "the order given. Use when the user says 'make slides from A, B, "
-        "and C' or 'analyse these and show as slides'."
-    ),
-    input_schema={
-        "type": "object",
-        "required": ["paths"],
-        "properties": {
-            "paths": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": (
-                    "Workspace-relative paths to source docs, in the order "
-                    "they should appear in the deck."
-                ),
-            },
-            "title": {
-                "type": "string",
-                "description": (
-                    "Deck title. Defaults to a join of the source-doc titles "
-                    "when not supplied."
-                ),
-            },
-        },
-    },
-    handler=_make_slides_from_docs,
-))
-
-
-def _compose_analysis(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    title = str(payload.get("title") or "").strip()
-    slides = payload.get("slides")
-    if not isinstance(slides, list) or not all(isinstance(s, str) for s in slides):
-        return {"ok": False, "error": "slides must be a list of sketch ids"}
-    sources = payload.get("sources") if isinstance(payload.get("sources"), list) else []
-    body = payload.get("body") if isinstance(payload.get("body"), str) else None
-    a = analyses.save_analysis(
-        workspace, title=title, slides=slides,
-        sources=list(sources), body=body,
-    )
-    return {"ok": True, "analysis": {
-        "slug": a["slug"], "path": a["path"], "title": a["title"],
-        "slides": a["slides"], "sources": a["sources"],
-    }}
-
-
-register(Tool(
-    name="compose_analysis",
-    description=(
-        "Compose a fresh analysis page from existing slide ids — the "
-        "remix path. Lets you build a NEW deck that references slides "
-        "already in the workspace's sketch library, in whatever order "
-        "tells the story you want. Different decks can share slides; "
-        "the same library powers many narratives. Use when the user "
-        "says 'make a board deck using slides X, Y, and Z' or 'compose "
-        "an analysis page from these existing sketches'."
-    ),
-    input_schema={
-        "type": "object",
-        "required": ["title", "slides"],
-        "properties": {
-            "title": {"type": "string", "description": "Deck title."},
-            "slides": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Existing sketch ids in the desired deck order.",
-            },
-            "sources": {
-                "type": "array",
-                "items": {"type": "string"},
-                "description": "Optional list of source doc paths the deck draws from.",
-            },
-            "body": {
-                "type": "string",
-                "description": (
-                    "Optional narrative markdown body. Omit to get the auto-"
-                    "generated stub (heading + figure block per slide)."
-                ),
-            },
-        },
-    },
-    handler=_compose_analysis,
-))
+# ── Sketch authoring (ordinary Excalidraw, not presentations) ───────
 
 
 def _resolve_slide_image(workspace: Path, slots: dict[str, Any]) -> str | None:
@@ -855,11 +691,10 @@ def _resolve_slide_image(workspace: Path, slots: dict[str, Any]) -> str | None:
 
 
 def _author_slide(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    """Author a real Excalidraw scene for one slide. The agent picks
-    a layout and fills its slots; slide_layouts.py renders the scene
-    and we save it as a sketch. If `sketch_id` is provided we update
-    that placeholder in place (the typical post-make_slides_from_doc
-    flow); otherwise a fresh sketch is created."""
+    """Author a real Excalidraw scene. The agent picks a layout and
+    fills its slots; slide_layouts.py renders the scene and we save
+    it as an ordinary sketch. If `sketch_id` is provided we update
+    that sketch in place; otherwise a fresh sketch is created."""
     layout = str(payload.get("layout") or "").strip()
     slots = payload.get("slots")
     if not layout:
@@ -930,72 +765,35 @@ def _author_slide(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "name": rec["name"],
         "layout": layout,
         "render_hint": (
-            "save_sketch wrote a clean Pillow raster to figures/<id>.png "
-            "for this slide so the deck doc's image references resolve "
-            "immediately. The Sketch tab overwrites it with the canonical "
-            "Excalidraw render (rough strokes, Virgil font) the next time "
-            "the slide is opened."
+            "save_sketch wrote a clean Pillow raster to figures/<id>.png. "
+            "The Sketch tab overwrites it with the canonical Excalidraw "
+            "render (rough strokes, Virgil font) the next time the sketch "
+            "is opened."
         ),
     }
 
 
 register(Tool(
-    name="author_slide",
+    name="author_sketch",
     description=(
-        "Fill a sketcher slide with a real Excalidraw scene by picking "
-        "a layout, an accent colour, and supplying the layout's slots. "
-        "Use after make_slides_from_doc/make_slides_from_docs has "
-        "scaffolded placeholder slides — pass `sketch_id` to update one "
-        "of them in place. Or omit `sketch_id` to create a fresh slide "
-        "and (later) thread it into a deck via compose_analysis.\n\n"
+        "Create or update an ordinary Excalidraw sketch using a structured "
+        "scene layout. This writes to the workspace Sketch collection. It "
+        "does not create, order, or populate presentation slides — use "
+        "create_slideshow for those.\n\n"
         "Layouts:\n"
-        "  · title       — slots: title, subtitle?, image?/icon?  Cover slide.\n"
-        "  · bullets     — slots: title, bullets[]            Heading + bullets with disc markers (cap 8).\n"
-        "  · two_column  — slots: title, left_title, left_items[], right_title, right_items[]\n"
-        "                                                     Compare/contrast as two outlined cards.\n"
-        "  · quote       — slots: quote, attribution?         Pull-quote with oversized opening mark.\n"
-        "  · section     — slots: label, subtitle?            Section break.\n"
-        "  · paragraph   — slots: title, body                 Heading + prose paragraph.\n"
-        "  · stat        — slots: stat, label, context?       Big number + caption + optional context.\n"
-        "  · cards       — slots: title, cards[{header, body}] 2x2 grid of mini info cards (cap 4).\n\n"
-        "Images/icons on title slides: pass `image` or `icon` as a "
-        "workspace-relative path to a PNG/JPEG (e.g. "
-        "`wiki/figures/_assets/bot.png` or a file under "
-        "`.workbench/uploads/`). This embeds a real Excalidraw image "
-        "element — do NOT fake icons with ASCII art in the subtitle "
-        "(those clip and do not render as shapes). User can also drop "
-        "images onto the canvas with the Sketch toolbar.\n\n"
-        "Accent colour (pass `accent` in `slots` and use the SAME "
-        "value across every slide in the deck):\n"
-        "  · black   — neutral / professional default.\n"
-        "  · red     — emphasis / risk topics.\n"
-        "  · green   — growth / progress / approval topics.\n"
-        "  · blue    — research / data / trust topics.\n"
-        "  · orange  — energy / change / launch topics.\n\n"
-        "These are exactly Excalidraw's stock five stroke colours so "
-        "the user can re-recolour with the toolbar without finding a "
-        "custom hex. The canvas stays white; saturation comes from "
-        "the strokes (titles, accents, outlines, bullet markers).\n\n"
-        "Design rules:\n"
-        "  1. Pick an accent that fits the topic and use it for every "
-        "slide. Don't default to black unless the content warrants it.\n"
-        "  2. White canvas everywhere. No background-fills on shapes — "
-        "rough strokes don't seal cleanly against fills.\n"
-        "  3. Vary layouts — don't make 10 bullets slides in a row. "
-        "Mix bullets / two_column / stat / cards / paragraph / quote.\n"
-        "  4. Use the handwritten Excalidraw font (the layouts already "
-        "do this — don't override it). The whole deck reads as a "
-        "sketch, not an office document.\n"
-        "  5. Keep prose terse: bullets ≤ 8 words each, body paragraphs "
-        "3-4 sentences, stat captions ≤ 6 words. Slides aren't essays.\n"
-        "  6. Plain language: avoid jargon and domain acronyms unless "
-        "truly ubiquitous (AI, CPU, PDF, HTTP, SQL). Spell out "
-        "shorthand like RLVR/RAG/RLHF/CoT. If an acronym is "
-        "necessary, define it on FIRST use in the deck "
-        "(\"retrieval-augmented generation (RAG)\"); never leave a "
-        "bare undefined acronym on a title, card, or bullet.\n"
-        "  7. stat and section slides land harder than bullets — use "
-        "them for the highest-impact moments in the deck."
+        "  · title       — slots: title, subtitle?, image?/icon?\n"
+        "  · bullets     — slots: title, bullets[]\n"
+        "  · two_column  — slots: title, left_title, left_items[], "
+        "right_title, right_items[]\n"
+        "  · quote       — slots: quote, attribution?\n"
+        "  · section     — slots: label, subtitle?\n"
+        "  · paragraph   — slots: title, body\n"
+        "  · stat        — slots: stat, label, context?\n"
+        "  · cards       — slots: title, cards[{header, body}] (cap 4)\n\n"
+        "Pass `image` or `icon` as a workspace-relative PNG/JPEG path to "
+        "embed a real Excalidraw image element. Accent colour (`accent` "
+        "in slots): black, red, green, blue, orange — Excalidraw stock "
+        "strokes. White canvas; no background fills. Keep prose terse."
     ),
     input_schema={
         "type": "object",
@@ -1015,17 +813,14 @@ register(Tool(
                 "description": (
                     "Layout-specific content. Required slots vary; see "
                     "tool description. Pass `accent` here too — one of "
-                    "{black, red, green, blue, orange} — and use the "
-                    "same value for every slide in the deck. Unknown "
-                    "slots are ignored."
+                    "{black, red, green, blue, orange}."
                 ),
             },
             "sketch_id": {
                 "type": "string",
                 "description": (
-                    "Existing sketch id to update in place (typical flow: a "
-                    "placeholder slide created by make_slides_from_doc). "
-                    "Omit to create a fresh slide."
+                    "Existing sketch id to update in place. Omit to create "
+                    "a fresh sketch. Defaults to the visible Sketch tab."
                 ),
             },
             "name": {
@@ -1824,9 +1619,8 @@ def _sketch_context(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
             "ok": True,
             "focus": focus,
             "note": (
-                "No visible sketch/slide focused. Ask the user to open "
-                "a slide in the Sketch tab, or pass sketch_id=. For deck "
-                "edits, sketch_context after they navigate to the slide."
+                "No visible sketch focused. Ask the user to open a sketch "
+                "in the Sketch tab, or pass sketch_id=."
             ),
         }
     rec = sk.get_sketch(workspace, sid)
@@ -1853,11 +1647,10 @@ def _sketch_context(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
             "updated_at": rec.get("updated_at"),
         },
         "note": (
-            "To change the VISIBLE slide, call author_slide with "
-            "sketch_id set to this id (defaults to focus if omitted "
-            "on newer agents). Small copy tweaks: re-author the same "
-            "layout with updated slots. sketch_show jumps the UI to a "
-            "slide. Do not rebuild the whole deck for a one-line fix."
+            "To change the VISIBLE sketch, call author_sketch with "
+            "sketch_id set to this id (defaults to focus if omitted). "
+            "Small copy tweaks: re-author the same layout with updated "
+            "slots. sketch_show jumps the UI to a sketch."
         ),
     }
 
@@ -1995,10 +1788,10 @@ register(Tool(
 register(Tool(
     name="sketch_context",
     description=(
-        "Read the visible Sketch/deck slide: id, name, deck position, "
-        "and text elements on the canvas. Call first for 'change this "
-        "slide' / 'fix the title on the current slide' requests. "
-        "Then author_slide(sketch_id=…) to rewrite that slide."
+        "Read the visible Sketch: id, name, and text elements on the "
+        "canvas. Call first for 'change this sketch' / 'fix the title "
+        "on the current drawing' requests. Then author_sketch(sketch_id=…) "
+        "to rewrite that sketch."
     ),
     input_schema={
         "type": "object",
@@ -2016,8 +1809,8 @@ register(Tool(
 register(Tool(
     name="sketch_show",
     description=(
-        "Switch to the Sketch tab and show a slide by sketch_id or "
-        "0-based slide_index within the open deck."
+        "Switch to the Sketch tab and show a sketch by sketch_id, or "
+        "by 0-based index in the workspace sketch library."
     ),
     input_schema={
         "type": "object",

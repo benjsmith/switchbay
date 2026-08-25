@@ -2,8 +2,9 @@
 # One-command install for switchbay: prerequisites → Python deps →
 # frontend build → always-on service. Idempotent; safe to re-run.
 #
-#   bash scripts/install.sh            # lean install (FTS-only recall)
-#   bash scripts/install.sh --semantic # + light local embeddings (fastembed/ONNX, ~150 MB)
+#   bash scripts/install.sh                 # lean install (FTS-only recall)
+#   bash scripts/install.sh --semantic      # + light local embeddings (fastembed/ONNX, ~150 MB)
+#   bash scripts/install.sh --enterprise-user  # tester: repo admin.json, no machine admin
 #
 # Prereqs it can auto-provide: uv. Prereqs it cannot (tells you how):
 # Node.js + pnpm. macOS (launchd) and Linux (systemd --user) supported.
@@ -13,9 +14,11 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO"
 
 SEMANTIC=0
+ENTERPRISE_USER=0
 for arg in "$@"; do
   case "$arg" in
     --semantic|--with-semantic) SEMANTIC=1 ;;
+    --enterprise-user) ENTERPRISE_USER=1 ;;
     -h|--help) grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (try --help)"; exit 2 ;;
   esac
@@ -106,7 +109,12 @@ if [ "$(uname -s)" = "Darwin" ]; then
   warn "    on disk in other apps' caches (no re-download). Not your docs."
   warn "  A Keychain prompt (same process) is for storing API keys — Allow."
 fi
-PYTHONPATH="$REPO/src" uv run --no-sync python -m switchbay service install
+SVC_ARGS=(service install)
+if [ "$ENTERPRISE_USER" = "1" ]; then
+  info "Enterprise (user-scoped): writing $REPO/admin.json (no machine admin)"
+  SVC_ARGS+=(--enterprise-user)
+fi
+PYTHONPATH="$REPO/src" uv run --no-sync python -m switchbay "${SVC_ARGS[@]}"
 
 ok "Installed. Open http://127.0.0.1:8765 and install it as an app (dock icon + standalone window)."
 echo "   Manage it with: make status | make stop | make restart | make uninstall-service"

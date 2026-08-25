@@ -128,6 +128,26 @@ def test_build_offline_no_gen(tmp_path: Path):
     assert result["audio_slides"] == []
 
 
+def test_write_slideshow_print_css_is_16x9_pages(tmp_path: Path):
+    slideshow_html.write_slideshow(
+        tmp_path,
+        "print-demo",
+        title="Print",
+        slides=[
+            {"layout": "title", "heading": "One"},
+            {"layout": "bullets", "heading": "Two", "bullets": ["a"]},
+        ],
+    )
+    html = (tmp_path / "slideshows" / "print-demo" / "index.html").read_text(
+        encoding="utf-8",
+    )
+    assert "@page{size:13.333in 7.5in;margin:0}" in html
+    assert "@media print{" in html
+    assert "page-break-after:always" in html
+    assert "print-color-adjust:exact" in html
+    assert ".topbar,.progress,.ctrls,.zone,audio{display:none!important}" in html
+
+
 def test_write_slideshow_voice_delay_in_html(tmp_path: Path):
     r = slideshow_html.write_slideshow(
         tmp_path,

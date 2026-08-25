@@ -26,7 +26,7 @@ declare global {
       setActive(pageId: string): void;
     };
     Modal: {
-      init(data: unknown): void;
+      init(data: unknown, root?: HTMLElement): void;
       open(pageId: string): boolean;
       close(): void;
       refresh?(data: unknown): void;

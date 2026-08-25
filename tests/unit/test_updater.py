@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 
 import pytest
 from aiohttp.test_utils import make_mocked_request
 
-from switchbay import daemon, updater
+from switchbay import admin_policy, daemon, updater
 
 
 def test_parse_version_strips_v_and_trailing_text():
@@ -455,3 +456,140 @@ def test_file_sha256_roundtrip(tmp_path):
     data = b"hello"
     p.write_bytes(data)
     assert updater._file_sha256(p) == hashlib.sha256(data).hexdigest()
+
+
+def test_git_dirty_ignores_policy_keep(tmp_path, monkeypatch):
+    def policy_only(_args, *, cwd, timeout=0):
+        return type("R", (), {
+            "returncode": 0,
+            "stdout": "?? admin.json\n?? SWITCHBAY_PROFILE\n M admin.baked.json\n",
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr(updater, "_git", policy_only)
+    assert updater._git_dirty(tmp_path) is False
+
+    def with_src(_args, *, cwd, timeout=0):
+        return type("R", (), {
+            "returncode": 0,
+            "stdout": " M src/switchbay/updater.py\n?? admin.json\n",
+            "stderr": "",
+        })()
+
+    monkeypatch.setattr(updater, "_git", with_src)
+    assert updater._git_dirty(tmp_path) is True
+
+
+def test_apply_switchbay_skips_non_git(tmp_path, monkeypatch):
+    repo = tmp_path / "payload"
+    repo.mkdir()
+    monkeypatch.setattr(updater.service, "_repo_root", lambda: repo)
+    row = updater._apply_switchbay(updater.COMPONENTS[0], "v0.11.1")
+    assert row["status"] == "skipped"
+    assert "package" in row["detail"] or "git" in row["detail"]
+
+
+def test_apply_switchbay_restores_baked_policy(tmp_path, monkeypatch):
+    repo = tmp_path / "switchbay"
+    repo.mkdir()
+    (repo / ".git").mkdir()
+    baked = repo / "admin.baked.json"
+    baked.write_text(
+        '{"profile":"enterprise","features":{"in_app_update":true}}',
+        encoding="utf-8",
+    )
+    marker = repo / "SWITCHBAY_PROFILE"
+    marker.write_text("enterprise\n", encoding="utf-8")
+    overlay = repo / "admin.json"
+    overlay.write_text('{"features":{"hf_model_download":true}}', encoding="utf-8")
+
+    monkeypatch.setattr(updater.service, "_repo_root", lambda: repo)
+    monkeypatch.setattr(updater, "_git_dirty", lambda _p: False)
+    monkeypatch.setattr(updater, "_git_detached", lambda _p: True)
+    monkeypatch.setattr(updater, "_sync_and_build", lambda _p: None)
+
+    def fake_git(args, *, cwd, timeout=0):
+        if args[:2] == ["fetch", "--tags"]:
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        if args[:3] == ["rev-parse", "-q", "--verify"]:
+            return type("R", (), {"returncode": 0, "stdout": "abc", "stderr": ""})()
+        if args[:2] == ["rev-parse", "HEAD"]:
+            return type("R", (), {"returncode": 0, "stdout": "old\n", "stderr": ""})()
+        if args[0] == "rev-parse" and "^{commit}" in str(args[1]):
+            return type("R", (), {"returncode": 0, "stdout": "new\n", "stderr": ""})()
+        if args[0] == "checkout":
+            baked.unlink(missing_ok=True)
+            marker.unlink(missing_ok=True)
+            overlay.unlink(missing_ok=True)
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+        return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr(updater, "_git", fake_git)
+    row = updater._apply_switchbay(updater.COMPONENTS[0], "v0.11.1")
+    assert row["status"] == "updated"
+    assert baked.is_file()
+    assert "in_app_update" in baked.read_text(encoding="utf-8")
+    assert marker.read_text(encoding="utf-8") == "enterprise\n"
+    assert overlay.is_file()
+
+
+def test_check_skips_skills_on_enterprise(monkeypatch, tmp_path):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({"profile": "enterprise"}), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "enterprise")
+    monkeypatch.setenv("SWITCHBAY_INSTALL_ROOT", str(tmp_path / "no-install"))
+    admin_policy.reset_cache()
+    fetched: list[str] = []
+
+    def fake_latest(repo):
+        fetched.append(repo)
+        return "v0.11.1"
+
+    monkeypatch.setattr(updater, "fetch_latest_tag", fake_latest)
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.11.0")
+    report = updater.check()
+    assert fetched == [admin_policy.update_repo()]
+    skills = [c for c in report["components"] if c["kind"] == "skill"]
+    assert skills and all(not c["update_available"] for c in skills)
+    admin_policy.reset_cache()
+
+
+def test_apply_skips_npx_skills_when_locked(tmp_path, monkeypatch):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "features": {"in_app_update": True, "install_skills_npx": False},
+        "updates": {"include_skills": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "enterprise")
+    admin_policy.reset_cache()
+    monkeypatch.setattr(updater, "check", lambda: {
+        "ok": True,
+        "update_available": True,
+        "error": None,
+        "components": [{
+            "id": "curiosity-merge",
+            "label": "Curiosity Merge",
+            "kind": "skill",
+            "update_available": True,
+            "latest": "v0.7.0",
+            "installed": True,
+            "current": "v0.6.0",
+            "channel": "npx",
+            "error": None,
+        }],
+    })
+    applied: list[str] = []
+    monkeypatch.setattr(
+        updater, "_apply_skill",
+        lambda *a, **k: applied.append("sk") or {
+            "id": "curiosity-merge", "status": "updated",
+        },
+    )
+    result = updater.apply()
+    assert applied == []
+    assert result["components"][0]["status"] == "skipped"
+    assert "install_skills_npx" in result["components"][0]["detail"]
+    admin_policy.reset_cache()

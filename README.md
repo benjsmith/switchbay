@@ -132,6 +132,7 @@ daemon:
 
 ```sh
 make install-service   # builds the frontend + registers a launchd agent
+# testers: make install-service ENTERPRISE_USER=1  (repo admin.json, no sudo)
 ```
 
 The daemon then serves the built app at `http://127.0.0.1:8765`; open it

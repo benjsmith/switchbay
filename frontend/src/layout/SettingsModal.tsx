@@ -42,7 +42,10 @@ function modelsForProvider(p: ProviderInfo | undefined): string[] {
 function feat(info: { policy?: { profile?: string; features?: Record<string, boolean> } } | null | undefined, name: string): boolean {
   const v = info?.policy?.features?.[name];
   if (typeof v === "boolean") return v;
-  return info?.policy?.profile !== "enterprise";
+  // No policy yet (or a failed fetch): fail closed so enterprise
+  // never flashes Settings → Update before the bake file loads.
+  if (!info?.policy) return false;
+  return info.policy.profile !== "enterprise";
 }
 
 type PolicyView = {
@@ -435,18 +438,22 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
         </div>
         <div className="sy-confirm-actions sy-settings-footer">
           <div className="sy-settings-power">
-            {feat(info, "in_app_update") && (
+            {feat(info, "in_app_update") ? (
             <button
               type="button"
               className="sy-confirm-btn sy-settings-update"
-              title="Check GitHub for later releases of Switch Bay, Curiosity Engine, and Curiosity Merge"
+              title="Check the configured GitHub releases. Admin policy files stay in place."
               onClick={() => {
                 const ok = window.confirm(
                   "Update Switch Bay?\n\n"
-                  + "This checks GitHub for later releases of Switch Bay, "
-                  + "Curiosity Engine, and Curiosity Merge, and updates "
-                  + "anything that's behind. Switch Bay then restarts so "
-                  + "the app picks up the changes.\n\n"
+                  + "This checks GitHub for later releases of Switch Bay"
+                  + (info?.policy?.profile === "enterprise"
+                    ? " using the bake-time update settings. "
+                      + "admin.json / admin.baked.json / SWITCHBAY_PROFILE "
+                      + "are kept."
+                    : ", Curiosity Engine, and Curiosity Merge.")
+                  + " Switch Bay then restarts so the app picks up the "
+                  + "changes.\n\n"
                   + "Agents that are still running will end. Nothing "
                   + "you've saved is lost.",
                 );
@@ -457,7 +464,16 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             >
               ↓ Update
             </button>
-            )}
+            ) : info?.policy?.profile === "enterprise" ? (
+            <button
+              type="button"
+              className="sy-confirm-btn sy-settings-update"
+              disabled
+              title="Updates come from your organization package. IT can set features.in_app_update in the bake policy to allow in-app updates that keep this admin config."
+            >
+              ↓ Update (IT package)
+            </button>
+            ) : null}
             <button
               type="button"
               className="sy-confirm-btn sy-settings-restart"

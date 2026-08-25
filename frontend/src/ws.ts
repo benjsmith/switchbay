@@ -363,7 +363,7 @@ export type PlotShow = {
   workspace?: string | null;
 };
 
-/** Agent sketch_show / author_slide nudge — switch to Sketch and show a slide. */
+/** Agent sketch_show / author_sketch nudge — switch to Sketch and show a sketch. */
 export type SketchShow = {
   type: "sketch.show";
   sketch_id?: string | null;
@@ -439,22 +439,12 @@ export type DecisionReviewResolved = {
   decision: "accept" | "dismiss";
 };
 
-/** A local-model page proposal whose reviewer verdict is borderline
- *  ("edit") — hand it to the user as an accept/reject rail card. */
+/** A provisional wiki page landed in the Reviews tab (not the rail). */
 export type PageProposalReview = {
-  type: "page_proposal_review";
+  type: "page_proposal_review" | "page_proposal_queued";
   id: string;
-  op: string;
-  kind: string;
-  title: string;
-  path: string;
-  body: string;
-  review: {
-    verdict?: string;
-    confidence?: number;
-    issues?: string[];
-    one_line?: string;
-  } | null;
+  title?: string;
+  path?: string;
   workspace?: string;
 };
 

@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { marked } from "marked";
+import { sanitizeHtml } from "../../lib/sanitizeHtml";
+import { openWorkspaceFile } from "../../lib/localPath";
+import { expandWikilinks, parseFrontmatter } from "../editor/mdview";
+import { PropertyValue } from "../editor/SourceCite";
 import { clearReportOpen, getLastReportOpen } from "./reportOpen";
 
 type Review = {
@@ -59,10 +64,12 @@ export default function ReportTab() {
     const onResolved = () => { void loadQueue(); };
     window.addEventListener("sy:open-report", onOpen);
     window.addEventListener("sy:proposal-resolved", onResolved);
+    window.addEventListener("sy:proposal-queued", onResolved);
     const iv = window.setInterval(() => void loadQueue(), 8000);
     return () => {
       window.removeEventListener("sy:open-report", onOpen);
       window.removeEventListener("sy:proposal-resolved", onResolved);
+      window.removeEventListener("sy:proposal-queued", onResolved);
       window.clearInterval(iv);
     };
   }, [loadQueue]);
@@ -103,7 +110,7 @@ export default function ReportTab() {
       const b = await r.json().catch(() => ({} as { error?: string }));
       if (!r.ok) { setErr(b.error || `HTTP ${r.status}`); return; }
       window.dispatchEvent(new CustomEvent("sy:proposal-resolved"));
-      if (decision !== "comment") await loadQueue();
+      await loadQueue();
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -218,7 +225,7 @@ export default function ReportTab() {
             </button>
           )}
           <button type="button" className="sy-report-pop" onClick={() => void closeTab()}
-            title="Close the Reviews tab — reopen when a new draft lands">
+            title="Close Reviews — remaining drafts stay on disk (accepted)">
             ✕ close
           </button>
         </div>
@@ -239,18 +246,18 @@ export default function ReportTab() {
               <p className="sy-review-oneline">{current.review.one_line}</p>
             )}
           </div>
-          <pre className="sy-review-doc">{current.body}</pre>
+          <ReviewPreview markdown={current.body} />
           <div className="sy-review-actions">
             <textarea
               className="sy-review-comment"
-              placeholder="Comments — written onto the page now; reject still reverts"
+              placeholder="Comments keep the page and feed the next curation wave; reject still reverts"
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={3}
             />
             <div className="sy-review-btns">
               <button type="button" className="sy-confirm-btn" disabled={busy}
-                onClick={() => void decide("comment")}>Save comments</button>
+                onClick={() => void decide("comment")}>Comment & keep</button>
               <button type="button" className="sy-confirm-btn sy-confirm-btn--primary" disabled={busy}
                 onClick={() => void decide("accept")}>Accept</button>
               <button type="button" className="sy-confirm-btn" disabled={busy}
@@ -270,6 +277,61 @@ export default function ReportTab() {
       {!current && html === null && report && !err && (
         <div className="sy-report-loading">Rendering…</div>
       )}
+    </div>
+  );
+}
+
+function ReviewPreview({ markdown }: { markdown: string }) {
+  const { properties, body } = useMemo(() => parseFrontmatter(markdown), [markdown]);
+  const previewHtml = useMemo(
+    () => (body
+      ? sanitizeHtml(marked.parse(expandWikilinks(body), { async: false }) as string)
+      : ""),
+    [body],
+  );
+  const propRows = Object.entries(properties);
+  const title = typeof properties.title === "string" ? properties.title : "";
+
+  const onPreviewClick = (ev: MouseEvent<HTMLDivElement>) => {
+    const t = ev.target as HTMLElement;
+    const cite = t.closest?.("a[data-reveal-path]") as HTMLElement | null;
+    if (cite) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      void openWorkspaceFile(cite.getAttribute("data-reveal-path") || "");
+      return;
+    }
+    const wiki = t.closest?.("a.wikilink") as HTMLAnchorElement | null;
+    if (wiki) {
+      ev.preventDefault();
+      const href = wiki.getAttribute("href") || "";
+      const m = href.match(/^#page=(.+)$/);
+      const target = m ? decodeURIComponent(m[1]) : (wiki.textContent || "");
+      if (target) {
+        window.dispatchEvent(new CustomEvent("sy:open-wiki-page", { detail: { target } }));
+      }
+    }
+  };
+
+  return (
+    <div className="sy-review-doc" onClick={onPreviewClick}>
+      {title && <h1 className="sy-mdview-title">{title}</h1>}
+      {propRows.length > 0 && (
+        <section className="properties">
+          <div className="properties-head">Properties</div>
+          <table className="sy-mdview-properties">
+            <tbody>
+              {propRows.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="prop-key">{k}</td>
+                  <td className="prop-val"><PropertyValue name={k} value={v} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+      <article className="sy-mdview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
     </div>
   );
 }

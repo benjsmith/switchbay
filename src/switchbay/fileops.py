@@ -141,15 +141,44 @@ async def reveal(workspace: Path, rel: str) -> None:
     await proc.wait()
 
 
+def locate(workspace: Path, rel: str) -> Path:
+    """Existing workspace file for a source ref.
+
+    Frontmatter ``sources`` often store a basename
+    (``foo.html.extracted.md``) that actually lives under ``vault/``
+    or ``wiki/``. Try the path as given, then those prefixes. Still
+    refuses escapes, absolute paths, and hidden/protected tops.
+    """
+    raw = (rel or "").strip().replace("\\", "/")
+    if raw.lower().startswith("vault:"):
+        raw = raw[6:].lstrip("/")
+    while raw.startswith("./"):
+        raw = raw[2:]
+    if not raw or "\x00" in raw:
+        raise FileOpError("invalid path")
+    candidates = [raw]
+    name = raw.rsplit("/", 1)[-1]
+    if "/" not in raw:
+        candidates.extend([f"vault/{name}", f"wiki/{name}"])
+    last_err: FileOpError | None = None
+    for cand in candidates:
+        try:
+            target = _resolve(workspace, cand)
+        except FileOpError as e:
+            last_err = e
+            continue
+        if target.is_file():
+            return target
+    raise last_err or FileOpError("not found")
+
+
 async def open_external(workspace: Path, rel: str) -> None:
     """Hand the file off to the OS default app — `open <path>` on
     macOS, `xdg-open` on Linux, `start` shell on Windows. Used by
     the file browser's "Open" context-menu item so vault PDFs go
     to Preview, PNGs to the image viewer, etc., instead of trying
     to render them in a switchbay tab."""
-    target = _resolve(workspace, rel)
-    if not target.exists():
-        raise FileOpError("not found")
+    target = locate(workspace, rel)
     if sys.platform == "darwin":
         argv = ["open", str(target)]
     elif sys.platform == "win32":

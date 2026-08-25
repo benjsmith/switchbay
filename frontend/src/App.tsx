@@ -29,7 +29,6 @@ import { RailSocket, type Mode, type Selection, type ServerMessage, type TabSpec
 import { SelectionProvider } from "./selection/SelectionContext";
 import "./widgets/graph/load";    // window.Sidebar/Subgraph/Modal/Graph + ce-graph.css
 import type { GraphData } from "./widgets/graph/types";
-import { primeAnalysis } from "./widgets/sketch/deckRuns";
 import Walkthrough, { maybeAutoStartWalkthrough } from "./walkthrough/Walkthrough";
 import {
   stashFormula, stashSheetSelect, stashSheetValues, stashSql, stashSketchShow, stashPlotShow,
@@ -1032,37 +1031,12 @@ export default function App() {
               : e,
           ),
         );
-      } else if (msg.type === "page_proposal_review") {
-        // A local-model page proposal the reviewer flagged borderline —
-        // an accept/reject card in the rail. Dedupe by id.
+      } else if (msg.type === "page_proposal_review" || msg.type === "page_proposal_queued") {
+        // Page proposals live in the Reviews tab only — never the rail.
         if (msg.workspace && !sameWorkspace(msg.workspace, focusedWsRef.current)) return;
-        setEntries((prev) =>
-          prev.some((e) => e.source === "proposal" && e.prop_id === msg.id)
-            ? prev
-            : [
-              ...prev,
-              {
-                id: ++idRef.current,
-                source: "proposal",
-                prop_id: msg.id,
-                op: msg.op,
-                kind: msg.kind,
-                title: msg.title,
-                path: msg.path,
-                body: msg.body,
-                review: msg.review,
-                state: "pending",
-              },
-            ],
-        );
+        window.dispatchEvent(new CustomEvent("sy:proposal-queued"));
       } else if (msg.type === "page_proposal_resolved") {
-        setEntries((prev) =>
-          prev.map((e) =>
-            e.source === "proposal" && e.prop_id === msg.id
-              ? { ...e, state: msg.decision === "accept" ? "accepted" : "dismissed" }
-              : e,
-          ),
-        );
+        window.dispatchEvent(new CustomEvent("sy:proposal-resolved"));
       } else if (msg.type === "provider_retry_offer") {
         // A run failed on a transient/capacity/billing error; offer a
         // one-click retry on another keyed provider (#12). Dedupe by id.
@@ -1497,10 +1471,8 @@ export default function App() {
     return () => window.removeEventListener("sy:graph-reload", onReload);
   }, []);
 
-  // Rehydrate borderline page proposals on load / workspace switch:
-  // proposal review cards are disk-backed (survive a daemon restart),
-  // but a browser reload wipes the in-memory rail entries. Re-fetch the
-  // open ones so an Accept/Reject decision isn't lost to a refresh.
+  // Page proposals are a Reviews-tab backlog, not rail cards. Keep
+  // the tab in mode.json via the daemon; the tab hydrates itself.
   useEffect(() => {
     if (!workspace) return;
     let cancelled = false;
@@ -1508,36 +1480,11 @@ export default function App() {
       try {
         const r = await fetch("/api/proposals/pending");
         if (!r.ok || cancelled) return;
-        const body = (await r.json()) as { proposals?: Array<{
-          id: string; op: string; kind: string; title: string;
-          path: string; body: string;
-          review: { verdict?: string; confidence?: number; issues?: string[]; one_line?: string } | null;
-        }> };
-        const pending = body.proposals ?? [];
-        if (pending.length === 0 || cancelled) return;
-        setEntries((prev) => {
-          const have = new Set(
-            prev.filter((e) => e.source === "proposal").map((e) => (e as { prop_id: string }).prop_id),
-          );
-          const add = pending
-            .filter((p) => !have.has(p.id))
-            .map((p) => ({
-              id: ++idRef.current,
-              source: "proposal" as const,
-              prop_id: p.id,
-              op: p.op,
-              kind: p.kind,
-              title: p.title,
-              path: p.path,
-              body: p.body,
-              review: p.review,
-              state: "pending" as const,
-            }));
-          return add.length ? [...prev, ...add] : prev;
-        });
-      } catch {
-        /* best-effort rehydrate */
-      }
+        const body = (await r.json()) as { proposals?: unknown[] };
+        if ((body.proposals ?? []).length > 0) {
+          window.dispatchEvent(new CustomEvent("sy:proposal-queued"));
+        }
+      } catch { /* best-effort */ }
     })();
     return () => { cancelled = true; };
   }, [workspace]);
@@ -1695,10 +1642,8 @@ export default function App() {
         if (page) {
           setSelection({ kind: "page", id, path: page.path });
           // Power: route to the Graph tab so the doc modal opens.
-          // For deck/analysis pages the modal exposes a "↗ Sketch"
-          // button to switch into deck-mode in the Sketch tab on
-          // explicit user action — auto-jumping there from the
-          // sidebar click was disorienting.
+          // The modal's slideshow button creates an HTML slideshow
+          // rather than entering Sketch deck-mode.
           // Zen: a graph node click opens the doc in the right-pane
           // Editor instead (artifacts-on-the-right applies to
           // navigation too; the doc modal stays Power-only).
@@ -1766,43 +1711,23 @@ export default function App() {
     return () => window.removeEventListener("sy:rail-system-tip", onSystemTip);
   }, []);
 
-  /** Bridge from the vanilla-JS graph modal's "→ Slides" button into
-   *  the React selection + tab-switch surfaces. The modal POSTs to
-   *  /api/analysis/from-doc itself and dispatches this event with
-   *  the resulting analysis's path; we set selection to that path,
-   *  switch the active tab to the sketcher, and close the modal so
-   *  the user lands directly on the new deck.
-   *  Same cross-boundary pattern as `sy:rail-system-tip`. */
+  /** Graph modal slideshow button: the vanilla modal POSTs
+   *  /api/slideshows/from-md itself and dispatches this event with
+   *  the new package slug so React can stash + focus the Slideshow
+   *  tab. Distinct from `sy:open-html-deck` (HtmlDeckTab's own
+   *  listener) so we do not re-dispatch. */
   useEffect(() => {
-    const onOpenAsDeck = (ev: Event) => {
-      const detail = (ev as CustomEvent<{
-        path: string; title: string; slug: string;
-        analysis?: Record<string, unknown>;
-      }>).detail;
-      if (!detail || !detail.path) return;
-      // Prime the Sketch tab's analysis cache so the deck badge
-      // appears on the next render — no /api/analysis round-trip
-      // needed. Falls back to the fetch path if the modal didn't
-      // attach the record (older callers).
-      if (detail.analysis && typeof detail.analysis === "object") {
-        primeAnalysis({
-          ...detail.analysis,
-          path: detail.path,
-        });
-      }
-      setSelection({ kind: "page", id: detail.path, path: detail.path });
-      switchToKindRef.current?.("sketch");
+    const onOpenAsSlideshow = (ev: Event) => {
+      const detail = (ev as CustomEvent<{ slug?: string; title?: string }>).detail;
+      if (!detail?.slug) return;
+      notifyHtmlDeckOpen(detail.slug, detail.title || detail.slug);
+      switchToKindRef.current?.("html-deck");
       try { window.Modal?.close(); } catch { /* modal may not be mounted */ }
-      // Nudge the wiki + file browsers to refresh so the new deck
-      // appears in the sidebar's analyses section without the user
-      // needing to manually rescan. The daemon also rebuilds + emits
-      // files_changed, but the rebuild can lag a couple of seconds
-      // — bump the local counter to refetch immediately.
       setFilesVersion((v) => v + 1);
     };
-    window.addEventListener("sy:open-as-deck", onOpenAsDeck);
-    return () => window.removeEventListener("sy:open-as-deck", onOpenAsDeck);
-  }, [setSelection]);
+    window.addEventListener("sy:open-as-slideshow", onOpenAsSlideshow);
+    return () => window.removeEventListener("sy:open-as-slideshow", onOpenAsSlideshow);
+  }, []);
 
   /** Cross-boundary bridge for the graph modal's per-table "↗ Sheet"
    *  buttons. The modal walks every <table> in the rendered body
@@ -1841,23 +1766,6 @@ export default function App() {
     };
     window.addEventListener("sy:switch-tab-kind", onSwitchTab);
     return () => window.removeEventListener("sy:switch-tab-kind", onSwitchTab);
-  }, []);
-
-  /** Same vanilla-JS → React bridge for the graph modal's populate
-   *  hand-off. The modal kicks /api/analysis/populate on its own
-   *  thread and dispatches `sy:register-deck-run` with the run_id;
-   *  we feed it into the sketch tab's deckRuns store so the
-   *  spinner badge shows next to the deck title. */
-  useEffect(() => {
-    const onRegister = (ev: Event) => {
-      const detail = (ev as CustomEvent<{ analysis_path: string; run_id: string }>).detail;
-      if (!detail?.analysis_path || !detail?.run_id) return;
-      void import("./widgets/sketch/deckRuns").then(({ setDeckRun }) => {
-        setDeckRun(detail.analysis_path, detail.run_id);
-      });
-    };
-    window.addEventListener("sy:register-deck-run", onRegister);
-    return () => window.removeEventListener("sy:register-deck-run", onRegister);
   }, []);
 
   /** Rail-row `↗` jump button → expand the agents panel + tell the

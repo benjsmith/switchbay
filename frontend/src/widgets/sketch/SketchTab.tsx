@@ -1,21 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSelection } from "../../selection/SelectionContext";
-import { useTabs } from "../../center/TabsContext";
-import {
-  clearDeckRun, getDeckRun, setDeckRun,
-  subscribe as subscribeDeckRuns,
-  takePrimedAnalysis,
-} from "./deckRuns";
 import { ackUiCommand, takeSketchShow } from "../../lib/pendingUiCommands";
 
 /**
- * Sketch tab — Excalidraw + drawio on the same canvas area, slide-deck
- * nav between sketches, PNG exports auto-written to `wiki/figures/`.
+ * Sketch tab — Excalidraw + drawio on the same canvas area, with a
+ * library picker over every workspace sketch. PNG exports auto-write
+ * to `wiki/figures/`.
  *
- * Each sketch has a fixed kind set at creation (`excalidraw` or
- * `drawio`); the underlying data formats are incompatible so switching
- * kind for an existing sketch isn't supported. The "New" affordance
- * lets the user (or agent) pick which tool a new sketch uses.
+ * Presentations are HTML slideshows (`slideshows/<slug>/`, Slideshow
+ * tab). This surface is diagrams and whiteboards only. Legacy
+ * `kind: deck` wiki pages stay on disk; their member sketches remain
+ * ordinary library items.
  *
  * Persistence: backend `src/switchbay/sketches.py` stores
  * `<workspace>/.workbench/sketches/<id>.json` and writes the PNG
@@ -42,17 +37,6 @@ type Sketch = SketchMeta & {
   data: unknown;
 };
 
-type Analysis = {
-  slug: string;
-  path: string;
-  title: string;
-  slides: string[];
-  sources: string[];
-  // {sketch_id: presenter-note}. May be absent on older daemons /
-  // primed records — treat as {}.
-  slide_notes?: Record<string, string>;
-};
-
 type ExcalidrawAPI = {
   getSceneElements: () => readonly unknown[];
   getAppState: () => Record<string, unknown>;
@@ -73,19 +57,12 @@ const DRAWIO_URL =
 
 export default function SketchTab() {
   const { selection, setSelection } = useSelection();
-  const { switchToKind } = useTabs();
   const [sketches, setSketches] = useState<SketchMeta[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [active, setActive] = useState<Sketch | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
-  // "Create new" overlay state.
   const [creating, setCreating] = useState<{ name: string; kind: SketchKind } | null>(null);
-  // When the user (or agent) navigates to an analysis page, the
-  // Sketch tab enters "deck mode" — the slide-deck nav steps through
-  // that analysis's slides in order rather than every sketch in the
-  // workspace. `analysis` is the deck spine; `null` = library mode.
-  const [analysis, setAnalysis] = useState<Analysis | null>(null);
   // Bumped on Clear to force the canvas component to re-mount with
   // the fresh empty scene. Excalidraw's `initialData` is only read
   // on first render so we key the canvas by `${id}:${clearVersion}`.
@@ -93,57 +70,6 @@ export default function SketchTab() {
   // Inline rename — same UX as Vega's title input. `null` = static
   // span; non-null = textbox open with this draft value.
   const [nameDraft, setNameDraft] = useState<string | null>(null);
-  // run_id of an in-flight autopopulate run for the active deck. Set
-  // by the editor's → Slides path via the deckRuns store; cleared
-  // when the daemon's `/api/runs/active` no longer lists it. Drives
-  // the spinner shown next to the deck title.
-  const [populateRunId, setPopulateRunId] = useState<string | null>(null);
-
-  // Resync the populate-run badge whenever the active analysis
-  // changes or another tab posts a new run via deckRuns.
-  useEffect(() => {
-    const sync = () => {
-      const id = analysis?.path ? getDeckRun(analysis.path) ?? null : null;
-      setPopulateRunId(id);
-    };
-    sync();
-    return subscribeDeckRuns(sync);
-  }, [analysis?.path]);
-
-  // Poll `/api/runs/active` every couple of seconds while a populate
-  // run is in flight; clear the badge when the run drops off the
-  // active list. Cheap call (in-process registry, returns ~10 rows).
-  useEffect(() => {
-    if (!populateRunId || !analysis?.path) return;
-    let cancelled = false;
-    const tick = async () => {
-      try {
-        const r = await fetch("/api/runs/active");
-        if (!r.ok) return;
-        const body = await r.json() as { runs?: { run_id: string }[] };
-        const live = (body.runs ?? []).some((x) => x.run_id === populateRunId);
-        if (!cancelled && !live) {
-          clearDeckRun(analysis.path);
-        }
-      } catch { /* transient */ }
-    };
-    const id = window.setInterval(() => void tick(), 2000);
-    void tick();
-    return () => { cancelled = true; window.clearInterval(id); };
-  }, [populateRunId, analysis?.path]);
-
-  const onSpinnerClick = useCallback(() => {
-    if (!populateRunId) return;
-    switchToKind("agents");
-    // Defer one tick so AgentDashboardTab has mounted before the
-    // expand-run event fires (matches the pattern used for project
-    // back-links and rail jump arrows).
-    window.setTimeout(() => {
-      window.dispatchEvent(new CustomEvent("sy:expand-run", {
-        detail: { run_id: populateRunId },
-      }));
-    }, 0);
-  }, [populateRunId, switchToKind]);
 
   const reloadList = useCallback(async () => {
     try {
@@ -157,204 +83,33 @@ export default function SketchTab() {
 
   useEffect(() => { void reloadList(); }, [reloadList]);
 
-  // Sketches the user has explicitly "Closed deck" against. The
-  // auto-detect below skips these so a close doesn't immediately
-  // re-enter deck mode via the by-slide lookup.
-  const dismissedSlidesRef = useRef<Set<string>>(new Set());
-
-  // Per-sketch cache of by-slide lookups so navigating between
-  // sketches doesn't fan out a fetch on every arrow key. Maps
-  // sketch id → owning Analysis (or null when known to have no
-  // owner). Resets only when explicit deck-mode transitions
-  // happen below.
-  const bySlideCacheRef = useRef<Map<string, Analysis | null>>(new Map());
-
-  // Auto-detect deck mode from the active sketch. If the user
-  // arrived at a sketch that belongs to an analysis's slides[]
-  // (because they clicked one in the library, or because the
-  // active was preserved across a workspace switch), pull the
-  // owning analysis and enter deck mode.
-  //
-  // Also promote selection to the analysis *page* so a leftover
-  // sketch selection can't re-assert itself on list reload and
-  // pin the canvas back to one slide (the goTo/picker stomp bug).
-  useEffect(() => {
-    if (analysis) return;  // already in deck mode
-    if (!activeId) return;
-    if (dismissedSlidesRef.current.has(activeId)) return;
-
-    const enterDeck = (a: Analysis) => {
-      setAnalysis(a);
-      if (
-        selection?.kind !== "page"
-        || selection.path !== a.path
-      ) {
-        setSelection({ kind: "page", id: a.path, path: a.path });
-      }
-    };
-
-    // Cache hit — skip the round-trip.
-    if (bySlideCacheRef.current.has(activeId)) {
-      const cached = bySlideCacheRef.current.get(activeId);
-      if (cached) enterDeck(cached);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/analysis/by-slide?sketch_id=${encodeURIComponent(activeId)}`,
-        );
-        if (cancelled || !r.ok) return;
-        const body = (await r.json()) as { analysis: Analysis | null };
-        if (cancelled) return;
-        bySlideCacheRef.current.set(activeId, body.analysis);
-        if (!body.analysis) return;
-        if (dismissedSlidesRef.current.has(activeId)) return;
-        enterDeck(body.analysis);
-      } catch { /* no match — stay in library mode */ }
-    })();
-    return () => { cancelled = true; };
-  }, [activeId, analysis, selection, setSelection]);
-
-  // When the active sketch drifts OUTSIDE the current deck's
-  // slides (e.g. user picks a different-deck slide via the
-  // picker while still in deck A), drop to library mode so the
-  // auto-detect above can pick up the correct deck. Without
-  // this, the badge claimed "deck: A" while the canvas showed
-  // a slide that wasn't in A — confusing.
-  useEffect(() => {
-    if (!analysis || !activeId) return;
-    if (!analysis.slides.includes(activeId)) {
-      setAnalysis(null);
-    }
-  }, [activeId, analysis]);
-
-  // Workspace switch (selection set to null with no page kind on
-  // first mount of the new workspace's selection) → reset
-  // session-scoped state. Without this, dismissed slide ids from
-  // a prior workspace could mute deck mode in the new one if a
-  // sketch id collision occurred.
-  const lastWsRef = useRef<string | null>(null);
-  useEffect(() => {
-    // We don't have a workspace handle here; use the sketches
-    // list URL implicitly via reloadList. As a proxy, reset on
-    // every sketches transition from a non-empty list to a
-    // genuinely different non-empty list (size + first id).
-    if (!sketches || sketches.length === 0) return;
-    const fingerprint = `${sketches.length}:${sketches[0]!.id}`;
-    if (lastWsRef.current && lastWsRef.current !== fingerprint) {
-      dismissedSlidesRef.current = new Set();
-      bySlideCacheRef.current = new Map();
-    }
-    lastWsRef.current = fingerprint;
-  }, [sketches]);
-
-  // Watch selection for analysis pages. A SelectionPage that points
-  // at `wiki/<slug>.md` may or may not be analysis-kind; the
-  // /api/analysis endpoint returns 404 for non-analysis pages so a
-  // single fetch decides. On match, enter deck mode. Prefer keeping
-  // the already-active slide when it's a member of the deck (so
-  // arrow/picker nav isn't stomped when selection re-asserts the
-  // same page); only pin slides[0] when entering cold.
-  useEffect(() => {
-    if (selection?.kind !== "page") {
-      // Don't unset analysis on every non-page selection — sketch
-      // selections inside an active deck shouldn't break the deck.
-      if (selection?.kind !== "sketch" && analysis) {
-        setAnalysis(null);
-      }
-      return;
-    }
-    // Fast path: if the modal primed an analysis record on the way
-    // in (via sy:open-as-deck), use it directly so the deck badge
-    // appears on the very next render — no round-trip needed.
-    const primed = takePrimedAnalysis(selection.path);
-    if (primed) {
-      const a = primed as unknown as Analysis;
-      setAnalysis(a);
-      if (a.slides && a.slides.length > 0) {
-        setActiveId((cur) =>
-          cur && a.slides.includes(cur) ? cur : a.slides[0]!,
-        );
-      }
-      return;
-    }
-    let cancelled = false;
-    (async () => {
-      try {
-        const r = await fetch(
-          `/api/analysis?path=${encodeURIComponent(selection.path)}`,
-        );
-        if (cancelled) return;
-        if (!r.ok) { setAnalysis(null); return; }
-        const body = (await r.json()) as { analysis: Analysis };
-        setAnalysis(body.analysis);
-        if (body.analysis.slides.length > 0) {
-          setActiveId((cur) =>
-            cur && body.analysis.slides.includes(cur)
-              ? cur
-              : body.analysis.slides[0]!,
-          );
-        }
-      } catch { setAnalysis(null); }
-    })();
-    return () => { cancelled = true; };
-  }, [selection]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Selection → active sketch. CRITICAL: do NOT depend on `activeId`.
-  // In-deck navigation (arrows / picker) updates activeId while
-  // leaving selection on the analysis page. Re-running this on every
-  // activeId change was stomping deck nav: goTo(slide N) → effect →
-  // setActiveId(selection.sketch) → stuck on slide 1.
+  // Selection → active sketch. Page selections (including leftover
+  // kind: deck wiki pages) no longer enter a sketch-deck mode.
   useEffect(() => {
     if (selection?.kind === "sketch") {
-      // Library pick. If we already auto-entered a deck whose slides
-      // include this id, don't fight deck-mode activeId walks — the
-      // enterDeck path promotes selection to the page, so this branch
-      // should only fire for true library browsing.
       setActiveId(selection.id);
-      return;
-    }
-    if (selection?.kind === "page") {
-      // Page effect above owns deck entry; don't fight it here.
       return;
     }
     if (!sketches) return;
     if (sketches.length === 0) { setActiveId(null); return; }
-    // Auto-pick a default only when we have no usable activeId.
-    // Functional update so we don't need activeId in deps.
     setActiveId((cur) => {
       if (cur && sketches.some((s) => s.id === cur)) return cur;
-      // Skip slides the user explicitly closed (Close deck).
-      const usable = sketches.find(
-        (s) => !dismissedSlidesRef.current.has(s.id),
-      );
-      return usable ? usable.id : null;
+      return sketches[0]!.id;
     });
   }, [sketches, selection]);
 
   // PNG render-on-demand → CANONICAL Excalidraw export.
   //
-  // `author_slide` writes an immediate Pillow preview so the deck
-  // page's <img> is not broken. That preview uses a system sans and
-  // can tofu Unicode (e.g. →). The Sketch canvas (Virgil) looks fine.
-  // We therefore re-export every non-empty Excalidraw scene once per
-  // tab session with exportToBlob and OVERWRITE the Pillow PNG —
-  // even when has_png is already true.
-  //
-  // Per-id guard (`exportedPngRef`) so we don't loop after reloadList.
-  // drawio still needs a mounted iframe; skipped here.
+  // `author_sketch` writes an immediate Pillow preview. That preview
+  // uses a system sans and can tofu Unicode (e.g. →). The Sketch
+  // canvas (Virgil) looks fine. We therefore re-export every
+  // non-empty Excalidraw scene once per tab session with exportToBlob
+  // and OVERWRITE the Pillow PNG — even when has_png is already true.
   const exportedPngRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!sketches) return;
-    const candidates = analysis
-      ? analysis.slides
-          .map((id) => sketches.find((m) => m.id === id))
-          .filter((s): s is SketchMeta => Boolean(s))
-      : sketches;
     const pending: SketchMeta[] = [];
-    for (const s of candidates) {
+    for (const s of sketches) {
       if (s.kind !== "excalidraw") continue;
       if (exportedPngRef.current.has(s.id)) continue;
       pending.push(s);
@@ -374,7 +129,6 @@ export default function SketchTab() {
           const body = (await r.json()) as { sketch: Sketch };
           const data = body.sketch.data as Record<string, unknown>;
           const elements = (data.elements as unknown[]) || [];
-          // exportToBlob throws on a zero-element scene.
           if (!Array.isArray(elements) || elements.length === 0) {
             continue;
           }
@@ -399,40 +153,23 @@ export default function SketchTab() {
           });
           if (pr.ok) wrote += 1;
         } catch {
-          // Allow one more attempt next time sketches reloads.
           exportedPngRef.current.delete(meta.id);
         }
       }
-      // Bust image caches that key on ?t=updated_at only after writes.
       if (!cancelled && wrote > 0) await reloadList();
     })();
     return () => { cancelled = true; };
-  }, [analysis, sketches, reloadList]);
+  }, [sketches, reloadList]);
 
-  // The slide-deck nav reads from `deckSketches` — either the
-  // analysis's ordered slides (deck mode) or every workspace sketch
-  // (library mode, the default). Resolved into the same SketchMeta
-  // shape so the toolbar code below doesn't branch.
-  const deckSketches: SketchMeta[] = useMemo(() => {
-    if (!sketches) return [];
-    if (analysis) {
-      const byId = new Map(sketches.map((s) => [s.id, s]));
-      // Dedup slide ids before mapping — a duplicate id in the deck
-      // frontmatter would otherwise render the same slide twice.
-      const seen = new Set<string>();
-      return analysis.slides
-        .filter((id) => (seen.has(id) ? false : (seen.add(id), true)))
-        .map((id) => byId.get(id))
-        .filter((s): s is SketchMeta => Boolean(s));
-    }
-    return sketches;
-  }, [sketches, analysis]);
+  const librarySketches: SketchMeta[] = useMemo(
+    () => sketches ?? [],
+    [sketches],
+  );
 
-  // Bumped when an agent re-authors the same slide so we re-fetch
+  // Bumped when an agent re-authors the same sketch so we re-fetch
   // even if activeId didn't change.
   const [reloadToken, setReloadToken] = useState(0);
 
-  // Fetch the full record on activeId change (or agent reload).
   useEffect(() => {
     if (!activeId) { setActive(null); return; }
     let cancelled = false;
@@ -447,22 +184,19 @@ export default function SketchTab() {
     return () => { cancelled = true; };
   }, [activeId, reloadToken]);
 
-  // Publish visible slide focus for sketch_context / author_slide default.
+  // Publish visible sketch focus for sketch_context / author_sketch.
   const lastSketchFocusRef = useRef("");
   useEffect(() => {
     if (!activeId) return;
-    const slideIndex = analysis && activeId
-      ? analysis.slides.indexOf(activeId)
-      : -1;
     const payload = {
       surface: "sketch",
       sketch_id: activeId,
       name: active?.name || activeId,
       kind: active?.kind || "excalidraw",
-      slide_index: slideIndex >= 0 ? slideIndex : null,
-      deck_title: analysis?.title || null,
-      analysis_path: analysis?.path || null,
-      deck_len: analysis?.slides?.length ?? null,
+      slide_index: null,
+      deck_title: null,
+      analysis_path: null,
+      deck_len: null,
     };
     const serialised = JSON.stringify(payload);
     if (serialised === lastSketchFocusRef.current) return;
@@ -472,16 +206,16 @@ export default function SketchTab() {
       headers: { "Content-Type": "application/json" },
       body: serialised,
     }).catch(() => { /* ignore */ });
-  }, [activeId, active, analysis]);
+  }, [activeId, active]);
 
-  // Agent sketch_show / author_slide nudge (+ cold-mount stash).
+  // Agent sketch_show / author_sketch nudge (+ cold-mount stash).
   useEffect(() => {
     const applyShow = (d: {
       sketch_id?: string | null;
       slide_index?: number | null;
     }) => {
-      if (typeof d.slide_index === "number" && analysis?.slides?.length) {
-        const id = analysis.slides[d.slide_index];
+      if (typeof d.slide_index === "number" && librarySketches.length) {
+        const id = librarySketches[d.slide_index]?.id;
         if (id) {
           setActiveId(id);
           setReloadToken((t) => t + 1);
@@ -517,7 +251,6 @@ export default function SketchTab() {
       }
     };
     window.addEventListener("sy:sketch-show", onShow);
-    // Drain App stash if this tab just mounted for an agent show.
     const stashed = takeSketchShow();
     if (stashed) {
       applyShow(stashed);
@@ -532,34 +265,24 @@ export default function SketchTab() {
       }
     }
     return () => window.removeEventListener("sy:sketch-show", onShow);
-  }, [analysis]);
+  }, [librarySketches]);
 
   const idx = useMemo(() => {
-    if (!deckSketches.length || !activeId) return -1;
-    return deckSketches.findIndex((s) => s.id === activeId);
-  }, [deckSketches, activeId]);
+    if (!librarySketches.length || !activeId) return -1;
+    return librarySketches.findIndex((s) => s.id === activeId);
+  }, [librarySketches, activeId]);
 
   const goTo = useCallback((delta: number) => {
-    if (deckSketches.length === 0) return;
-    // If the active sketch isn't in the current list (e.g. just
-    // entered deck mode from a library orphan), treat as index 0
-    // so → still advances instead of no-oping on idx === -1.
+    if (librarySketches.length === 0) return;
     const cur = idx >= 0 ? idx : 0;
-    const next = (cur + delta + deckSketches.length) % deckSketches.length;
-    const nx = deckSketches[next];
+    const next = (cur + delta + librarySketches.length) % librarySketches.length;
+    const nx = librarySketches[next];
     if (!nx) return;
     setActiveId(nx.id);
-    // Library mode: keep selection in lock-step with the canvas so
-    // other tabs / slash commands see the active sketch.
-    // Deck mode: leave selection alone (usually the analysis page).
-    // Never set selection to a sketch while analysis is set — that
-    // used to re-trigger the selection→activeId effect and pin us
-    // back to whatever sketch selection still held from library
-    // browsing. (See the selection-effect comment above.)
-    if (!analysis && (selection?.kind !== "sketch" || selection.id !== nx.id)) {
+    if (selection?.kind !== "sketch" || selection.id !== nx.id) {
       setSelection({ kind: "sketch", id: nx.id, name: nx.name });
     }
-  }, [deckSketches, idx, analysis, selection, setSelection]);
+  }, [librarySketches, idx, selection, setSelection]);
 
   const persistWithId = useCallback(async (
     desiredId: string | null,
@@ -632,10 +355,6 @@ export default function SketchTab() {
     const seed: unknown = creating.kind === "excalidraw"
       ? { elements: [], appState: {}, files: {} }
       : "<mxGraphModel><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/></root></mxGraphModel>";
-    // Long titles get a 3-4 word LM-compacted slug so the filename
-    // stays readable. Daemon falls back to a deterministic
-    // word-truncate when no provider is configured, so this is safe
-    // offline.
     const compactedSlug = await compactSlug(creating.name);
     const fresh = await persistWithId(
       compactedSlug,
@@ -643,81 +362,28 @@ export default function SketchTab() {
     );
     setCreating(null);
     if (!fresh) return;
-    // If we're in deck mode, append the new slide to the analysis
-    // automatically. If not, and there are no existing analyses but
-    // the user is sketching, we leave the analysis creation for the
-    // explicit "save as deck" path (or the Editor → Slides button)
-    // — Add Sketch shouldn't surprise-create wiki pages on click.
-    if (analysis) {
-      try {
-        const r = await fetch("/api/analysis/append-slide", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ slug: analysis.slug, sketch_id: fresh.id }),
-        });
-        if (r.ok) {
-          const j = (await r.json()) as { analysis: Analysis };
-          setAnalysis(j.analysis);
-        }
-      } catch { /* non-fatal — sketch saved, just not linked yet */ }
-    }
     setActiveId(fresh.id);
-    if (!analysis) {
-      setSelection({ kind: "sketch", id: fresh.id, name: fresh.name });
-    }
-  }, [creating, analysis, setSelection]); // eslint-disable-line react-hooks/exhaustive-deps
+    setSelection({ kind: "sketch", id: fresh.id, name: fresh.name });
+  }, [creating, persistWithId, setSelection]);
 
   const onDelete = useCallback(async () => {
     if (!active) return;
     if (!window.confirm(`Delete sketch "${active.name}"? (PNG export removed too.)`)) return;
     const deletedId = active.id;
-
-    // In deck mode, also drop the deleted slide from the analysis's
-    // `slides:` frontmatter list. Otherwise the picker keeps showing
-    // a "deck: <name>" badge while every nav step skips the now-
-    // missing sketch — visually identical to "all slides deleted",
-    // which is what the user perceives.
-    if (analysis) {
-      const remaining = analysis.slides.filter((id) => id !== deletedId);
-      try {
-        await fetch("/api/analysis", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: analysis.path, slides: remaining }),
-        });
-        setAnalysis({ ...analysis, slides: remaining });
-      } catch {
-        // Best-effort: even if the analysis update fails, the
-        // sketch itself still gets deleted below — better that
-        // than a visible orphan.
-      }
-    }
-
     await fetch(`/api/sketch?id=${encodeURIComponent(deletedId)}`, { method: "DELETE" });
-
-    // Pick a sibling to activate so the canvas doesn't go blank
-    // and trick the user into thinking the whole deck vanished.
-    // Use the same `deckSketches` ordering the nav arrows do.
-    const next = deckSketches.find((s) => s.id !== deletedId) || null;
+    const next = librarySketches.find((s) => s.id !== deletedId) || null;
     setActive(null);
     setActiveId(next ? next.id : null);
-    if (analysis && next) {
-      // In deck mode, selection stays pinned to the analysis page;
-      // activeId alone drives which slide the canvas mounts.
-    } else if (next) {
+    if (next) {
       setSelection({ kind: "sketch", id: next.id, name: next.name });
-    } else {
-      // Genuinely empty now — clear any sketch-shaped selection so
-      // the empty-state branch renders instead of a stale chip.
-      if (selection?.kind === "sketch") setSelection(null);
+    } else if (selection?.kind === "sketch") {
+      setSelection(null);
     }
     await reloadList();
-  }, [active, analysis, deckSketches, reloadList, selection, setSelection]);
+  }, [active, librarySketches, reloadList, selection, setSelection]);
 
   const onDuplicate = useCallback(async () => {
     if (!active) return;
-    // Save a fresh copy under a derived name; backend mints a new id
-    // because we don't pass `id`. The original stays put.
     const copyName = active.name.match(/\(copy(?: \d+)?\)$/)
       ? active.name
       : `${active.name} (copy)`;
@@ -739,49 +405,15 @@ export default function SketchTab() {
       return;
     }
     if (!fresh) return;
-
-    // In deck mode: insert the copy immediately after the original
-    // in the analysis's slides[] list, shunting following slides
-    // forward by one.
-    if (analysis) {
-      const here = analysis.slides.indexOf(active.id);
-      const insertAt = here >= 0 ? here + 1 : analysis.slides.length;
-      const next = [
-        ...analysis.slides.slice(0, insertAt),
-        fresh.id,
-        ...analysis.slides.slice(insertAt),
-      ];
-      try {
-        await fetch("/api/analysis", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: analysis.path, slides: next }),
-        });
-        setAnalysis({ ...analysis, slides: next });
-      } catch { /* sketch exists either way */ }
-    }
     await reloadList();
     setActiveId(fresh.id);
-    if (!analysis) {
-      setSelection({ kind: "sketch", id: fresh.id, name: fresh.name });
-    }
-  }, [active, analysis, reloadList, setSelection]);
+    setSelection({ kind: "sketch", id: fresh.id, name: fresh.name });
+  }, [active, reloadList, setSelection]);
 
-  // ── Thumbnail picker dropdown ─────────────────────────────────
-  // The "browse all slides" affordance — popover with a
-  // fixed-height scrollable list of thumbnails. Closes on outside
-  // click. Right-click on a thumbnail surfaces a per-row context
-  // menu with Delete / Duplicate that reuses the same handlers as
-  // the toolbar buttons.
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerMenu, setPickerMenu] = useState<{
     sketchId: string; x: number; y: number;
   } | null>(null);
-  // Anchor point for the picker — computed from the toggle button's
-  // bounding rect on open so the dropdown lands directly under it
-  // regardless of stacking/overflow context (Excalidraw paints inside
-  // sy-sketch-host with its own internal stacking, which could mask
-  // an absolutely-positioned picker even with a high z-index).
   const pickerBtnRef = useRef<HTMLButtonElement | null>(null);
   const [pickerAnchor, setPickerAnchor] = useState<
     { top: number; left: number } | null
@@ -791,8 +423,6 @@ export default function SketchTab() {
     if (!pickerOpen && !pickerMenu) return;
     const onDocClick = (ev: MouseEvent) => {
       const t = ev.target as Element | null;
-      // Keep the picker open if the click landed inside it. The
-      // per-row context menu has its own handler.
       if (t && t.closest && t.closest(".sy-sketch-picker")) return;
       if (t && t.closest && t.closest(".sy-context-menu")) return;
       setPickerOpen(false);
@@ -805,43 +435,12 @@ export default function SketchTab() {
   const onPickerSelect = useCallback((id: string) => {
     setPickerOpen(false);
     setPickerMenu(null);
-    // Explicit picker selection counts as the user opting back
-    // INTO the sketch — clear any dismissed-deck marker for it so
-    // the auto-detect can re-engage deck mode (otherwise picking
-    // a closed deck's slide stays library-mode silently, which
-    // contradicts the empty-state hint).
-    if (dismissedSlidesRef.current.has(id)) {
-      dismissedSlidesRef.current.delete(id);
-      // Also clear the cached "this slide → analysis X" so the
-      // auto-detect refires with a fresh fetch.
-      bySlideCacheRef.current.delete(id);
-    }
-    if (id === activeId) {
-      // activeId didn't change so the auto-detect effect won't
-      // re-run. Manually nudge it by fetching here.
-      void fetch(`/api/analysis/by-slide?sketch_id=${encodeURIComponent(id)}`)
-        .then((r) => r.ok ? r.json() : null)
-        .then((b) => {
-          if (b?.analysis) setAnalysis(b.analysis);
-        }).catch(() => { /* ignore */ });
-      return;
-    }
     setActiveId(id);
-    // Library mode (or a pick outside the active deck): emit a
-    // sketch selection so the rest of the app tracks the canvas.
-    // In-deck picks only set activeId — changing selection to a
-    // sketch while analysis is set would re-fire the selection
-    // effect and fight subsequent arrow keys.
-    if (!analysis || !analysis.slides.includes(id)) {
-      const meta = deckSketches.find((s) => s.id === id)
-        ?? sketches?.find((s) => s.id === id);
-      if (meta) setSelection({ kind: "sketch", id: meta.id, name: meta.name });
-    }
-  }, [activeId, analysis, deckSketches, sketches, setSelection]);
+    const meta = librarySketches.find((s) => s.id === id)
+      ?? sketches?.find((s) => s.id === id);
+    if (meta) setSelection({ kind: "sketch", id: meta.id, name: meta.name });
+  }, [librarySketches, sketches, setSelection]);
 
-  // Right-click on a thumbnail → reuse the toolbar Delete/Duplicate
-  // flow, but targeted at the specific row. We activate that sketch
-  // first so `active` (which both handlers read) matches.
   const onPickerContextMenu = useCallback((e: React.MouseEvent, id: string) => {
     e.preventDefault();
     setPickerMenu({ sketchId: id, x: e.clientX, y: e.clientY });
@@ -853,9 +452,6 @@ export default function SketchTab() {
     setPickerMenu(null);
     setPickerOpen(false);
     if (activeId !== targetId) setActiveId(targetId);
-    // The Duplicate handler reads `active` (full record) so we
-    // need a render cycle for the activeId change to flow before
-    // calling it. Defer one tick.
     window.setTimeout(() => { void onDuplicate(); }, 0);
   }, [pickerMenu, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -868,220 +464,6 @@ export default function SketchTab() {
     window.setTimeout(() => { void onDelete(); }, 0);
   }, [pickerMenu, activeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Move-to dialog ────────────────────────────────────────────
-  // `null` = closed; non-null = open with this draft destination
-  // index (1-based, matching the user-visible "1 / N" counter).
-  const [moveDraft, setMoveDraft] = useState<string | null>(null);
-
-  // ── Deck menu (toolbar "Deck ▾" + badge click) ────────────────
-  // `{x, y}` of the open menu; null when hidden. Prefer the
-  // toolbar button — the badge alone was too easy to miss.
-  const [deckMenu, setDeckMenu] = useState<{ x: number; y: number } | null>(null);
-  const deckMenuBtnRef = useRef<HTMLButtonElement | null>(null);
-  // Confirmation modal triggered from the menu's "Delete deck"
-  // item — this is a heavy op (file removal + optional run cancel),
-  // worth a deliberate Yes/No.
-  const [confirmDeleteDeck, setConfirmDeleteDeck] = useState(false);
-
-  const openDeckMenu = useCallback((
-    e: React.MouseEvent,
-    anchor: "button" | "pointer" = "pointer",
-  ) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (anchor === "button" && deckMenuBtnRef.current) {
-      const r = deckMenuBtnRef.current.getBoundingClientRect();
-      // Drop below the button, right-aligned (menu ~200px wide).
-      setDeckMenu({
-        x: Math.max(8, r.right - 200),
-        y: r.bottom + 6,
-      });
-      return;
-    }
-    setDeckMenu({ x: e.clientX, y: e.clientY });
-  }, []);
-
-  useEffect(() => {
-    if (!deckMenu) return;
-    const close = () => setDeckMenu(null);
-    // Delay attach one tick so the opening click doesn't instantly
-    // close the menu (same pattern as the slide picker).
-    const t = window.setTimeout(() => {
-      window.addEventListener("click", close);
-    }, 0);
-    window.addEventListener("scroll", close, true);
-    window.addEventListener("resize", close);
-    return () => {
-      window.clearTimeout(t);
-      window.removeEventListener("click", close);
-      window.removeEventListener("scroll", close, true);
-      window.removeEventListener("resize", close);
-    };
-  }, [deckMenu]);
-
-  const onCloseDeck = useCallback(() => {
-    if (!analysis) return;
-    setDeckMenu(null);
-    // Remember every slide of the closed deck so the by-slide
-    // auto-detect effect doesn't immediately re-enter deck mode
-    // when the library lands on one of these sketches as the
-    // default active.
-    const deckSlides = new Set(analysis.slides ?? []);
-    for (const sid of deckSlides) {
-      dismissedSlidesRef.current.add(sid);
-    }
-    setAnalysis(null);
-    if (selection?.kind === "page" && selection.path === analysis.path) {
-      setSelection(null);
-    }
-    // Move the canvas off the deck's slides — without this the
-    // user just saw the badge vanish while the same slide stayed
-    // on screen and complained the deck "wasn't actually closed".
-    // Pick the first workspace sketch that isn't part of the
-    // closed deck; if there are none, drop to a blank canvas.
-    const fallback = (sketches ?? []).find((s) => !deckSlides.has(s.id));
-    setActive(null);
-    setActiveId(fallback ? fallback.id : null);
-  }, [analysis, selection, setSelection, sketches]);
-
-  const onRequestEdits = useCallback(() => {
-    if (!analysis) return;
-    setDeckMenu(null);
-    // Drop a prefilled deck-edit prompt into the rail input and
-    // focus it. The text points the model at the analysis page +
-    // slide files so it has a concrete starting point; the user
-    // appends what they actually want changed and presses enter.
-    const slideRefs = (analysis.slides || [])
-      .map((sid) => `  · ${sid} → .workbench/sketches/${sid}.json`)
-      .join("\n");
-    const prompt = (
-      `Edit the deck at ${analysis.path}.\n\n` +
-      `Slides (Excalidraw scenes, one .json per sketch id):\n${slideRefs}\n\n` +
-      `Tools available:\n` +
-      `  · author_slide(layout, slots, sketch_id=<id>) — overwrite a slide's scene\n` +
-      `  · append_slide(slug, sketch_id) — add a new slide to the deck\n` +
-      `  · Read the analysis page first to see slides:, sources:, and prose.\n\n` +
-      `Edits I want:\n  · `
-    );
-    window.dispatchEvent(new CustomEvent("sy:rail-set-input", {
-      detail: { text: prompt, focus: true },
-    }));
-  }, [analysis]);
-
-  const onExport = useCallback(async (fmt: "pptx" | "html") => {
-    if (!analysis) return;
-    setDeckMenu(null);
-    try {
-      const r = await fetch(`/api/decks/export/${fmt}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: analysis.path }),
-      });
-      if (!r.ok) {
-        const eb = await r.json().catch(() => ({} as Record<string, string>));
-        window.alert(`Export to ${fmt} failed: ${eb.error ?? r.status}`);
-        return;
-      }
-      const j = (await r.json()) as { path?: string };
-      window.dispatchEvent(new CustomEvent("sy:rail-system-tip", {
-        detail: { text: `Saved deck as \`${j.path ?? `vault/exports/…${fmt}`}\``, focus: false },
-      }));
-    } catch (e) {
-      window.alert(`Export to ${fmt} failed: ${(e as Error).message}`);
-    }
-  }, [analysis]);
-
-  const onRepopulate = useCallback(async () => {
-    if (!analysis) return;
-    setDeckMenu(null);
-    try {
-      const r = await fetch("/api/analysis/populate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ analysis_path: analysis.path }),
-      });
-      if (!r.ok) {
-        window.alert(`Repopulate failed: HTTP ${r.status}`);
-        return;
-      }
-      const j = (await r.json()) as { run_id?: string };
-      if (j.run_id) {
-        // Same spinner-tagging path the initial populate uses, so
-        // the deck badge shows the autopopulating indicator and the
-        // user can jump to the live transcript in Agents.
-        setDeckRun(analysis.path, j.run_id);
-      }
-    } catch (e) {
-      window.alert(`Repopulate failed: ${(e as Error).message}`);
-    }
-  }, [analysis]);
-
-  const onDeleteDeck = useCallback(async () => {
-    if (!analysis) return;
-    setConfirmDeleteDeck(false);
-    try {
-      const r = await fetch(
-        `/api/analysis?path=${encodeURIComponent(analysis.path)}`,
-        { method: "DELETE" },
-      );
-      if (!r.ok) {
-        window.alert(`Delete deck failed: HTTP ${r.status}`);
-        return;
-      }
-    } catch (e) {
-      window.alert(`Delete deck failed: ${(e as Error).message}`);
-      return;
-    }
-    // Drop deck-mode + clear any breadcrumb/spinner state. The
-    // selection/page that pinned us into deck mode is gone, so
-    // the empty-state branch will render until the user picks a
-    // new sketch or analysis.
-    clearDeckRun(analysis.path);
-    setAnalysis(null);
-    setActive(null);
-    setActiveId(null);
-    if (selection?.kind === "page" && selection.path === analysis.path) {
-      setSelection(null);
-    }
-    await reloadList();
-  }, [analysis, reloadList, selection, setSelection]);
-
-  const onMoveSubmit = useCallback(async () => {
-    if (moveDraft === null || !active || !analysis) return;
-    const dest1 = parseInt(moveDraft.trim(), 10);
-    if (!Number.isFinite(dest1)) {
-      setMoveDraft(null);
-      return;
-    }
-    const here0 = analysis.slides.indexOf(active.id);
-    if (here0 < 0) { setMoveDraft(null); return; }
-    const dest0 = Math.max(
-      0,
-      Math.min(analysis.slides.length - 1, dest1 - 1),
-    );
-    if (dest0 === here0) { setMoveDraft(null); return; }
-    // Splice-out then splice-in: stable across move-up vs move-down.
-    const next = analysis.slides.slice();
-    const [moved] = next.splice(here0, 1);
-    next.splice(dest0, 0, moved);
-    try {
-      await fetch("/api/analysis", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: analysis.path, slides: next }),
-      });
-      setAnalysis({ ...analysis, slides: next });
-    } catch (e) {
-      window.alert(`Move failed: ${(e as Error).message}`);
-    }
-    setMoveDraft(null);
-  }, [moveDraft, active, analysis]);
-
-  // ←/→ as global slide nav, but ONLY when the user isn't typing
-  // into something. Excalidraw and drawio both rely on arrow keys
-  // for canvas operations (panning, nudging selection), so we also
-  // skip when the canvas itself owns focus. Heuristic: anything
-  // inside an editable element or inside the canvas host bails.
   useEffect(() => {
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key !== "ArrowLeft" && ev.key !== "ArrowRight") return;
@@ -1091,15 +473,13 @@ export default function SketchTab() {
       if (t.tagName === "INPUT" || t.tagName === "TEXTAREA") return;
       const el = t as HTMLElement;
       if (el.isContentEditable) return;
-      if (el.closest(".sy-sketch-host")) return;  // canvas owns arrows
+      if (el.closest(".sy-sketch-host")) return;
       goTo(ev.key === "ArrowLeft" ? -1 : 1);
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
   }, [goTo]);
 
-  // Drop any in-flight rename when the active sketch changes —
-  // editing slide A's title should never bleed into slide B.
   useEffect(() => { setNameDraft(null); }, [active?.id]);
 
   const commitRename = useCallback(() => {
@@ -1110,11 +490,6 @@ export default function SketchTab() {
     void persist({ name: trimmed });
   }, [active, nameDraft, persist]);
 
-  // "Clear" replaces the active sketch's scene with an empty one.
-  // Destructive but reversible via Cmd-Z within the 5 s autosave
-  // window — that's the whole reason the autosave is debounced.
-  // Drawio's reset is a re-init through the iframe protocol; we
-  // signal that via a kind-specific reset event.
   const onClear = useCallback(async () => {
     if (!active) return;
     if (!window.confirm("Clear the canvas? Cmd-Z still undoes within 5 s.")) return;
@@ -1126,15 +501,9 @@ export default function SketchTab() {
         data: "<mxGraphModel><root><mxCell id=\"0\"/><mxCell id=\"1\" parent=\"0\"/></root></mxGraphModel>",
       });
     }
-    // Bump the canvas key so the embedded tool re-reads initialData
-    // and renders the now-empty scene.
     setClearVersion((v) => v + 1);
   }, [active, persist]);
 
-  // Image-deck mode (a .pptx rendered to PNGs, etc.) skips every
-  // Sketcher control surface and renders a standalone deck viewer.
-  // Hooks above this branch keep firing in stable order so React
-  // doesn't blow up on a kind-flip mid-session.
   if (selection?.kind === "image-deck") {
     return (
       <ImageDeckViewer
@@ -1144,7 +513,6 @@ export default function SketchTab() {
     );
   }
 
-  // ── Toolbar ────────────────────────────────────────────────────────
   return (
     <div className="sy-sketch">
       <div className="sy-sketch-toolbar">
@@ -1152,7 +520,7 @@ export default function SketchTab() {
           type="button"
           className="sy-vega-nav"
           onClick={() => goTo(-1)}
-          disabled={deckSketches.length < 2}
+          disabled={librarySketches.length < 2}
           title="Previous sketch"
         >←</button>
         <div className="sy-vega-title-block">
@@ -1181,66 +549,19 @@ export default function SketchTab() {
             </button>
           )}
           <span className="sy-vega-counter">
-            {idx >= 0 && deckSketches.length > 0
-              ? `${idx + 1} / ${deckSketches.length}${analysis ? " · in deck" : ""}`
+            {idx >= 0 && librarySketches.length > 0
+              ? `${idx + 1} / ${librarySketches.length}`
               : ""}
             {active && (
               <span className="sy-sketch-kind"> · {active.kind}</span>
             )}
           </span>
-          {analysis && (
-            <span
-              className="sy-sketch-deck-badge"
-              data-tip="Click to open deck menu"
-              title={`${analysis.path}`}
-              role="button"
-              tabIndex={0}
-              aria-haspopup="menu"
-              aria-expanded={Boolean(deckMenu)}
-              aria-label={`Deck: ${analysis.title}. Click to open deck menu.`}
-              onClick={(e) => openDeckMenu(e, "pointer")}
-              onContextMenu={(e) => openDeckMenu(e, "pointer")}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  // Synthetic position: under the badge centre.
-                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                  setDeckMenu({ x: r.left, y: r.bottom + 6 });
-                }
-              }}
-            >
-              deck: {analysis.title}
-              {populateRunId && (
-                <button
-                  type="button"
-                  className="sy-deck-spinner"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onSpinnerClick();
-                  }}
-                  title="Autopopulating slides — click to open the live transcript in Agents"
-                  aria-label="Autopopulating slides"
-                />
-              )}
-              <button
-                type="button"
-                className="sy-sketch-deck-close"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  onCloseDeck();
-                }}
-                title="Exit deck mode — drop back to the Sketch library. The deck file stays on disk."
-                aria-label="Close deck"
-              >×</button>
-            </span>
-          )}
         </div>
         <button
           type="button"
           className="sy-vega-nav"
           onClick={() => goTo(1)}
-          disabled={deckSketches.length < 2}
+          disabled={librarySketches.length < 2}
           title="Next sketch"
         >→</button>
         <button
@@ -1248,17 +569,11 @@ export default function SketchTab() {
           type="button"
           className="sy-vega-nav sy-vega-nav--picker"
           onClick={(e) => {
-            // Stop bubbling so the window-level close-on-outside
-            // handler (attached when the picker is already open)
-            // doesn't fire on this same event and immediately undo
-            // the open we're about to schedule.
             e.stopPropagation();
             setPickerOpen((v) => {
               const next = !v;
               if (next && pickerBtnRef.current) {
                 const r = pickerBtnRef.current.getBoundingClientRect();
-                // Drop the panel just below + right-aligned to the
-                // toggle. 320px is the picker width (matches CSS).
                 setPickerAnchor({
                   top: r.bottom + 6,
                   left: Math.max(8, r.right - 320),
@@ -1267,10 +582,10 @@ export default function SketchTab() {
               return next;
             });
           }}
-          disabled={deckSketches.length === 0}
+          disabled={librarySketches.length === 0}
           aria-haspopup="true"
           aria-expanded={pickerOpen}
-          title="Browse all slides"
+          title="Browse all sketches"
         >▾</button>
         <span className="sy-spacer" />
         {saveStatus && <span className="sy-sketch-save">{saveStatus}</span>}
@@ -1279,61 +594,14 @@ export default function SketchTab() {
             type="button"
             className="sy-vega-toolbar-btn"
             onClick={() => void onDuplicate()}
-            title={
-              analysis
-                ? "Duplicate this slide; the copy lands immediately after"
-                : "Duplicate this sketch"
-            }
+            title="Duplicate this sketch"
           >Duplicate</button>
-        )}
-        {active && analysis && deckSketches.length > 1 && (
-          <button
-            type="button"
-            className="sy-vega-toolbar-btn"
-            onClick={() => setMoveDraft(String(idx + 1))}
-            title="Move this slide to a different position in the deck"
-          >Move</button>
-        )}
-        {analysis && (
-          <button
-            type="button"
-            className="sy-vega-toolbar-btn"
-            onClick={onRequestEdits}
-            title="Drop a deck-edit primer into the rail and focus the cursor — describe what you want changed in plain English"
-          >Edits…</button>
-        )}
-        {analysis && (
-          <button
-            ref={deckMenuBtnRef}
-            type="button"
-            className={
-              "sy-vega-toolbar-btn sy-sketch-deck-menu-btn"
-              + (deckMenu ? " sy-vega-toolbar-btn--active" : "")
-            }
-            onClick={(e) => {
-              if (deckMenu) {
-                e.stopPropagation();
-                setDeckMenu(null);
-              } else {
-                openDeckMenu(e, "button");
-              }
-            }}
-            aria-haspopup="menu"
-            aria-expanded={Boolean(deckMenu)}
-            title="Deck menu — regenerate, export, close, delete"
-          >
-            Deck ▾
-          </button>
         )}
         <button
           type="button"
           className="sy-vega-toolbar-btn"
           onClick={() => setCreating({ name: "", kind: "excalidraw" })}
-          title={
-            analysis
-              ? `Add a sketch and append it to "${analysis.title}"`
-              : "Start a new sketch"
-          }
+          title="Start a new sketch"
         >+ Add Sketch</button>
         {active && (
           <button
@@ -1355,65 +623,6 @@ export default function SketchTab() {
       {listError && (
         <div className="sy-vega-banner sy-vega-banner--err">List error: {listError}</div>
       )}
-      {deckMenu && analysis && (
-        <ul
-          className="sy-context-menu sy-sketch-deck-menu"
-          role="menu"
-          style={{ top: deckMenu.y, left: deckMenu.x }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          <li
-            role="menuitem"
-            className="sy-context-menu-item"
-            onClick={() => { void onRepopulate(); }}
-            title="Re-run the autopopulate agent against this deck’s placeholders"
-          >
-            Regenerate deck
-          </li>
-          <li
-            role="menuitem"
-            className="sy-context-menu-item"
-            onClick={onRequestEdits}
-            title="Drop into the rail chat with a prefilled edit prompt"
-          >
-            Request edits…
-          </li>
-          <li
-            role="menuitem"
-            className="sy-context-menu-item"
-            onClick={() => { void onExport("pptx"); }}
-            title="Render this deck as a PowerPoint file in vault/exports/"
-          >
-            ↓ Save as .pptx
-          </li>
-          <li
-            role="menuitem"
-            className="sy-context-menu-item"
-            onClick={() => { void onExport("html"); }}
-            title="Render this deck as a single-file reveal.js HTML in vault/exports/"
-          >
-            ↓ Save as .html
-          </li>
-          <li
-            role="menuitem"
-            className="sy-context-menu-item"
-            onClick={onCloseDeck}
-            title="Exit deck mode without deleting the deck"
-          >
-            Close deck
-          </li>
-          <li
-            role="menuitem"
-            className="sy-context-menu-item sy-context-menu-item--danger"
-            onClick={() => {
-              setDeckMenu(null);
-              setConfirmDeleteDeck(true);
-            }}
-          >
-            Delete deck…
-          </li>
-        </ul>
-      )}
       {pickerOpen && (
         <div
           className="sy-sketch-picker"
@@ -1430,24 +639,16 @@ export default function SketchTab() {
           }
         >
           <div className="sy-sketch-picker-header">
-            {analysis ? (
-              <>Slides in <strong>{analysis.title}</strong> ({deckSketches.length})</>
-            ) : (
-              <>All sketches ({deckSketches.length})</>
-            )}
+            All sketches ({librarySketches.length})
           </div>
           <ul className="sy-sketch-picker-list">
-            {deckSketches.map((s, i) => (
+            {librarySketches.map((s, i) => (
               <li
                 key={s.id}
                 className={
                   "sy-sketch-picker-row" +
                   (s.id === activeId ? " sy-sketch-picker-row--active" : "")
                 }
-                // mousedown (not click): the window click-outside
-                // listener that closes the picker can race the row's
-                // click and drop the select — empty/placeholder rows
-                // then look "not selectable". mousedown fires first.
                 onMouseDown={(e) => {
                   if (e.button !== 0) return;
                   e.preventDefault();
@@ -1464,10 +665,6 @@ export default function SketchTab() {
                     src={`/figures/${encodeURIComponent(s.id)}.png?t=${s.updated_at ?? 0}`}
                     alt=""
                     onError={(e) => {
-                      // No PNG yet (autopopulate hasn't rendered, or
-                      // empty placeholder). Show a dashed empty frame
-                      // instead of a broken-image icon so the row
-                      // still reads as a real, clickable slide.
                       const img = e.currentTarget as HTMLImageElement;
                       img.style.display = "none";
                       const wrap = img.parentElement;
@@ -1512,111 +709,6 @@ export default function SketchTab() {
           </li>
         </ul>
       )}
-      {confirmDeleteDeck && analysis && (
-        <div
-          className="sy-confirm-backdrop"
-          onClick={() => setConfirmDeleteDeck(false)}
-        >
-          <div
-            className="sy-confirm"
-            role="dialog"
-            aria-labelledby="sy-sketch-delete-deck-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div id="sy-sketch-delete-deck-title" className="sy-confirm-title">
-              Delete deck
-            </div>
-            <div className="sy-confirm-body">
-              <p>
-                <strong>{analysis.title}</strong> ({analysis.slides.length}{" "}
-                slide{analysis.slides.length === 1 ? "" : "s"}) will be removed:
-              </p>
-              <ul style={{ margin: "8px 0 0 18px", padding: 0, fontSize: 12 }}>
-                <li>any in-flight populate agent for this deck is cancelled</li>
-                <li>every member sketch + its PNG export deleted</li>
-                <li>the analysis page at <code>{analysis.path}</code> deleted</li>
-              </ul>
-            </div>
-            <div className="sy-confirm-actions">
-              <button
-                type="button"
-                className="sy-confirm-btn"
-                onClick={() => setConfirmDeleteDeck(false)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="sy-confirm-btn sy-confirm-btn--primary"
-                onClick={() => void onDeleteDeck()}
-              >
-                Delete deck
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-      {moveDraft !== null && active && analysis && (
-        <div
-          className="sy-confirm-backdrop"
-          onClick={() => setMoveDraft(null)}
-        >
-          <div
-            className="sy-confirm"
-            role="dialog"
-            aria-labelledby="sy-sketch-move-title"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div id="sy-sketch-move-title" className="sy-confirm-title">
-              Move slide
-            </div>
-            <div className="sy-confirm-body">
-              <p>
-                <strong>{active.name}</strong> is currently slide{" "}
-                <strong>{idx + 1}</strong> of <strong>{deckSketches.length}</strong>.
-                Enter a destination position (1–{deckSketches.length}).
-              </p>
-              <input
-                type="number"
-                inputMode="numeric"
-                min={1}
-                max={deckSketches.length}
-                step={1}
-                autoFocus
-                className="sy-ws-input"
-                value={moveDraft}
-                onChange={(e) => setMoveDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    void onMoveSubmit();
-                  }
-                  if (e.key === "Escape") {
-                    e.preventDefault();
-                    setMoveDraft(null);
-                  }
-                }}
-              />
-            </div>
-            <div className="sy-confirm-actions">
-              <button
-                type="button"
-                className="sy-confirm-btn"
-                onClick={() => setMoveDraft(null)}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="sy-confirm-btn sy-confirm-btn--primary"
-                onClick={() => void onMoveSubmit()}
-              >
-                Move
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
       <div className="sy-sketch-host">
         {creating && (
           <CreateOverlay
@@ -1640,131 +732,19 @@ export default function SketchTab() {
             onPersist={(data, png_b64) => persist({ data, png_b64 })}
           />
         )}
-        {!creating && !active && analysis && analysis.slides.length === 0 && (
-          <div className="sy-vega-empty">
-            <h2>No slides in “{analysis.title}” yet</h2>
-            <p>
-              This deck’s <code>slides:</code> list is empty — usually a
-              failed autopopulate left the placeholders behind as
-              library orphans. Click <strong>Deck ▾</strong> in the
-              toolbar → <strong>Regenerate deck</strong> to re-scaffold
-              and fill placeholders, or <strong>+ Add Sketch</strong>
-              to author the first slide by hand. Source:{" "}
-              <code>{analysis.path}</code>.
-            </p>
-          </div>
-        )}
-        {!creating && !active && !analysis && sketches && sketches.length === 0 && (
+        {!creating && !active && sketches && sketches.length === 0 && (
           <div className="sy-vega-empty">
             <h2>No sketches yet</h2>
             <p>
               Click <strong>+ Add Sketch</strong> to start one. Sketches save to
               <code> .workbench/sketches/</code> as JSON; PNG exports go
               to <code>figures/</code> alongside the rest of the workspace
-              for easy embedding in docs. Open a doc and hit
-              <strong> → Slides</strong> in the Editor to scaffold a deck
-              from its headings.
-            </p>
-          </div>
-        )}
-        {!creating && !active && !analysis && sketches && sketches.length > 0 && (
-          <div className="sy-vega-empty">
-            <h2>Deck closed</h2>
-            <p>
-              You closed the deck — every workspace sketch belongs to a
-              dismissed deck. Click <strong>+ Add Sketch</strong> to start
-              fresh, or pick a sketch from the <strong>▾</strong> dropdown
-              to reopen it (deck mode will re-engage automatically).
+              for easy embedding in docs. Presentations are HTML slideshows
+              — use <strong>→ Slideshow</strong> in the Editor.
             </p>
           </div>
         )}
       </div>
-      {/* Presenter notes for the active slot — deck mode only. Keyed by
-          activeId so it re-seeds per slide and flushes a pending save on
-          slot switch (unmount). Written into the pptx (notes page) and
-          html (reveal speaker notes) exports. */}
-      {analysis && activeId && (
-        <SlotNotes
-          key={activeId}
-          analysisPath={analysis.path}
-          sketchId={activeId}
-          initial={analysis.slide_notes?.[activeId] ?? ""}
-          onSaved={(id, text) =>
-            setAnalysis((a) =>
-              a ? { ...a, slide_notes: { ...(a.slide_notes ?? {}), [id]: text } } : a,
-            )
-          }
-        />
-      )}
-    </div>
-  );
-}
-
-
-// ── Presenter notes (deck mode) ─────────────────────────────────────
-
-
-function SlotNotes(props: {
-  analysisPath: string;
-  sketchId: string;
-  initial: string;
-  onSaved: (sketchId: string, text: string) => void;
-}) {
-  const { analysisPath, sketchId, initial, onSaved } = props;
-  const [text, setText] = useState(initial);
-  const [status, setStatus] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const latest = useRef(initial);
-  const saved = useRef(initial);
-
-  const save = useCallback(async (t: string) => {
-    try {
-      const r = await fetch("/api/analysis/note", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: analysisPath, sketch_id: sketchId, note: t }),
-      });
-      if (!r.ok) { setStatus("save failed"); return; }
-      saved.current = t;
-      setStatus("saved");
-      onSaved(sketchId, t);
-    } catch {
-      setStatus("save failed");
-    }
-  }, [analysisPath, sketchId, onSaved]);
-
-  // Flush a pending edit when switching slots (this component unmounts
-  // on activeId change because it's keyed by it).
-  useEffect(() => () => {
-    if (timer.current) clearTimeout(timer.current);
-    if (latest.current !== saved.current) void save(latest.current);
-  }, [save]);
-
-  const onChange = (t: string) => {
-    setText(t);
-    latest.current = t;
-    setStatus("…");
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(() => void save(t), 1000);
-  };
-
-  return (
-    <div className="sy-sketch-notes">
-      <div className="sy-sketch-notes-head">
-        <span className="sy-sketch-notes-label">Presenter notes</span>
-        {status && <span className="sy-sketch-notes-status">{status}</span>}
-      </div>
-      <textarea
-        className="sy-sketch-notes-area"
-        value={text}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={() => {
-          if (timer.current) clearTimeout(timer.current);
-          if (latest.current !== saved.current) void save(latest.current);
-        }}
-        placeholder="Presenter notes for this slide — written into the pptx (notes page) and html (reveal speaker view) exports."
-        spellCheck
-      />
     </div>
   );
 }

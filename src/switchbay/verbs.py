@@ -540,7 +540,7 @@ register(Verb(
     description=(
         "List/open HTML slideshows (`slideshows/<slug>/`, "
         "`[[slideshow:slug|title]]`) or build one from markdown. "
-        "Not Sketch kind:deck. "
+        "HTML slideshows are the only presentation format. "
         "`/slideshows` lists; `/slideshow <slug>` opens; "
         "`/slideshow from-md <path.md> [slug] [--no-media]` builds "
         "(H1 title slide, H2 per slide, lists, image:/figure wikilinks, "

@@ -29,7 +29,7 @@ def test_curate_palette_is_a_small_subset():
     for banned in (
         "ce_sweep", "ce_run", "ce_ingest", "ce_graph_rebuild",
         "ce_planner", "create_report", "ask_thread",
-        "make_slides_from_doc", "table_run_sql",
+        "create_slideshow", "table_run_sql",
     ):
         assert banned not in curate_names
         assert banned not in chat_names
@@ -56,7 +56,7 @@ def test_ram_rungs_expand_and_never_include_ui_toolbox():
         assert "create_report" not in names
         assert "ask_thread" not in names
         assert "table_run_sql" not in names
-        assert "make_slides_from_doc" not in names
+        assert "create_slideshow" not in names
 
 
 def test_small_model_on_big_mac_stays_worker():

@@ -103,11 +103,13 @@ export function parseFrontmatter(raw: string): { properties: Frontmatter; body: 
   return { properties, body: m[2] };
 }
 
+const VAULT_CITE_RE = /\(vault:([^)\s]+)\)/g;
+
 export function expandWikilinks(md: string): string {
-  return md.replace(WIKILINK_RE, (_full, target: string, display?: string) => {
+  const out = md.replace(WIKILINK_RE, (_full, target: string, display?: string) => {
     const raw = target.trim();
     const text = (display ?? target).trim();
-    // HTML slideshows (NOT Sketch kind:deck): [[slideshow:slug|title]]
+    // HTML slideshows: [[slideshow:slug|title]]
     const showM = raw.match(/^slideshow:(.+)$/i);
     if (showM) {
       const slug = showM[1].trim();
@@ -143,6 +145,16 @@ export function expandWikilinks(md: string): string {
     const slug = raw.toLowerCase().replace(/\s+/g, "-");
     const href = `#page=${encodeURIComponent(slug)}`;
     return `<a class="wikilink" href="${href}">${escapeHtml(text)}</a>`;
+  });
+  return out.replace(VAULT_CITE_RE, (_full, inner: string) => {
+    const path = String(inner || "").trim();
+    if (!path || path.includes("..")) return _full;
+    const label = `vault:${path}`;
+    return (
+      `(<a class="sy-source-cite sy-source-cite--vault" `
+      + `href="#file=${encodeURIComponent(path)}" `
+      + `data-reveal-path="${escapeHtml(path)}">${escapeHtml(label)}</a>)`
+    );
   });
 }
 

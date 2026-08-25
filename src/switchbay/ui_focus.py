@@ -137,17 +137,10 @@ def combined_prompt_lines(workspace: Path) -> str | None:
 
     sketch = fresh.get("sketch")
     if sketch and sketch.get("sketch_id"):
-        idx = sketch.get("slide_index")
-        deck = sketch.get("deck_title") or sketch.get("analysis_path")
-        extra = ""
-        if idx is not None:
-            extra += f" slide {int(idx) + 1}"
-        if deck:
-            extra += f" in deck {deck}"
         lines.append(
-            f"UI focus · Sketch/slide `{sketch.get('name') or sketch['sketch_id']}`"
-            f"{extra} (id={sketch['sketch_id']}). "
-            f"Use sketch_context / author_slide(sketch_id=…) for edits."
+            f"UI focus · Sketch `{sketch.get('name') or sketch['sketch_id']}`"
+            f" (id={sketch['sketch_id']}). "
+            f"Use sketch_context / author_sketch(sketch_id=…) for edits."
         )
 
     if not lines:

@@ -982,6 +982,14 @@ body[data-sidebar="collapsed"] #modal {
   font-variant-numeric: tabular-nums;
   word-break: break-word;
 }
+#modal-properties a.sy-source-cite {
+  color: var(--accent);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  word-break: break-all;
+}
+#modal-properties a.sy-source-cite:hover { color: var(--text); }
 .prop-icon {
   color: var(--text-faint);
   display: inline-flex;

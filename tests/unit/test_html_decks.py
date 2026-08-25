@@ -31,7 +31,7 @@ def test_list_and_resolve(tmp_path: Path):
 def test_wiki_link_markdown():
     link = html_decks.wiki_link_markdown("foo", "Foo")
     assert "slideshow:foo" in link
-    assert "deck:foo" not in link  # reserved language for Sketch decks
+    assert "deck:foo" not in link
 
 
 def test_migrate_legacy_decks_moves_and_removes_root(tmp_path: Path):

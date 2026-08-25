@@ -105,6 +105,41 @@ def test_charter_proposal_reverts(tmp_path):
     assert dest.read_text(encoding="utf-8") == original
 
 
+def test_comment_and_keep_finalizes_and_records_feedback(tmp_path):
+    (tmp_path / "wiki").mkdir()
+    e = proposals.add(
+        tmp_path, op="create", kind="note", title="Draft",
+        body="# Draft\n\nBody.",
+    )
+    done = proposals.comment_and_keep(tmp_path, e["id"], "tone down the claim")
+    assert done is not None and done["status"] == "accepted"
+    text = (tmp_path / e["path"]).read_text(encoding="utf-8")
+    assert "tone down the claim" in text
+    fb = proposals.recent_review_feedback(tmp_path)
+    assert any("tone down the claim" in line for line in fb)
+
+
+def test_accept_all_proposed_keeps_files(tmp_path):
+    (tmp_path / "wiki").mkdir()
+    a = proposals.add(tmp_path, op="create", kind="note", title="A", body="a")
+    b = proposals.add(tmp_path, op="create", kind="note", title="B", body="b")
+    kept = proposals.accept_all_proposed(tmp_path)
+    assert {e["id"] for e in kept} == {a["id"], b["id"]}
+    assert (tmp_path / a["path"]).is_file()
+    assert (tmp_path / b["path"]).is_file()
+    assert proposals.has_proposed(tmp_path) is False
+
+
+def test_review_feedback_system_is_injected(tmp_path):
+    from switchbay import daemon
+    (tmp_path / "wiki").mkdir()
+    e = proposals.add(tmp_path, op="create", kind="note", title="Draft", body="x")
+    proposals.comment_and_keep(tmp_path, e["id"], "prefer shorter titles")
+    text = daemon._review_feedback_system(tmp_path)
+    assert "prefer shorter titles" in text
+    assert "Reviewer feedback" in text
+
+
 def test_accept_is_idempotent_once_resolved(tmp_path):
     (tmp_path / "wiki").mkdir()
     e = proposals.add(tmp_path, op="create", kind="note", title="N", body="x")

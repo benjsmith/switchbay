@@ -6,6 +6,19 @@ on:
   pull_request:
 
 jobs:
+  no-plugin-experiment:
+    name: VS Code plugin experiment must not be on this branch
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if experiment files are in the tree
+        run: |
+          if [ -e switchbay.code-workspace ] || [ -d extensions/switchbay ] || [ -d extensions/switchbay-sketch ]; then
+            echo "VS Code plugin files belong on exp/vscode-plugin, not main."
+            ls -la switchbay.code-workspace extensions 2>/dev/null || true
+            exit 1
+          fi
+
   python:
     name: Python unit tests + import smoke (${{ matrix.os }})
     strategy:

@@ -40,7 +40,7 @@ export function mountGraph(
   }
 
   window.Subgraph.init(data);
-  window.Modal.init(data);
+  window.Modal.init(data, container);
   let mode: ViewerMode = "classic";
   const wantAtlas = opts?.forceMode === "atlas"
     || (opts?.forceMode !== "classic" && atlasEnabled(data));

@@ -160,6 +160,76 @@ async def test_update_endpoint_403_when_locked(enterprise_env):
     assert "in_app_update" in body["error"]
 
 
+def test_update_repo_and_include_skills(tmp_path: Path, monkeypatch, enterprise_env):
+    assert admin_policy.update_repo() == "benjsmith/switchbay"
+    assert admin_policy.update_include_skills() is False
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "updates": {"repo": "acme/switchbay", "include_skills": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    admin_policy.reset_cache()
+    assert admin_policy.update_repo() == "acme/switchbay"
+    assert admin_policy.update_include_skills() is True
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "updates": {"repo": "not a repo", "include_skills": False},
+    }), encoding="utf-8")
+    admin_policy.reset_cache()
+    assert admin_policy.update_repo() == "benjsmith/switchbay"
+
+
+def test_stamp_enterprise_user_policy(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("SWITCHBAY_ADMIN_POLICY", raising=False)
+    monkeypatch.delenv("SWITCHBAY_PROFILE", raising=False)
+    dest = admin_policy.stamp_enterprise_user_policy(tmp_path)
+    assert dest == tmp_path / "admin.json"
+    data = json.loads(dest.read_text(encoding="utf-8"))
+    assert data["profile"] == "enterprise"
+    assert data["allow_profile_override"] is True
+    assert data["features"]["in_app_update"] is False
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(dest))
+    admin_policy.reset_cache()
+    assert admin_policy.profile() == "enterprise"
+    assert not admin_policy.feature_enabled("in_app_update")
+    admin_policy.reset_cache()
+
+
+def test_egress_allows_github_when_in_app_update(tmp_path: Path, monkeypatch, enterprise_env):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "features": {"in_app_update": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    admin_policy.reset_cache()
+    assert admin_policy.egress_allowed("https://api.github.com/repos/acme/sb/releases/latest")
+    assert admin_policy.egress_allowed("https://github.com/acme/sb")
+    assert admin_policy.egress_allowed("https://codeload.github.com/acme/sb/tar.gz/v1")
+    assert not admin_policy.egress_allowed("https://evil.example/")
+
+
+@pytest.mark.asyncio
+async def test_update_endpoint_200_when_flag_on(tmp_path: Path, monkeypatch):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "features": {"in_app_update": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "enterprise")
+    admin_policy.reset_cache()
+    monkeypatch.setattr(daemon.updater, "apply", lambda: {
+        "ok": True, "updated": False, "summary": "Already up to date.",
+        "components": [], "error": None,
+    })
+    req = make_mocked_request("POST", "/api/update", app={})
+    resp = await daemon.handle_update(req)
+    assert resp.status == 200
+    admin_policy.reset_cache()
+
+
 def test_run_command_echo(tmp_path: Path):
     out = tools.execute("run_command", tmp_path, {"argv": [sys.executable, "-c", "print(123)"]})
     assert out.get("ok") is True

@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { minimapBottomOffset } from "./minimapAnchor";
 import type { RailEntry } from "../rail/Rail";
 import {
-  DecisionRow, PermissionRow, ProposalRow, ProviderRetryRow, MicroEditFeedbackRow,
+  DecisionRow, PermissionRow, ProviderRetryRow, MicroEditFeedbackRow,
   LocalModelsCheckRow, LocalModelsDiscoveryRow,
   ReasoningRow, detectUserKind,
   mdWithWikilinks, prettyJson, summariseInput, uploadFile,
@@ -685,7 +685,6 @@ export default function ZenChatBox({
  *  in the response half, chips stay consistent with Power). */
 function ResponseItem({ entry: e }: { entry: RailEntry }) {
   if (e.source === "decision") return <DecisionRow entry={e} />;
-  if (e.source === "proposal") return <ProposalRow entry={e} />;
   if (e.source === "provider_retry") return <ProviderRetryRow entry={e} />;
   if (e.source === "permission") return <PermissionRow entry={e} />;
   if (e.source === "reasoning") return <ReasoningRow text={e.text} />;

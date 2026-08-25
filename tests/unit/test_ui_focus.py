@@ -22,8 +22,7 @@ def test_combined_prompt_includes_fresh_surfaces(tmp_path: Path):
     ui_focus.save(tmp_path, "table", {"sql": "SELECT * FROM pages LIMIT 5"})
     ui_focus.save(tmp_path, "plot", {"id": "sales", "name": "Sales"})
     ui_focus.save(tmp_path, "sketch", {
-        "sketch_id": "slide-1", "name": "Title", "slide_index": 0,
-        "deck_title": "My deck",
+        "sketch_id": "slide-1", "name": "Title",
     })
     text = ui_focus.combined_prompt_lines(tmp_path)
     assert text is not None
@@ -31,6 +30,7 @@ def test_combined_prompt_includes_fresh_surfaces(tmp_path: Path):
     assert "Table SQL" in text
     assert "Plot" in text and "sales" in text
     assert "Sketch" in text and "slide-1" in text
+    assert "author_sketch" in text
 
 
 def test_empty_workspace_no_prompt(tmp_path: Path):

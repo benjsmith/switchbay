@@ -3,6 +3,99 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-25 — v0.11.4 — Reviews tab renders a page preview
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Reviews shows proposed wiki pages as a rendered preview (frontmatter
+  properties + markdown), not a raw markdown dump.
+
+## 2026-08-25 — v0.11.3 — Graph modal source links actually click
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Graph document-modal ``sources`` bind clicks on the modal root
+  (not a global ``#modal-properties`` that can miss the mounted
+  tab). Basename refs try ``vault/`` then ``wiki/`` from the
+  frontend so Open works even if the running daemon is older.
+
+## 2026-08-25 — v0.11.2 — Frontmatter sources open natively
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Wiki frontmatter ``sources`` (Editor preview and Graph document
+  modal) are links. Click opens the file with the OS default app
+  (Preview, browser, …), resolving a basename under ``vault/`` or
+  ``wiki/`` when needed.
+
+## 2026-08-25 — v0.11.1 — Enterprise Update + tester install
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Settings → Update no longer flashes on for enterprise while policy is
+  loading (fail-closed). When `in_app_update` is off, the control is a
+  disabled “IT package” button instead of a live GitHub update.
+- In-app update, when IT bakes it on, keeps `admin.json` /
+  `admin.baked.json` / `SWITCHBAY_PROFILE` across git checkout and
+  rebuild. Packaged (non-git) trees skip with a message to use the
+  organization package. Skill `npx` updates honour
+  `install_skills_npx`; enterprise defaults to Switch Bay only
+  (`updates.include_skills: false`).
+
+### Added
+
+- `service install --enterprise-user` (also `make install-service
+  ENTERPRISE_USER=1` / `bash scripts/install.sh --enterprise-user`)
+  writes `<repo>/admin.json` from the enterprise template with no
+  `/Library` or ProgramData access — for testers.
+- Bake `--in-app-update` and `--update-repo owner/name` so a fleet can
+  self-update from GitHub without a new portal package per version,
+  while keeping the bake-time policy.
+
+## 2026-08-25 — v0.11.0 — Slideshows, Reviews, and install hardening
+
+**Migration:** leftover `kind: deck` wiki pages are kept as ordinary
+documents; their sketches stay in the Sketch library. Presentations
+are HTML slideshows under `slideshows/<slug>/`. **Breaking:** sketch-deck
+authoring tools (`make_slides_from_doc`, `compose_analysis`,
+`author_slide`) and Sketch-tab deck mode are removed. Use
+`create_slideshow` / **→ Slideshow** and `author_sketch` instead.
+
+### Added
+
+- HTML slideshows as the only presentation surface, with a Slideshow
+  tab, markdown-from-doc creation, and **Save as PDF** (one 16:9 page
+  per slide, fonts and local assets resolved).
+- Reviews tab as the only proposal surface: provisional wiki writes,
+  reject restores prior content, comments keep the page and feed the
+  next curation cycle, close/ignore keeps remaining drafts.
+- Clicking a local source or `(vault:…)` citation switches the sidebar
+  to Files, expands ancestors, and highlights the row.
+
+### Changed
+
+- Installs consume locked `uv.lock` / `pnpm-lock.yaml`; pnpm 11 build
+  scripts are an explicit allowlist.
+- Enterprise Add Workspace may run only the bundled Curiosity Engine
+  `scripts/setup.sh` through a narrow trusted path.
+- `/curate` uses the adaptive orchestrator; Copilot-only runs can
+  still spread work across distinct available models.
+- Agent Space keeps the last DAG while idle and pages concurrent root
+  DAGs. Atlas mounts individual nodes on the first frame.
+
+### Fixed
+
+- Proposal accept/reject cards no longer appear in the rail.
+- Sketch tab is a library of ordinary drawings, not a slide carousel.
+
 ## 2026-08-24 — v0.10.0 — Auto orchestration
 
 **Migration:** none. **Breaking:** none. Explicit `n≥2` fan-out and

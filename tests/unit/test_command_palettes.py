@@ -19,15 +19,16 @@ def test_deck_palette_is_just_deck_tools():
     assert got.name == "deck"
     assert got.source == "shipped"
     names = set(got.tools)
-    assert "author_slide" in names
-    assert "make_slides_from_doc" in names
+    assert "author_sketch" in names
+    assert "create_slideshow" not in names  # strong-only, dropped on ram16
     assert "search_wiki" in names
     assert "ce_run" not in names
     assert "ce_sweep" not in names
     assert "create_report" not in names
     # Default RAM desk still bans decks; the command desk opts them in.
     chat = set(rung.chat_tools)
-    assert "author_slide" not in chat
+    assert "author_sketch" not in chat
+    assert "create_slideshow" not in chat
 
 
 def test_curate_follows_rung_unless_overridden(tmp_path: Path):
@@ -54,24 +55,24 @@ def test_ingest_is_not_the_curate_desk():
     assert got.name == "ingest"
     assert "ce_ingest" in got.tools
     assert "ce_sweep" not in got.tools
-    assert "author_slide" not in got.tools
+    assert "author_sketch" not in got.tools
 
 
 def test_user_command_infers_tools(tmp_path: Path):
     rung = _rung()
-    body = "Turn $ARGUMENTS into slides. Call author_slide on each heading."
+    body = "Turn $ARGUMENTS into slides. Call author_sketch on each heading."
     got = command_palettes.resolve(
         tmp_path, "weekly-update", rung=rung, template=body,
     )
     assert got is not None
     assert got.source == "inferred"
-    assert "author_slide" in got.tools
+    assert "author_sketch" in got.tools
     hinted = command_palettes.resolve(
         tmp_path, "make-me-a-deck", rung=rung,
         template="Please make a slide deck from the charter.",
     )
     assert hinted is not None
-    assert "make_slides_from_doc" in hinted.tools
+    assert "author_sketch" in hinted.tools
 
 
 def test_unknown_command_without_tools_is_none():
@@ -113,9 +114,17 @@ def test_deck_fits_ram16_budget():
         rung=rung,
         messages=[{"role": "user", "content": "make slides from wiki/index.md"}],
     )
-    assert {t["name"] for t in specs} >= {"author_slide", "make_slides_from_doc"}
+    assert "author_sketch" in {t["name"] for t in specs}
+    assert "create_slideshow" not in {t["name"] for t in specs}
     assert stats["total"] <= rung.prompt_budget
-    assert "author_slide" in {t["name"] for t in specs}
+
+
+def test_deck_palette_keeps_create_slideshow_on_large_rung():
+    rung = _rung(48, "Qwen3.8-27B")
+    got = command_palettes.resolve(None, "deck", rung=rung)
+    assert got is not None
+    assert "create_slideshow" in got.tools
+    assert "author_sketch" in got.tools
 
 
 def test_clip_drops_trailing_tools():
@@ -124,10 +133,8 @@ def test_clip_drops_trailing_tools():
         "search_wiki",
         "read_wiki_page",
         "list_wiki_pages",
-        "author_slide",
-        "make_slides_from_doc",
-        "make_slides_from_docs",
-        "compose_analysis",
+        "author_sketch",
+        "create_slideshow",
         "sketch_context",
         "sketch_show",
     )
@@ -145,7 +152,7 @@ def test_describe_all_includes_shipped_and_user_cmd(tmp_path: Path):
     cmd_dir = tmp_path / ".workbench" / "commands"
     cmd_dir.mkdir(parents=True)
     (cmd_dir / "weekly.md").write_text(
-        "Fill slides with author_slide.\n", encoding="utf-8",
+        "Fill slides with author_sketch.\n", encoding="utf-8",
     )
     payload = command_palettes.describe_all(tmp_path, rung)
     names = {c["name"] for c in payload["commands"]}
@@ -153,24 +160,24 @@ def test_describe_all_includes_shipped_and_user_cmd(tmp_path: Path):
     assert "curate" in names
     assert "weekly" in names
     deck = next(c for c in payload["commands"] if c["name"] == "deck")
-    assert "author_slide" in deck["tools"]
+    assert "author_sketch" in deck["tools"]
     assert payload["rung"]["id"] == "ram16"
-    assert any(t["name"] == "author_slide" for t in payload["catalog"])
+    assert any(t["name"] == "author_sketch" for t in payload["catalog"])
 
 
 def test_set_and_clear_override(tmp_path: Path):
     saved = command_palettes.set_override(
-        tmp_path, "deck", ["author_slide", "no-such-tool"],
+        tmp_path, "deck", ["author_sketch", "no-such-tool"],
     )
-    assert saved == ["author_slide"]
+    assert saved == ["author_sketch"]
     assert command_palettes.clear_override(tmp_path, "create-deck") is True
     assert command_palettes.clear_override(tmp_path, "deck") is False
 
 
 def test_empty_override_resets(tmp_path: Path):
-    command_palettes.set_override(tmp_path, "deck", ["author_slide"])
+    command_palettes.set_override(tmp_path, "deck", ["author_sketch"])
     assert command_palettes.set_override(tmp_path, "deck", []) == []
     got = command_palettes.resolve(tmp_path, "deck", rung=_rung())
     assert got is not None
     assert got.source == "shipped"
-    assert "make_slides_from_doc" in got.tools
+    assert "author_sketch" in got.tools

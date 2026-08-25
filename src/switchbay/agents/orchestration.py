@@ -65,8 +65,8 @@ WRITE_TOOLS = frozenset({
     "ce_run", "ce_sweep", "ce_ingest", "ce_graph_rebuild",
     "ce_vault_index", "ce_lint", "ce_naming", "ce_tables", "ce_figures",
     "ce_scan", "ce_planner", "ce_score_diff", "ce_scrub_check",
-    "create_report", "save_plot", "save_skill", "author_slide",
-    "run_command", "compose_analysis",
+    "create_report", "create_slideshow", "save_plot", "save_skill",
+    "author_sketch", "run_command",
 })
 
 PARENT_ALLOW = frozenset(rail_default.ALLOWED_TOOLS)
@@ -91,7 +91,7 @@ EXECUTE_TOOLS: tuple[str, ...] = (
 # Single-owner synthesizer may emit a Library/Report artifact. Not
 # granted to investigators (keeps sibling independence).
 SYNTH_TOOLS: tuple[str, ...] = (
-    "create_report", "propose_wiki_page", "propose_page_edit",
+    "create_report", "create_slideshow", "propose_wiki_page", "propose_page_edit",
 )
 
 # Curation keeps one writer: investigators independently inspect the wiki,
