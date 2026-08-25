@@ -6,11 +6,23 @@
   <title>Graph</title>
   <!-- classic SVG needs a real height; VS Code webviews start at 0 without this. -->
   <style>
-    html, body, #root, #mount, .ce-graph-root, #graph-pane, #graph {
-      height: 100%; width: 100%; margin: 0; overflow: hidden;
+    html, body, #root, #mount, .ce-graph-root {
+      height: 100%; width: 100%; margin: 0; padding: 0;
+      overflow: hidden; box-sizing: border-box; min-width: 0;
     }
-    #graph-pane { min-height: 0; display: flex; flex-direction: column; }
-    #graph { flex: 1; min-height: 0; }
+    /* VS Code injects body padding; width:100% + padding clips right chrome. */
+    body { padding: 0 !important; scrollbar-width: none; }
+    html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
+    .ce-graph-root { display: flex; flex-direction: column; }
+    #graph-pane {
+      flex: 1; min-height: 0; min-width: 0;
+      display: flex; flex-direction: column;
+    }
+    #graph { flex: 1; min-height: 0; min-width: 0; }
+    /* Keep gear + minimap inside the webview; overflow:hidden eats their
+       right edge at the PWA's 12–14px inset. */
+    .settings-trigger, .settings-panel { right: 22px; }
+    .atlas-minimap, .classic-minimap { right: 20px !important; }
     body { background: var(--bg, #0f1115); color: var(--text, #e6e8eb); }
     .ctx-menu {
       position: fixed; z-index: 40; min-width: 12rem;
