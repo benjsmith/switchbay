@@ -10,6 +10,7 @@ import {
 } from "./dashboard";
 import { runsRoot } from "./orch";
 import { repoRoot, workspaceFolder } from "./paths";
+import { openWikiPage } from "./preview";
 
 function nonce(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -104,7 +105,7 @@ export function openGraph(context: vscode.ExtensionContext): void {
     if (!node) return;
     const uri = wikiPageUri(folder, node.path);
     if (msg.type === "open") {
-      await vscode.window.showTextDocument(uri);
+      await openWikiPage(uri);
       return;
     }
     if (msg.type === "preview") {

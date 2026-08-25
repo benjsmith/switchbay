@@ -1,6 +1,8 @@
+import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { splitFrontmatter } from "./ce";
+import { parseWikiFrontmatter } from "./ce";
+import { nextWikiPlacement, previewButtonPlacement, PREVIEW_TYPE } from "./layout";
 import { workspaceFolder } from "./paths";
 
 const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
@@ -110,28 +112,53 @@ function nonce(): string {
   return s;
 }
 
-export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
-  const target = uri
-    ?? vscode.window.activeTextEditor?.document.uri
-    ?? (vscode.window.activeTextEditor ? undefined : undefined);
-  const docUri = target ?? vscode.window.activeTextEditor?.document.uri;
-  if (!docUri) {
-    void vscode.window.showWarningMessage("Open a markdown file first.");
-    return;
-  }
-  const folder = workspaceFolder();
-  if (!folder) return;
-  const doc = await vscode.workspace.openTextDocument(docUri);
-  const { properties, body } = splitFrontmatter(doc.getText());
-  const htmlBody = renderMarkdown(expandWikilinks(body));
-  const panel = vscode.window.createWebviewPanel(
-    "switchbay.preview",
-    `Preview: ${path.basename(docUri.fsPath)}`,
-    vscode.ViewColumn.Beside,
-    { enableScripts: true, localResourceRoots: [folder] },
-  );
+const previewPanels = new Set<vscode.WebviewPanel>();
 
-  const rewriteImgs = htmlBody.replace(
+function panelInColumn(column: vscode.ViewColumn): vscode.WebviewPanel | undefined {
+  for (const p of previewPanels) {
+    if (p.viewColumn === column) return p;
+  }
+  return [...previewPanels].find((p) => p.visible);
+}
+
+function sourceAnchor(raw: string): string {
+  const label = path.basename(raw);
+  return `<a class="source-link" href="#" data-source="${escapeHtml(raw)}">${escapeHtml(label)}</a>`;
+}
+
+function propertiesTable(properties: Record<string, string>, lists: Record<string, string[]>): string {
+  const keys = new Set([...Object.keys(properties), ...Object.keys(lists)]);
+  keys.delete("title");
+  const rows: string[] = [];
+  for (const k of keys) {
+    const items = lists[k]?.length ? lists[k] : (properties[k] ? [properties[k]] : []);
+    if (!items.length) continue;
+    const isPathish = k === "sources" || k === "relates_to" || items.some((v) => /\.(md|pdf|png|jpg)$/i.test(v) || v.startsWith("vault:"));
+    const cell = isPathish
+      ? `<div class="source-list">${items.map(sourceAnchor).join("")}</div>`
+      : escapeHtml(items.join(", "));
+    rows.push(`<tr><td class="k">${escapeHtml(k)}</td><td class="v">${cell}</td></tr>`);
+  }
+  return rows.length ? `<section class="properties"><table>${rows.join("")}</table></section>` : "";
+}
+
+function expandVaultCites(html: string): string {
+  return html.replace(/\(vault:([^)]+)\)/g, (_m, raw: string) => {
+    const p = String(raw).trim();
+    return `(vault:${sourceAnchor(p)})`;
+  });
+}
+
+async function paintPreview(
+  panel: vscode.WebviewPanel,
+  docUri: vscode.Uri,
+  folder: vscode.Uri,
+): Promise<void> {
+  const doc = await vscode.workspace.openTextDocument(docUri);
+  const { properties, lists, body } = parseWikiFrontmatter(doc.getText());
+  let htmlBody = renderMarkdown(expandWikilinks(body));
+  htmlBody = expandVaultCites(htmlBody);
+  htmlBody = htmlBody.replace(
     /<img alt="([^"]*)" data-src="([^"]+)" \/>/g,
     (_m, alt: string, src: string) => {
       const rel = src.replace(/^\.\//, "");
@@ -143,7 +170,6 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
       }
     },
   );
-
   const n = nonce();
   const csp = [
     `default-src 'none'`,
@@ -151,12 +177,7 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
     `img-src ${panel.webview.cspSource} data: https:`,
     `script-src 'nonce-${n}'`,
   ].join("; ");
-
-  const propRows = Object.entries(properties)
-    .filter(([k]) => k !== "title")
-    .map(([k, v]) => `<tr><td class="k">${escapeHtml(k)}</td><td class="v source" data-source="${escapeHtml(v)}">${escapeHtml(v)}</td></tr>`)
-    .join("");
-
+  panel.title = `Preview: ${path.basename(docUri.fsPath)}`;
   panel.webview.html = `<!DOCTYPE html>
 <html>
 <head>
@@ -164,9 +185,10 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
 <meta http-equiv="Content-Security-Policy" content="${csp}" />
 <style>
   body { font-family: var(--vscode-font-family); padding: 1.5rem 2rem; color: var(--vscode-foreground); }
-  a.wikilink { color: var(--vscode-textLink-foreground); }
+  a.wikilink, a.source-link { color: var(--vscode-textLink-foreground); cursor: pointer; }
+  a.source-link { display: block; margin: 0.15rem 0; }
   table { border-collapse: collapse; margin: 1rem 0; }
-  th, td { border: 1px solid var(--vscode-widget-border, #444); padding: 0.25rem 0.6rem; }
+  th, td { border: 1px solid var(--vscode-widget-border, #444); padding: 0.25rem 0.6rem; vertical-align: top; }
   .properties { margin-bottom: 1.5rem; }
   .k { opacity: 0.7; }
   img { max-width: 100%; }
@@ -180,15 +202,19 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
 </head>
 <body>
   <h1>${escapeHtml(properties.title || path.basename(docUri.fsPath, ".md"))}</h1>
-  ${propRows ? `<section class="properties"><table>${propRows}</table></section>` : ""}
-  <article class="md">${rewriteImgs}</article>
+  ${propertiesTable(properties, lists)}
+  <article class="md">${htmlBody}</article>
   <div id="ctx" class="ctx" hidden></div>
   <script nonce="${n}">
     const vscode = acquireVsCodeApi();
     document.addEventListener("click", (ev) => {
-      const a = ev.target.closest("a.wikilink");
-      if (!a) return;
+      const a = ev.target.closest("a.wikilink, a.source-link");
+      if (!a) { document.getElementById("ctx").hidden = true; return; }
       ev.preventDefault();
+      if (a.classList.contains("source-link")) {
+        vscode.postMessage({ type: "source", action: "open", path: a.dataset.source || "" });
+        return;
+      }
       vscode.postMessage({
         type: "wikilink",
         page: a.dataset.page || "",
@@ -197,19 +223,19 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
       });
     });
     document.addEventListener("contextmenu", (ev) => {
-      const cell = ev.target.closest("td.source");
-      if (!cell) return;
+      const a = ev.target.closest("a.source-link");
+      if (!a) return;
       ev.preventDefault();
       const menu = document.getElementById("ctx");
       menu.hidden = false;
       menu.style.left = ev.pageX + "px";
       menu.style.top = ev.pageY + "px";
       menu.innerHTML = "";
-      const src = cell.dataset.source || "";
+      const src = a.dataset.source || "";
       for (const [label, action] of [
+        ["Open", "open"],
         ["Reveal in Explorer", "reveal"],
         ["Reveal in OS", "revealOS"],
-        ["Open", "open"],
       ]) {
         const b = document.createElement("button");
         b.textContent = label;
@@ -217,12 +243,15 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
         menu.appendChild(b);
       }
     });
-    document.addEventListener("click", () => { document.getElementById("ctx").hidden = true; });
   </script>
 </body>
 </html>`;
+}
 
-  panel.webview.onDidReceiveMessage(async (msg: { type?: string; page?: string; slideshow?: string; report?: string; action?: string; path?: string }) => {
+function bindPreviewMessages(panel: vscode.WebviewPanel, folder: vscode.Uri): void {
+  panel.webview.onDidReceiveMessage(async (msg: {
+    type?: string; page?: string; slideshow?: string; report?: string; action?: string; path?: string;
+  }) => {
     if (msg.type === "wikilink") {
       if (msg.slideshow) {
         const deck = vscode.Uri.joinPath(folder, "slideshows", msg.slideshow, "index.html");
@@ -231,7 +260,7 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
       }
       if (msg.page) {
         const guess = wikiGuess(folder, msg.page);
-        if (guess) await vscode.window.showTextDocument(guess);
+        if (guess) await openWikiPage(guess);
       }
       return;
     }
@@ -241,21 +270,81 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
   });
 }
 
+async function showPreviewInColumn(docUri: vscode.Uri, column: vscode.ViewColumn, preserveFocus: boolean): Promise<void> {
+  const folder = workspaceFolder();
+  if (!folder) return;
+  let panel = panelInColumn(column);
+  if (!panel) {
+    panel = vscode.window.createWebviewPanel(
+      PREVIEW_TYPE,
+      `Preview: ${path.basename(docUri.fsPath)}`,
+      { viewColumn: column, preserveFocus },
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [folder] },
+    );
+    previewPanels.add(panel);
+    panel.onDidDispose(() => previewPanels.delete(panel!));
+    bindPreviewMessages(panel, folder);
+  } else {
+    panel.reveal(column, preserveFocus);
+  }
+  await paintPreview(panel, docUri, folder);
+}
+
+/** Wiki tree / graph / wikilink: respect the current split layout. */
+export async function openWikiPage(uri: vscode.Uri): Promise<void> {
+  const place = nextWikiPlacement();
+  if (place.md != null) {
+    await vscode.window.showTextDocument(uri, {
+      viewColumn: place.md,
+      preview: true,
+      preserveFocus: false,
+    });
+  }
+  if (place.preview != null) {
+    await showPreviewInColumn(uri, place.preview, place.md != null);
+  }
+}
+
+export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
+  const docUri = uri ?? vscode.window.activeTextEditor?.document.uri;
+  if (!docUri) {
+    void vscode.window.showWarningMessage("Open a markdown file first.");
+    return;
+  }
+  const place = previewButtonPlacement();
+  const column = place.preview ?? vscode.ViewColumn.Beside;
+  await showPreviewInColumn(docUri, column, false);
+}
+
 function wikiGuess(folder: vscode.Uri, slug: string): vscode.Uri | undefined {
+  const trimmed = slug.replace(/^wiki\//, "").replace(/\.md$/i, "");
   const candidates = [
-    `wiki/${slug}.md`,
-    `wiki/${slug}`,
-    slug.endsWith(".md") ? slug : `${slug}.md`,
+    `wiki/${trimmed}.md`,
+    `wiki/${trimmed}`,
+    `${trimmed}.md`,
   ];
   for (const rel of candidates) {
     const uri = vscode.Uri.joinPath(folder, rel);
-    try {
-      return uri;
-    } catch {
-      continue;
-    }
+    if (fs.existsSync(uri.fsPath)) return uri;
   }
-  return vscode.Uri.joinPath(folder, "wiki", `${slug}.md`);
+  return vscode.Uri.joinPath(folder, "wiki", `${trimmed}.md`);
+}
+
+function resolveSourceUri(folder: vscode.Uri, raw: string): vscode.Uri {
+  const cleaned = raw.replace(/^["']|["']$/g, "").replace(/^vault:/, "").replace(/^\.\//, "");
+  const base = path.basename(cleaned);
+  const cands = [
+    path.isAbsolute(cleaned) ? cleaned : "",
+    path.join(folder.fsPath, cleaned),
+    path.join(folder.fsPath, "vault", cleaned),
+    path.join(folder.fsPath, "vault", base),
+    path.join(folder.fsPath, "wiki", cleaned),
+    path.join(folder.fsPath, "wiki", base),
+  ].filter(Boolean);
+  for (const p of cands) {
+    if (fs.existsSync(p)) return vscode.Uri.file(p);
+  }
+  return vscode.Uri.joinPath(folder, "vault", base);
 }
 
 async function handleSourceAction(folder: vscode.Uri, action: string, raw: string): Promise<void> {
@@ -264,10 +353,7 @@ async function handleSourceAction(folder: vscode.Uri, action: string, raw: strin
     await vscode.env.openExternal(vscode.Uri.parse(cleaned));
     return;
   }
-  const rel = cleaned.replace(/^\/+/, "");
-  const uri = path.isAbsolute(cleaned)
-    ? vscode.Uri.file(cleaned)
-    : vscode.Uri.joinPath(folder, rel);
+  const uri = resolveSourceUri(folder, cleaned);
   if (action === "revealOS") {
     await vscode.commands.executeCommand("revealFileInOS", uri);
     return;
@@ -277,7 +363,7 @@ async function handleSourceAction(folder: vscode.Uri, action: string, raw: strin
     return;
   }
   try {
-    await vscode.window.showTextDocument(uri);
+    await vscode.window.showTextDocument(uri, { preview: true });
   } catch {
     await vscode.env.openExternal(uri);
   }

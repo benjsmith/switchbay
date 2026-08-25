@@ -71,6 +71,10 @@ Hard rules:
   it never paints markdown-harvested edges. The **view:** control
   switches to Knowledge Atlas.
 - Graph node **click** → open the `.md` in a normal VS Code tab.
+- Wiki tree / graph clicks reuse editor groups from the current split
+  (MD-only, preview-only, or paired MD+preview, cycling when several
+  groups are open). VS Code's own reuse is `workbench.editor.enablePreview`
+  in the *active* group; `ViewColumn.Beside` always splits.
 - Graph node **right-click** → Open preview, Reveal in Explorer, To
   plot, To sketch, To slideshow. The last three insert the matching
   slash into Chat and store results as files (figures / sketches /

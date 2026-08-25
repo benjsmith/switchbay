@@ -8,7 +8,7 @@ import { disposeMcp } from "./mcp";
 import { registerMcpProvider } from "./mcpProvider";
 import { startCurate } from "./orch";
 import { workspaceFolder } from "./paths";
-import { openWikiPreview } from "./preview";
+import { openWikiPage, openWikiPreview } from "./preview";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
 import { WikiTreeProvider } from "./wikiTree";
@@ -55,7 +55,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const folder = workspaceFolder();
       if (!folder || !node) return;
       const uri = wikiPageUri(folder, node.path);
-      await vscode.window.showTextDocument(uri);
+      await openWikiPage(uri);
     }),
     vscode.commands.registerCommand("switchbay.rebuildViewer", async () => {
       const folder = workspaceFolder();

@@ -303,11 +303,50 @@ export function frontmatterMeta(text: string): { title: string; type: string; pr
 }
 
 export function splitFrontmatter(text: string): { properties: Record<string, string>; body: string } {
-  const meta = frontmatterMeta(text);
-  if (!text.startsWith("---")) return { properties: {}, body: text };
+  const parsed = parseWikiFrontmatter(text);
+  const properties = { ...parsed.properties };
+  for (const [k, items] of Object.entries(parsed.lists)) {
+    if (properties[k] == null) properties[k] = items.join(", ");
+  }
+  return { properties, body: parsed.body };
+}
+
+function unquoteFm(v: string): string {
+  return v.trim().replace(/^["']|["']$/g, "");
+}
+
+/** Scalars plus YAML `- item` lists (`sources:`, `relates_to:`, …). */
+export function parseWikiFrontmatter(text: string): {
+  properties: Record<string, string>;
+  lists: Record<string, string[]>;
+  body: string;
+} {
+  const empty = { properties: {} as Record<string, string>, lists: {} as Record<string, string[]>, body: text };
+  if (!text.startsWith("---")) return empty;
   const end = text.indexOf("\n---", 3);
-  if (end < 0) return { properties: meta.properties, body: text };
-  const bodyStart = end + 4;
-  const rest = text.slice(bodyStart).replace(/^\n/, "");
-  return { properties: meta.properties, body: rest };
+  if (end < 0) return empty;
+  const properties: Record<string, string> = {};
+  const lists: Record<string, string[]> = {};
+  let currentList: string | null = null;
+  for (const raw of text.slice(3, end).split("\n")) {
+    const item = raw.match(/^\s+-\s+(.*)$/);
+    if (item && currentList) {
+      const v = unquoteFm(item[1]);
+      if (v) lists[currentList].push(v);
+      continue;
+    }
+    const kv = raw.match(/^([A-Za-z_][\w-]*)\s*:\s*(.*)$/);
+    if (!kv) continue;
+    const key = kv[1];
+    const val = unquoteFm(kv[2]);
+    if (val === "" || val === "|" || val === ">") {
+      currentList = key;
+      lists[key] = lists[key] ?? [];
+    } else {
+      currentList = null;
+      properties[key] = val;
+    }
+  }
+  const rest = text.slice(end + 4).replace(/^\n/, "");
+  return { properties, lists, body: rest };
 }
