@@ -3,6 +3,35 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-26 — v0.12.0 — Switch Bay VS (VS Code, no daemon)
+
+**Migration:** none. **Breaking:** none. The PWA daemon at `:8765` is
+unchanged. VS Code is an additional install path.
+
+Switch Bay can run inside VS Code as **Switch Bay VS** (`extensions/switchbay-vs/`,
+VSIX 0.2.0): wiki tree, Graph/Atlas, Agent Dashboard, `@switchbay` chat,
+and custom agents. Nothing listens on `:8765`. Closing VS Code stops
+scheduled runs. Sideload from this repo (`make vsix`); not on the
+Marketplace yet. Walkthrough: [`docs/vscode.md`](docs/vscode.md).
+
+### Added
+
+- **Switch Bay VS** — in-tree VSIX. First-run **Configure Python…**
+  points at a Switch Bay checkout (`switchbay.repoRoot` /
+  `switchbay.pythonPath`).
+- **Agent Dashboard** — Economy → Maximum effort slider, named-agent
+  schedules (`.workbench/state/schedules.json`), custom agents from
+  `.github/agents/*.agent.md`, Models panel.
+- **Local models helper** — Ollama / llama.cpp / MLX: list running
+  servers and on-disk GGUF/MLX weights, pull tags, register as vendor
+  **Switch Bay VS Local**.
+- Sideload **update** path: install a newer VSIX over
+  `switchbay.switchbay-vs`, then Reload Window.
+
+### Fixed
+
+- Atlas first-paint / HUD / replay wiring used by the Graph webview.
+
 ## 2026-08-25 — v0.11.4 — Reviews tab renders a page preview
 
 **Migration:** none. **Breaking:** none.
