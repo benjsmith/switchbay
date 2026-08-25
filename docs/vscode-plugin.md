@@ -81,6 +81,9 @@ Hard rules:
 - `/curate` (and **Switch Bay: Curate**) opens a VS Code Agents session
   on Auto and a Switch Bay DAG on disk. Opt-in:
   `extensions.supportAgentsWindow["switchbay.switchbay"] = true`.
+- Agent Dashboard restores the PWA's extra panels (Agent Space DAG,
+  running/finished, tools, rules, palettes, Copilot models, skills)
+  from disk + MCP + `vscode.lm`. No `:8765`.
 
 ## How to run the spike
 

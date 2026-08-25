@@ -37,7 +37,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("switchbay.openGraph", () => openGraph(context)),
     vscode.commands.registerCommand("switchbay.openPreview", (uri?: vscode.Uri) => openWikiPreview(uri)),
-    vscode.commands.registerCommand("switchbay.openAgents", () => openAgents()),
+    vscode.commands.registerCommand("switchbay.openAgents", () => openAgents(context)),
     vscode.commands.registerCommand("switchbay.openAgentsWindow", () => openAgentsWindow()),
     vscode.commands.registerCommand("switchbay.curate", async () => {
       const prompt = await vscode.window.showInputBox({
