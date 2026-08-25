@@ -65,11 +65,11 @@ Hard rules:
 
 ## Interaction
 
-- Graph is the **classic** SVG force graph this spike. Edges come from
-  CE's `.curator/graph.kuzu` (`WikiLink` + `Depicts`), not from the
-  nodes-only `data.json` wiki_render writes without kuzu. The existing
-  **view:** control stays; Knowledge Atlas mounts from that switch on
-  the next spike.
+- Graph is the **classic** SVG force graph. Edges come from CE's
+  `.curator/graph.kuzu` (`WikiLink` + `Depicts`). If that file is
+  **missing**, Open Graph runs `graph.py rebuild` then reads kuzu —
+  it never paints markdown-harvested edges. The **view:** control
+  switches to Knowledge Atlas.
 - Graph node **click** → open the `.md` in a normal VS Code tab.
 - Graph node **right-click** → Open preview, Reveal in Explorer, To
   plot, To sketch, To slideshow. The last three insert the matching

@@ -52,8 +52,14 @@ window.Graph = (function () {
   let _isDragging = false;            // suppress hover-focus changes mid-drag
   let _isZooming = false;             // hide labels during wheel/pinch; skip opacity
   let _zoomSettleTimer = null;        // debounce restore after last zoom event
+  let lastResizeW = 0;
+  let lastResizeH = 0;
   let classicMinimap = null;
   const ZOOM_SETTLE_MS = 120;
+  // Trackpad inertia keeps firing tiny wheel events for ~2s after the
+  // user lifts their fingers. Those must not reset the label-restore
+  // timer (that stretch felt like a 3s cooldown vs ~1s after drag).
+  const WHEEL_INERTIA_PX = 8;
   // ── Split mode (D4) ── review-before-split: node clicks toggle
   // membership instead of navigating; ctrl/cmd-drag rubber-bands
   // many; alt-click flips a selected node's policy move ↔ copy.
@@ -382,6 +388,8 @@ window.Graph = (function () {
     _isDragging = false;
     _isZooming = false;
     if (_zoomSettleTimer) { clearTimeout(_zoomSettleTimer); _zoomSettleTimer = null; }
+    lastResizeW = 0;
+    lastResizeH = 0;
     _labelsHidden = false;
     splitActive = false;
     splitPolicies.clear();
@@ -587,6 +595,13 @@ window.Graph = (function () {
     // Zoom/pan: keep the SVG transform live (cheap) but hide the label
     // layer for the whole gesture — same class of fix as relax/drag.
     // Per-wheel applyLabelOpacity + O(n²) recompute was the FPS killer.
+    function isInertiaWheel(ev) {
+      const src = ev && ev.sourceEvent;
+      if (!src || src.type !== 'wheel') return false;
+      return Math.abs(src.deltaY || 0) < WHEEL_INERTIA_PX
+          && Math.abs(src.deltaX || 0) < WHEEL_INERTIA_PX;
+    }
+
     zoomBehavior = d3.zoom()
       .scaleExtent([0.15, 4])
       .filter((event) => {
@@ -595,7 +610,8 @@ window.Graph = (function () {
         if (event.type === 'wheel') return true;
         return !event.target.closest || !event.target.closest('.node');
       })
-      .on('start', () => {
+      .on('start', (ev) => {
+        if (isInertiaWheel(ev)) return;
         _isZooming = true;
         if (_zoomSettleTimer) {
           clearTimeout(_zoomSettleTimer);
@@ -612,15 +628,20 @@ window.Graph = (function () {
         scheduleMinimap(false);
         // Labels stay hidden; no opacity / collision work mid-gesture.
       })
-      .on('end', () => {
+      .on('end', (ev) => {
+        // Tiny trackpad-inertia wheels must not keep postponing restore.
+        if (isInertiaWheel(ev)) {
+          if (!_isZooming) scheduleAutoRecompute();
+          return;
+        }
         // Wheel fires start/zoom/end per tick — debounce so we only
         // restore labels after the gesture has actually settled.
         if (_zoomSettleTimer) clearTimeout(_zoomSettleTimer);
         _zoomSettleTimer = setTimeout(() => {
           _zoomSettleTimer = null;
           _isZooming = false;
-          // If physics is still moving, leave labels hidden; tick()'s
-          // hysteresis will restore them when alpha settles.
+          // Same hysteresis as drag: if physics is still moving, tick()
+          // brings labels back once alpha drops to LABEL_SHOW_ALPHA.
           const a = simulation ? simulation.alpha() : 0;
           if (a > LABEL_HIDE_ALPHA) return;
           if (_labelsHidden && textLayer) {
@@ -831,13 +852,21 @@ window.Graph = (function () {
   function resize() {
     if (!svg) return;
     const r = svg.node().getBoundingClientRect();
-    svg.attr('viewBox', [-r.width / 2, -r.height / 2, r.width, r.height]);
+    const w = Math.round(r.width);
+    const h = Math.round(r.height);
+    if (w === lastResizeW && h === lastResizeH) {
+      scheduleAutoRecompute();
+      return;
+    }
+    lastResizeW = w;
+    lastResizeH = h;
+    svg.attr('viewBox', [-w / 2, -h / 2, w, h]);
     if (zoomSurface) {
       zoomSurface
-        .attr('x', -r.width / 2)
-        .attr('y', -r.height / 2)
-        .attr('width', r.width)
-        .attr('height', r.height);
+        .attr('x', -w / 2)
+        .attr('y', -h / 2)
+        .attr('width', w)
+        .attr('height', h);
     }
     if (simulation) simulation.alpha(0.3).restart();
     scheduleAutoRecompute();

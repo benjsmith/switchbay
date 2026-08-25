@@ -56,92 +56,18 @@ export function readCachedGraph(workspace: string): GraphData | null {
   }
 }
 
-const WIKILINK_RE = /\[\[([^\]|#\n]+)(?:\|[^\]]*)?\]\]/g;
-const DATA_PAGE_RE = /data-page=["']([^"']+)["']/g;
-const HASH_PAGE_RE = /#page=([^"'&]+)/g;
-const REL_FIELDS = [
-  "sources", "relates_to", "facts", "evidence", "figures",
-  "tables", "concepts", "entities", "projects",
-] as const;
-
-function stemOf(id: string): string {
-  return id.replace(/\.md$/i, "").split("/").pop() || id;
-}
-
-function indexIds(nodes: GraphNode[]): { ids: Set<string>; stemToId: Map<string, string> } {
-  const ids = new Set(nodes.map((n) => n.id));
-  const stemToId = new Map<string, string>();
-  for (const id of ids) {
-    const stem = stemOf(id);
-    if (!stemToId.has(stem)) stemToId.set(stem, id);
-  }
-  return { ids, stemToId };
-}
-
-function resolveTarget(
-  raw: string,
-  ids: Set<string>,
-  stemToId: Map<string, string>,
-): string | null {
-  let t = raw.trim();
-  try { t = decodeURIComponent(t); } catch { /* keep */ }
-  t = t.replace(/^\.\//, "");
-  if (t.startsWith("wiki/")) t = t.slice(5);
-  t = t.replace(/\.md$/i, "");
-  if (ids.has(t)) return t;
-  return stemToId.get(stemOf(t)) ?? null;
-}
-
-function addEdge(
-  out: Map<string, { source: string; target: string; type: string }>,
-  source: string,
-  target: string,
-): void {
-  if (!source || !target || source === target) return;
-  const key = `${source}\0${target}`;
-  if (!out.has(key)) out.set(key, { source, target, type: "wikilink" });
-}
-
-function harvestFromWikiMarkdown(
-  workspace: string,
-  ids: Set<string>,
-  stemToId: Map<string, string>,
-  out: Map<string, { source: string; target: string; type: string }>,
-): void {
-  const wiki = path.join(workspace, "wiki");
-  if (!fs.existsSync(wiki)) return;
-  const walk = (dir: string) => {
-    let entries: fs.Dirent[];
-    try {
-      entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const e of entries) {
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        if (e.name.startsWith(".")) continue;
-        walk(full);
-        continue;
-      }
-      if (!e.name.endsWith(".md")) continue;
-      const rel = path.relative(wiki, full).split(path.sep).join("/");
-      const source = rel.replace(/\.md$/i, "");
-      if (!ids.has(source)) continue;
-      let text = "";
-      try { text = fs.readFileSync(full, "utf8"); } catch { continue; }
-      WIKILINK_RE.lastIndex = 0;
-      for (const m of text.matchAll(WIKILINK_RE)) {
-        const target = resolveTarget(m[1], ids, stemToId);
-        if (target) addEdge(out, source, target);
-      }
-    }
-  };
-  walk(wiki);
-}
-
 function graphKuzuPath(workspace: string): string {
   return path.join(workspace, ".curator", "graph.kuzu");
+}
+
+/** True only when the CE graph db is on disk. File or directory both count. */
+export function kuzuDbExists(workspace: string): boolean {
+  try {
+    const st = fs.statSync(graphKuzuPath(workspace));
+    return st.isFile() || st.isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /** Interpreter that can `import kuzu` — workspace .venv first (it wrote the db). */
@@ -171,8 +97,8 @@ let kuzuEdgeCache: EdgeCache | null = null;
 
 /** WikiLink + Depicts from ``.curator/graph.kuzu``. Null if unreadable. */
 export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
+  if (!kuzuDbExists(workspace)) return null;
   const db = graphKuzuPath(workspace);
-  if (!fs.existsSync(db)) return null;
   const py = pythonWithKuzu(workspace);
   const script = dumpKuzuScript();
   if (!py || !fs.existsSync(script)) return null;
@@ -197,56 +123,61 @@ export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
   }
 }
 
-/** Prefer kuzu WikiLink/Depicts; fall back to body wikilinks if no db. */
-export function ensureGraphEdges(data: GraphData, workspace?: string): GraphData {
-  if (workspace) {
-    const fromKuzu = readKuzuEdges(workspace);
-    if (fromKuzu !== null) {
-      data.edges = fromKuzu;
-      applyDegrees(data);
-      return data;
-    }
+/**
+ * Run CE ``graph.py rebuild wiki`` only when ``graph.kuzu`` is absent.
+ * Markdown harvest happens inside that rebuild, then edges are read
+ * from kuzu — never applied from markdown directly.
+ */
+export function rebuildKuzuGraph(workspace: string): Promise<{ ok: boolean; text: string }> {
+  if (kuzuDbExists(workspace)) {
+    return Promise.resolve({ ok: true, text: "graph.kuzu already present" });
   }
-  if (!Array.isArray(data.edges) || data.edges.length === 0) {
-    data.edges = harvestWikilinkEdges(data, workspace);
+  const py = pythonWithKuzu(workspace);
+  const script = path.join(ceRoot() || "", "scripts", "graph.py");
+  if (!py) {
+    return Promise.resolve({ ok: false, text: "no Python with kuzu (workspace .venv)" });
+  }
+  if (!fs.existsSync(script)) {
+    return Promise.resolve({ ok: false, text: "curiosity-engine graph.py not found" });
+  }
+  if (!fs.existsSync(path.join(workspace, "wiki"))) {
+    return Promise.resolve({ ok: false, text: "no wiki/ in workspace" });
+  }
+  return new Promise((resolve) => {
+    const proc = spawn(py, [script, "rebuild", "wiki"], {
+      cwd: workspace,
+      windowsHide: true,
+    });
+    let text = "";
+    proc.stdout?.on("data", (d: Buffer) => { text += d.toString(); });
+    proc.stderr?.on("data", (d: Buffer) => { text += d.toString(); });
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve({ ok: false, text: `${text}\nrebuild timed out`.slice(-4000) });
+    }, 180000);
+    proc.on("error", (err) => {
+      clearTimeout(timer);
+      resolve({ ok: false, text: String(err) });
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      kuzuEdgeCache = null;
+      resolve({
+        ok: code === 0 && kuzuDbExists(workspace),
+        text: text.slice(-4000),
+      });
+    });
+  });
+}
+
+/** Overlay kuzu WikiLink/Depicts. Never harvest markdown into edges. */
+export function ensureGraphEdges(data: GraphData, workspace?: string): GraphData {
+  if (workspace && kuzuDbExists(workspace)) {
+    const fromKuzu = readKuzuEdges(workspace);
+    if (fromKuzu !== null) data.edges = fromKuzu;
   }
   applyDegrees(data);
   return data;
-}
-
-export function harvestWikilinkEdges(
-  data: GraphData,
-  workspace?: string,
-): GraphData["edges"] {
-  const { ids, stemToId } = indexIds(data.nodes || []);
-  const out = new Map<string, { source: string; target: string; type: string }>();
-  const add = (source: string, raw: string) => {
-    const target = resolveTarget(raw, ids, stemToId);
-    if (target && ids.has(source)) addEdge(out, source, target);
-  };
-
-  if (data.pages) {
-    for (const [pid, page] of Object.entries(data.pages)) {
-      const source = ids.has(pid) ? pid : resolveTarget(page.id || pid, ids, stemToId);
-      if (!source) continue;
-      const html = page.body_html || "";
-      DATA_PAGE_RE.lastIndex = 0;
-      for (const m of html.matchAll(DATA_PAGE_RE)) add(source, m[1]);
-      HASH_PAGE_RE.lastIndex = 0;
-      for (const m of html.matchAll(HASH_PAGE_RE)) add(source, m[1]);
-      const props = page.properties || {};
-      for (const field of REL_FIELDS) {
-        const raw = props[field];
-        const items = Array.isArray(raw) ? raw : typeof raw === "string" && raw ? [raw] : [];
-        for (const item of items) add(source, String(item));
-      }
-    }
-  }
-
-  if (out.size === 0 && workspace) {
-    harvestFromWikiMarkdown(workspace, ids, stemToId, out);
-  }
-  return [...out.values()];
 }
 
 function applyDegrees(data: GraphData): void {

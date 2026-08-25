@@ -24,8 +24,6 @@ export function mountGraph(
     /** Pin classic or atlas. Unset follows the PWA localStorage/query choice. */
     forceMode?: ViewerMode;
     skipEdit?: boolean;
-    /** Keep the view: switch visible but do not mount Atlas yet. */
-    deferAtlas?: boolean;
   },
 ): GraphMount {
   destroyAtlas();
@@ -52,7 +50,7 @@ export function mountGraph(
     window.Graph.init(data);
   }
   document.body.dataset.viewer = mode;
-  initAtlasChoice(data, mode, { deferAtlas: opts?.deferAtlas });
+  initAtlasChoice(data, mode);
 
   // Edit module wires the modal padlock + textarea editor. The refetch
   // callback re-pulls the rebuilt data.json (cebridge updates its

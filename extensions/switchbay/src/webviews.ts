@@ -1,7 +1,10 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { ensureGraphEdges, readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode } from "./ce";
+import {
+  ensureGraphEdges, kuzuDbExists, readCachedGraph, rebuildKuzuGraph,
+  scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode,
+} from "./ce";
 import { listRuns, runsRoot } from "./orch";
 import { repoRoot, workspaceFolder } from "./paths";
 
@@ -61,23 +64,37 @@ export function openGraph(context: vscode.ExtensionContext): void {
       From the Switch Bay repo run <code>pnpm --dir frontend run build:webview</code> then F5 again.</p>`;
     return;
   }
-  const graph: GraphData = readCachedGraph(folder.fsPath) ?? ensureGraphEdges({
-    nodes: scanWikiMarkdown(folder.fsPath),
-    edges: [],
-  }, folder.fsPath);
-  if (graph.pages) {
-    for (const page of Object.values(graph.pages)) delete page.body_html;
-  }
-  const send = () => { void panel.webview.postMessage({ graph }); };
+  const sendGraph = async () => {
+    const ws = folder.fsPath;
+    if (!kuzuDbExists(ws)) {
+      await vscode.window.withProgress(
+        {
+          location: vscode.ProgressLocation.Notification,
+          title: "Building knowledge graph (graph.kuzu missing)…",
+          cancellable: false,
+        },
+        async () => {
+          const r = await rebuildKuzuGraph(ws);
+          if (!r.ok) {
+            void vscode.window.showWarningMessage(
+              `Could not build graph.kuzu: ${r.text.slice(0, 300)}`,
+            );
+          }
+        },
+      );
+    }
+    const graph: GraphData = readCachedGraph(ws) ?? ensureGraphEdges({
+      nodes: scanWikiMarkdown(ws),
+      edges: [],
+    }, ws);
+    if (graph.pages) {
+      for (const page of Object.values(graph.pages)) delete page.body_html;
+    }
+    void panel.webview.postMessage({ graph });
+  };
   panel.webview.onDidReceiveMessage(async (msg: { type?: string; node?: GraphNode }) => {
     if (msg.type === "ready") {
-      send();
-      return;
-    }
-    if (msg.type === "atlas-deferred") {
-      void vscode.window.showInformationMessage(
-        "Knowledge Atlas will mount from this view switch on the next spike. Staying on the classic graph.",
-      );
+      await sendGraph();
       return;
     }
     const node = msg.node;

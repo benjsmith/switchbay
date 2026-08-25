@@ -387,11 +387,7 @@ function bindAtlasMinimapWheel(container: HTMLElement): () => void {
   return () => container.removeEventListener("wheel", onWheel, true);
 }
 
-export function initAtlasChoice(
-  _data: GraphData,
-  activeMode: ViewerMode,
-  opts?: { deferAtlas?: boolean },
-): void {
+export function initAtlasChoice(_data: GraphData, activeMode: ViewerMode): void {
   const button = document.getElementById("viewer-mode");
   const state = document.getElementById("viewer-mode-state");
   const atlasApi = (window as unknown as { KnowledgeAtlas?: AtlasGlobal }).KnowledgeAtlas;
@@ -404,12 +400,6 @@ export function initAtlasChoice(
   button.classList.remove("hidden");
   button.addEventListener("click", () => {
     const next: ViewerMode = activeMode === "atlas" ? "classic" : "atlas";
-    if (opts?.deferAtlas && next === "atlas") {
-      window.dispatchEvent(new CustomEvent("sy:graph-viewer-change", {
-        detail: { mode: "atlas", deferred: true },
-      }));
-      return;
-    }
     try { localStorage.setItem(STORAGE_KEY, next); } catch { /* ignore */ }
     try {
       const url = new URL(window.location.href);

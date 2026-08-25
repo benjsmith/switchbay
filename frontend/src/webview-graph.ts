@@ -71,13 +71,9 @@ function bind(data: GraphData): void {
     ...data,
     palette: { ...paletteFromCss(), ...(data.palette || {}) },
   };
-  // Plugin spike: classic force graph only. Atlas mounts from the
-  // existing view: switch on the next spike.
   mountGraph(mount, themed, {
     onSelectPage: (id) => openNode(themed, id),
-    forceMode: "classic",
     skipEdit: true,
-    deferAtlas: true,
   });
   const pingSize = () => window.dispatchEvent(new Event("resize"));
   requestAnimationFrame(() => {
@@ -96,12 +92,8 @@ function bind(data: GraphData): void {
     const m = location.hash.match(/page=([^&]+)/);
     if (m) openNode(themed, decodeURIComponent(m[1]));
   }, { signal });
-  window.addEventListener("sy:graph-viewer-change", (ev) => {
-    const deferred = (ev as CustomEvent<{ deferred?: boolean }>).detail?.deferred;
-    if (!deferred) return;
-    const state = document.getElementById("viewer-mode-state");
-    if (state) state.textContent = "classic";
-    vscode.postMessage({ type: "atlas-deferred" });
+  window.addEventListener("sy:graph-viewer-change", () => {
+    bind(data);
   }, { signal });
   mount.addEventListener("contextmenu", (ev) => {
     const t = ev.target as HTMLElement | null;
