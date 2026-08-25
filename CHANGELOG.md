@@ -3,6 +3,15 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-25 — v0.11.4 — Reviews tab renders a page preview
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- Reviews shows proposed wiki pages as a rendered preview (frontmatter
+  properties + markdown), not a raw markdown dump.
+
 ## 2026-08-25 — v0.11.3 — Graph modal source links actually click
 
 **Migration:** none. **Breaking:** none.

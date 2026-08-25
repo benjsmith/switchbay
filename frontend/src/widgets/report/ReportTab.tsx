@@ -1,4 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from "react";
+import { marked } from "marked";
+import { sanitizeHtml } from "../../lib/sanitizeHtml";
+import { openWorkspaceFile } from "../../lib/localPath";
+import { expandWikilinks, parseFrontmatter } from "../editor/mdview";
+import { PropertyValue } from "../editor/SourceCite";
 import { clearReportOpen, getLastReportOpen } from "./reportOpen";
 
 type Review = {
@@ -241,7 +246,7 @@ export default function ReportTab() {
               <p className="sy-review-oneline">{current.review.one_line}</p>
             )}
           </div>
-          <pre className="sy-review-doc">{current.body}</pre>
+          <ReviewPreview markdown={current.body} />
           <div className="sy-review-actions">
             <textarea
               className="sy-review-comment"
@@ -272,6 +277,61 @@ export default function ReportTab() {
       {!current && html === null && report && !err && (
         <div className="sy-report-loading">Rendering…</div>
       )}
+    </div>
+  );
+}
+
+function ReviewPreview({ markdown }: { markdown: string }) {
+  const { properties, body } = useMemo(() => parseFrontmatter(markdown), [markdown]);
+  const previewHtml = useMemo(
+    () => (body
+      ? sanitizeHtml(marked.parse(expandWikilinks(body), { async: false }) as string)
+      : ""),
+    [body],
+  );
+  const propRows = Object.entries(properties);
+  const title = typeof properties.title === "string" ? properties.title : "";
+
+  const onPreviewClick = (ev: MouseEvent<HTMLDivElement>) => {
+    const t = ev.target as HTMLElement;
+    const cite = t.closest?.("a[data-reveal-path]") as HTMLElement | null;
+    if (cite) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      void openWorkspaceFile(cite.getAttribute("data-reveal-path") || "");
+      return;
+    }
+    const wiki = t.closest?.("a.wikilink") as HTMLAnchorElement | null;
+    if (wiki) {
+      ev.preventDefault();
+      const href = wiki.getAttribute("href") || "";
+      const m = href.match(/^#page=(.+)$/);
+      const target = m ? decodeURIComponent(m[1]) : (wiki.textContent || "");
+      if (target) {
+        window.dispatchEvent(new CustomEvent("sy:open-wiki-page", { detail: { target } }));
+      }
+    }
+  };
+
+  return (
+    <div className="sy-review-doc" onClick={onPreviewClick}>
+      {title && <h1 className="sy-mdview-title">{title}</h1>}
+      {propRows.length > 0 && (
+        <section className="properties">
+          <div className="properties-head">Properties</div>
+          <table className="sy-mdview-properties">
+            <tbody>
+              {propRows.map(([k, v]) => (
+                <tr key={k}>
+                  <td className="prop-key">{k}</td>
+                  <td className="prop-val"><PropertyValue name={k} value={v} /></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+      <article className="sy-mdview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
     </div>
   );
 }

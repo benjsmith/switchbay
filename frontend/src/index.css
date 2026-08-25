@@ -8420,15 +8420,14 @@ a.sy-source-cite { color: var(--accent); }
 .sy-review-doc {
   flex: 1 1 auto;
   margin: 0;
-  padding: 14px 16px;
+  padding: 14px 16px 20px;
   background: var(--bg-soft);
   border: 1px solid var(--line);
   border-radius: 8px;
-  font-size: 13px;
-  line-height: 1.5;
-  white-space: pre-wrap;
   overflow: auto;
 }
+.sy-review-doc .sy-mdview-title { margin: 0 0 12px; }
+.sy-review-doc .properties { margin-bottom: 16px; }
 .sy-review-actions { display: flex; flex-direction: column; gap: 8px; }
 .sy-review-comment {
   width: 100%;

@@ -4,8 +4,8 @@ import { sanitizeHtml } from "../../lib/sanitizeHtml";
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
 import { expandWikilinks, parseFrontmatter } from "./mdview";
-import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "./previewLists";
 import MiniGraph from "./MiniGraph";
+import { PropertyValue } from "./SourceCite";
 import type { GraphData } from "../graph/types";
 import {
   getBreadcrumb, subscribe as subscribeBreadcrumb,
@@ -13,9 +13,7 @@ import {
 } from "../projects/breadcrumb";
 import CodeView, { detectLanguage, LANGUAGE_CHOICES, type CodeLanguage } from "./CodeView";
 import { notifyHtmlDeckOpen } from "../htmldeck/htmlDeckOpen";
-import {
-  classifySourceRef, normalizeWorkspacePath, openWorkspaceFile, revealWorkspaceFile,
-} from "../../lib/localPath";
+import { revealWorkspaceFile } from "../../lib/localPath";
 
 // Markdown view mode, driven by the chevron handle on the pane divider.
 // Ordered raw → split → rendered. The chevrons move the split the way
@@ -580,23 +578,7 @@ export default function EditorTab() {
                           <tr key={k}>
                             <td className="prop-key">{k}</td>
                             <td className="prop-val">
-                              {isCollapsibleList(k, v)
-                                ? <CollapsibleSources items={v.map(String)} />
-                                : Array.isArray(v)
-                                  ? v.map((item, i) => (
-                                    <div key={i}>
-                                      <SourceCite
-                                        value={String(item)}
-                                        forceLocal={k === "sources"}
-                                      />
-                                    </div>
-                                  ))
-                                  : (
-                                    <SourceCite
-                                      value={String(v)}
-                                      forceLocal={k === "sources" || k === "extracted_from"}
-                                    />
-                                  )}
+                              <PropertyValue name={k} value={v} />
                             </td>
                           </tr>
                         ))}
@@ -615,55 +597,6 @@ export default function EditorTab() {
       </div>
     </div>
   );
-}
-
-function CollapsibleSources({ items }: { items: string[] }) {
-  const [open, setOpen] = useState(readSourcesOpen);
-  return (
-    <details
-      className="sy-prop-list"
-      open={open}
-      onToggle={(ev) => {
-        const next = ev.currentTarget.open;
-        setOpen(next);
-        writeSourcesOpen(next);
-      }}
-    >
-      <summary>{items.length} sources</summary>
-      {items.map((item, i) => (
-        <div key={i}><SourceCite value={item} forceLocal /></div>
-      ))}
-    </details>
-  );
-}
-
-function SourceCite({ value, forceLocal = false }: { value: string; forceLocal?: boolean }) {
-  const kind = classifySourceRef(value)
-    || (forceLocal && normalizeWorkspacePath(value) ? "local" : null);
-  if (kind === "url") {
-    return (
-      <a href={value} target="_blank" rel="noreferrer" className="sy-source-cite">
-        {value}
-      </a>
-    );
-  }
-  if (kind === "local") {
-    return (
-      <a
-        href={`#file=${encodeURIComponent(value)}`}
-        className="sy-source-cite"
-        title="Open with the system default app"
-        onClick={(ev) => {
-          ev.preventDefault();
-          ev.stopPropagation();
-          void openWorkspaceFile(value);
-        }}
-      >
-        {value}
-      </a>
-    );
-  }
-  return <>{value}</>;
 }
 
 /** Provenance chip (D5): shown when the page's frontmatter carries
