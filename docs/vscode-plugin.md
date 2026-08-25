@@ -1,5 +1,9 @@
 # Switch Bay as a VS Code plugin (experiment)
 
+**Spun out.** The product is **Switch Bay VS**:
+[`benjsmith/switchbay-vs`](https://github.com/benjsmith/switchbay-vs).
+This branch remains the Switch Bay-side notes for MCP/`CSWY_PROFILE=vscode`.
+
 Branch: `exp/vscode-plugin`. Dual product: the PWA on `main` stays.
 This document is the tracked design for the experiment.
 
