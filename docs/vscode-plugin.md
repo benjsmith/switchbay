@@ -1,8 +1,8 @@
-# Switch Bay as a VS Code plugin (experiment)
+# Switch Bay VS (in-tree alternative install)
 
-**Spun out.** The product is **Switch Bay VS**:
-[`benjsmith/switchbay-vs`](https://github.com/benjsmith/switchbay-vs).
-This branch remains the Switch Bay-side notes for MCP/`CSWY_PROFILE=vscode`.
+One git repo, two products: the PWA daemon on `main`, and **Switch Bay VS**
+at `extensions/switchbay-vs/` (this branch). Marketplace later packages
+that folder as a VSIX; users do not need a second GitHub repo.
 
 Branch: `exp/vscode-plugin`. Dual product: the PWA on `main` stays.
 This document is the tracked design for the experiment.
@@ -96,8 +96,8 @@ Hard rules:
 ## How to run the spike
 
 Open **this** checkout on `exp/vscode-plugin` (File → Open Workspace
-from File → `switchbay.code-workspace`), then Run and Debug → **Switch
-Bay**. Do not F5 inside the `[Extension Development Host]` window — that
+from File → `switchbay.code-workspace`), then Run and Debug → **Switch Bay VS**. Do not F5 inside the
+`[Extension Development Host]` window — that
 folder has no launch config, so VS Code shows the Chrome/Node picker.
 
 A second Extension Development Host window opens. Open your CE folder
@@ -106,8 +106,8 @@ there. Nothing listens on `:8765`.
 Compile:
 
 ```
-pnpm --dir extensions/switchbay install
-pnpm --dir extensions/switchbay run compile
+pnpm --dir extensions/switchbay-vs install
+pnpm --dir extensions/switchbay-vs run compile
 ```
 
 MCP worker (spawned by the extension, not by you):

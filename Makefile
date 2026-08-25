@@ -62,8 +62,8 @@ dev-frontend:
 # VS Code plugin experiment (exp/vscode-plugin). Compiles the extension
 # host; does not start the PWA daemon.
 vscode-compile:
-	pnpm --dir extensions/switchbay install --frozen-lockfile
-	pnpm --dir extensions/switchbay run compile
+	pnpm --dir extensions/switchbay-vs install --frozen-lockfile
+	pnpm --dir extensions/switchbay-vs run compile
 	pnpm --dir frontend run build:webview
 
 # Production build: the daemon serves frontend/dist at / (so the PWA

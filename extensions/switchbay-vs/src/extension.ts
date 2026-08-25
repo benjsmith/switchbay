@@ -12,6 +12,7 @@ import { openWikiPage, openWikiPreview } from "./preview";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
 import { WikiTreeProvider } from "./wikiTree";
+import { registerLocalModels } from "./localModels";
 
 function updateWikiContext(): void {
   const folder = workspaceFolder();
@@ -20,7 +21,7 @@ function updateWikiContext(): void {
 }
 
 export function activate(context: vscode.ExtensionContext): void {
-  const log = vscode.window.createOutputChannel("Switch Bay");
+  const log = vscode.window.createOutputChannel("Switch Bay VS");
   context.subscriptions.push(log);
   const wiki = new WikiTreeProvider();
   const projects = new ProjectsTreeProvider();
@@ -90,6 +91,7 @@ export function activate(context: vscode.ExtensionContext): void {
     log.appendLine(`Chat participant failed: ${err}`);
   }
   void optIntoAgentsWindow();
+  registerLocalModels(context);
   updateWikiContext();
 
   const ping = () => {
@@ -111,8 +113,8 @@ export function activate(context: vscode.ExtensionContext): void {
   status.command = "switchbay.openGraph";
   const cached = folder ? readCachedGraph(folder.fsPath) : null;
   status.text = cached
-    ? `$(type-hierarchy) Switch Bay · ${cached.nodes.length} nodes · ${(cached.edges || []).length} edges`
-    : "$(type-hierarchy) Switch Bay";
+    ? `$(type-hierarchy) Switch Bay VS · ${cached.nodes.length} nodes · ${(cached.edges || []).length} edges`
+    : "$(type-hierarchy) Switch Bay VS";
   status.tooltip = "Open Graph (no daemon)";
   status.show();
   context.subscriptions.push(status);

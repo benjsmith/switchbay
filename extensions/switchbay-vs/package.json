@@ -1,9 +1,17 @@
 {
-  "name": "switchbay",
-  "displayName": "Switch Bay",
-  "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon.",
-  "version": "0.0.1",
+  "name": "switchbay-vs",
+  "displayName": "Switch Bay VS",
+  "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon. Local MLX / llama.cpp / Ollama models for Chat and Agents.",
+  "version": "0.1.0",
   "publisher": "switchbay",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/benjsmith/switchbay.git"
+  },
+  "homepage": "https://github.com/benjsmith/switchbay",
+  "bugs": {
+    "url": "https://github.com/benjsmith/switchbay/issues"
+  },
   "license": "LicenseRef-FSL-1.1-ALv2",
   "engines": {
     "vscode": "^1.101.0"
@@ -17,7 +25,7 @@
   "main": "./out/extension.js",
   "contributes": {
     "configuration": {
-      "title": "Switch Bay",
+      "title": "Switch Bay VS",
       "properties": {
         "switchbay.repoRoot": {
           "type": "string",
@@ -27,7 +35,21 @@
         "switchbay.pythonPath": {
           "type": "string",
           "default": "",
-          "description": "Python that can import switchbay (usually <repo>/.venv/bin/python)."
+          "description": "Python that can import switchbay (usually <switchbay>/.venv/bin/python)."
+        },
+        "switchbay.localModels": {
+          "type": "array",
+          "default": [],
+          "description": "Local OpenAI-compatible models (Ollama, llama.cpp, MLX) published to Chat and Agents.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "backend": { "type": "string", "enum": ["ollama", "llamacpp", "mlx"] },
+              "name": { "type": "string" },
+              "model": { "type": "string" },
+              "baseUrl": { "type": "string" }
+            }
+          }
         }
       }
     },
@@ -35,7 +57,7 @@
       "activitybar": [
         {
           "id": "switchbay",
-          "title": "Switch Bay",
+          "title": "Switch Bay VS",
           "icon": "media/icon.svg"
         }
       ]
@@ -67,46 +89,50 @@
     "commands": [
       {
         "command": "switchbay.openGraph",
-        "title": "Switch Bay: Open Graph",
+        "title": "Switch Bay VS: Open Graph",
         "icon": "$(type-hierarchy)"
       },
       {
         "command": "switchbay.openPreview",
-        "title": "Switch Bay: Open Wiki Preview"
+        "title": "Switch Bay VS: Open Wiki Preview"
       },
       {
         "command": "switchbay.openAgents",
-        "title": "Switch Bay: Open Agent Dashboard",
+        "title": "Switch Bay VS: Open Agent Dashboard",
         "icon": "$(organization)"
       },
       {
         "command": "switchbay.fireThrusters",
-        "title": "Switch Bay: Fire Thrusters"
+        "title": "Switch Bay VS: Fire Thrusters"
       },
       {
         "command": "switchbay.rebuildViewer",
-        "title": "Switch Bay: Rebuild Wiki Viewer"
+        "title": "Switch Bay VS: Rebuild Wiki Viewer"
       },
       {
         "command": "switchbay.openPage",
-        "title": "Switch Bay: Open Wiki Page"
+        "title": "Switch Bay VS: Open Wiki Page"
       },
       {
         "command": "switchbay.openWorkspace",
-        "title": "Switch Bay: Open Workspace Folder"
+        "title": "Switch Bay VS: Open Workspace Folder"
       },
       {
         "command": "switchbay.refreshTrees",
-        "title": "Switch Bay: Refresh Wiki & Projects",
+        "title": "Switch Bay VS: Refresh Wiki & Projects",
         "icon": "$(refresh)"
       },
       {
         "command": "switchbay.curate",
-        "title": "Switch Bay: Curate (Agents session)"
+        "title": "Switch Bay VS: Curate (Agents session)"
       },
       {
         "command": "switchbay.openAgentsWindow",
-        "title": "Switch Bay: Open VS Code Agents Window"
+        "title": "Switch Bay VS: Open VS Code Agents Window"
+      },
+      {
+        "command": "switchbay.localModels",
+        "title": "Switch Bay VS: Local models (Ollama, llama.cpp, MLX)…"
       }
     ],
     "menus": {
@@ -138,7 +164,7 @@
     "chatParticipants": [
       {
         "id": "switchbay.participant",
-        "fullName": "Switch Bay",
+        "fullName": "Switch Bay VS",
         "name": "switchbay",
         "description": "Knowledge-graph workbench over this folder (CE, wiki tools, Auto).",
         "isSticky": true,
@@ -175,7 +201,13 @@
     "mcpServerDefinitionProviders": [
       {
         "id": "switchbay.mcp",
-        "label": "Switch Bay"
+        "label": "Switch Bay VS"
+      }
+    ],
+    "languageModelChatProviders": [
+      {
+        "vendor": "switchbay-local",
+        "displayName": "Switch Bay VS Local"
       }
     ]
   },

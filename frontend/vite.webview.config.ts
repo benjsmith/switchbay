@@ -9,7 +9,7 @@ export default defineConfig({
   root: dir,
   base: "./",
   build: {
-    outDir: path.resolve(dir, "../extensions/switchbay/media/graph"),
+    outDir: path.resolve(dir, "../extensions/switchbay-vs/media/graph"),
     emptyOutDir: true,
     rollupOptions: {
       input: path.resolve(dir, "webview-graph.html"),
