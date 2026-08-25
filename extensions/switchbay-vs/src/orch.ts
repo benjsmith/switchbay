@@ -3,9 +3,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
-import { startAutoAgentsSession } from "./agentsSession";
+import { startNamedAgentSession } from "./agentsSession";
 import { getMcp } from "./mcp";
 import { workspaceFsPath } from "./paths";
+import { effortInstruction, getPreference, preferenceLabel } from "./preference";
 
 export type PlanNode = {
   node_id: string;
@@ -25,6 +26,8 @@ export type RunRecord = {
   started_at: number;
   updated_at: number;
   via: string;
+  preference: number;
+  agent?: string;
   nodes: PlanNode[];
   note?: string;
 };
@@ -74,7 +77,7 @@ function persist(workspace: string, rec: RunRecord): void {
     strategy: rec.strategy,
     objective: rec.objective,
     nodes: rec.nodes.map(({ status: _s, ...n }) => n),
-    preference: 0.7,
+    preference: rec.preference,
     features: { host: "vscode-plugin" },
     decision: { via: rec.via },
   });
@@ -100,50 +103,66 @@ export function listRuns(workspace: string): RunRecord[] {
     const file = path.join(root, name, "plugin-run.json");
     if (!fs.existsSync(file)) continue;
     try {
-      out.push(JSON.parse(fs.readFileSync(file, "utf8")) as RunRecord);
+      const rec = JSON.parse(fs.readFileSync(file, "utf8")) as RunRecord;
+      if (typeof rec.preference !== "number") rec.preference = 0.5;
+      out.push(rec);
     } catch { /* skip */ }
   }
   return out.sort((a, b) => b.started_at - a.started_at).slice(0, 20);
 }
 
-function seedPlan(objective: string): RunRecord {
+function node(
+  id: string,
+  kind: string,
+  objective: string,
+  dependencies: string[] = [],
+  extra: Partial<PlanNode> = {},
+): PlanNode {
+  return { node_id: id, kind, role: kind, objective, dependencies, status: "pending", ...extra };
+}
+
+/** DAG shape is an *outcome* of the slider, matching PWA policy labels. */
+function nodesForPreference(objective: string, preference: number): PlanNode[] {
+  if (preference <= 0.2) {
+    return [node("answer", "answer", "Direct wiki search; no subagents")];
+  }
+  const investigate = node(
+    "investigate",
+    "investigate",
+    "Read-only wiki/vault research",
+    [],
+    { retrieval_query: objective },
+  );
+  const synthesize = node(
+    "synthesize",
+    "synthesize",
+    "Propose sourced wiki pages and rebuild the graph",
+    preference >= 0.8 ? ["verify"] : ["investigate"],
+  );
+  if (preference >= 0.8) {
+    return [
+      investigate,
+      node("verify", "verify", "Check contested claims against sources", ["investigate"]),
+      synthesize,
+    ];
+  }
+  return [investigate, synthesize];
+}
+
+function seedPlan(objective: string, preference: number, agent = "Auto"): RunRecord {
   const id = `vs-${Date.now().toString(36)}-${crypto.randomBytes(3).toString("hex")}`;
   const now = Date.now() / 1000;
   return {
     orchestration_id: id,
     objective,
-    strategy: "auto",
+    strategy: preferenceLabel(preference).toLowerCase(),
     phase: "planning",
     started_at: now,
     updated_at: now,
     via: "pending",
-    nodes: [
-      {
-        node_id: "investigate",
-        kind: "investigate",
-        role: "investigate",
-        objective: "Read-only wiki/vault research",
-        dependencies: [],
-        status: "pending",
-        retrieval_query: objective,
-      },
-      {
-        node_id: "verify",
-        kind: "verify",
-        role: "verify",
-        objective: "Check contested claims against sources",
-        dependencies: ["investigate"],
-        status: "pending",
-      },
-      {
-        node_id: "synthesize",
-        kind: "synthesize",
-        role: "synthesize",
-        objective: "Propose sourced wiki pages and rebuild the graph",
-        dependencies: ["verify"],
-        status: "pending",
-      },
-    ],
+    preference,
+    agent,
+    nodes: nodesForPreference(objective, preference),
   };
 }
 
@@ -154,27 +173,28 @@ async function nativeWave(context: vscode.ExtensionContext, workspace: string, r
   };
   try {
     const mcp = await getMcp(context);
-    mark("investigate", "running");
-    rec.phase = "investigating";
-    persist(workspace, rec);
-    const epoch = await mcp.callTool("ce_epoch_summary", {});
-    mark("investigate", epoch.isError ? "failed" : "done");
-    rec.note = epoch.text.slice(0, 1500);
-    persist(workspace, rec);
-    if (epoch.isError) return;
-    mark("verify", "running");
-    rec.phase = "verifying";
-    persist(workspace, rec);
-    const lint = await mcp.callTool("ce_lint", {});
-    mark("verify", lint.isError ? "failed" : "done");
-    rec.note = (rec.note || "") + "\n\n" + lint.text.slice(0, 800);
-    persist(workspace, rec);
-    mark("synthesize", "running");
-    rec.phase = "synthesizing";
-    persist(workspace, rec);
+    const ids = rec.nodes.map((n) => n.node_id);
+    const runTool = async (id: string, tool: string) => {
+      if (!ids.includes(id)) return true;
+      mark(id, "running");
+      rec.phase = id;
+      persist(workspace, rec);
+      const result = await mcp.callTool(tool, {});
+      mark(id, result.isError ? "failed" : "done");
+      rec.note = ((rec.note || "") + "\n\n" + result.text).trim().slice(0, 2300);
+      persist(workspace, rec);
+      return !result.isError;
+    };
+    if (ids.includes("answer")) {
+      await runTool("answer", "ce_epoch_summary");
+    } else {
+      if (!await runTool("investigate", "ce_epoch_summary")) return;
+      if (ids.includes("verify")) await runTool("verify", "ce_lint");
+    }
     // Writing stays in the Agents session (Curator / Auto). Native wave
     // only primes evidence so the Dashboard has a DAG before the LM loop.
-    mark("synthesize", "running");
+    const last = rec.nodes[rec.nodes.length - 1];
+    if (last) mark(last.node_id, "running");
     rec.phase = "agents-session";
     persist(workspace, rec);
   } catch (err) {
@@ -193,19 +213,23 @@ async function nativeWave(context: vscode.ExtensionContext, workspace: string, r
 export async function startCurate(
   context: vscode.ExtensionContext,
   prompt: string,
+  opts?: { preference?: number; via?: string; agent?: string },
 ): Promise<{ text: string; orchestrationId: string }> {
   const workspace = workspaceFsPath();
   if (!workspace) {
     return { text: "Open a curiosity-engine folder first.", orchestrationId: "" };
   }
   const objective = prompt.trim() || "curate the wiki";
-  const rec = seedPlan(objective);
+  const preference = opts?.preference ?? getPreference();
+  const agent = opts?.agent || "Auto";
+  const rec = seedPlan(objective, preference, agent);
   persist(workspace, rec);
 
-  const session = await startAutoAgentsSession(
-    `You are Switch Bay Auto. ${objective}\n\n`
-    + `Use Investigator subagents for independent research, then Switch Bay `
-    + `MCP tools (search_wiki, ce_planner, ce_sweep, propose_wiki_page). `
+  const session = await startNamedAgentSession(
+    agent,
+    `You are Switch Bay ${agent}. ${objective}\n\n`
+    + `${effortInstruction(preference)}\n\n`
+    + `Use Switch Bay MCP tools (search_wiki, ce_planner, ce_sweep, propose_wiki_page). `
     + `Do not delete pages. Cite [[wikilinks]].`,
   );
   rec.via = session.via;

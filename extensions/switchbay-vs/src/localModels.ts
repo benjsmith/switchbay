@@ -4,7 +4,10 @@
  * as chat models (LanguageModelChatProvider) so Agents/Chat can use
  * them without the Switch Bay daemon.
  */
+import * as cp from "child_process";
+import * as fs from "fs";
 import * as os from "os";
+import * as path from "path";
 import * as vscode from "vscode";
 
 export type LocalBackend = "ollama" | "llamacpp" | "mlx";
@@ -25,7 +28,215 @@ const DEFAULTS: Record<LocalBackend, { label: string; port: number; tags: string
   mlx: { label: "MLX", port: 8888, tags: "http://127.0.0.1:8888/v1/models" },
 };
 
-function configured(): LocalModel[] {
+const EXTRA_BIN_DIRS = [
+  path.join(os.homedir(), ".local", "bin"),
+  path.join(os.homedir(), ".cargo", "bin"),
+  "/opt/homebrew/bin",
+  "/usr/local/bin",
+];
+
+function which(names: string[]): string | undefined {
+  const pathEnv = process.env.PATH || "";
+  const dirs = [...pathEnv.split(path.delimiter).filter(Boolean), ...EXTRA_BIN_DIRS];
+  for (const name of names) {
+    if (path.isAbsolute(name) && fs.existsSync(name)) return name;
+    for (const dir of dirs) {
+      const cand = path.join(dir, name);
+      if (fs.existsSync(cand)) {
+        try {
+          fs.accessSync(cand, fs.constants.X_OK);
+          return cand;
+        } catch { /* not executable */ }
+      }
+    }
+  }
+  return undefined;
+}
+
+function execCapture(bin: string, args: string[], timeoutMs = 8000): Promise<string> {
+  return new Promise((resolve) => {
+    const child = cp.spawn(bin, args, { env: process.env });
+    let out = "";
+    const t = setTimeout(() => {
+      child.kill();
+      resolve(out);
+    }, timeoutMs);
+    child.stdout?.on("data", (b: Buffer) => { out += b.toString(); });
+    child.stderr?.on("data", (b: Buffer) => { out += b.toString(); });
+    child.on("close", () => {
+      clearTimeout(t);
+      resolve(out);
+    });
+    child.on("error", () => {
+      clearTimeout(t);
+      resolve(out);
+    });
+  });
+}
+
+function spawnDetached(bin: string, args: string[]): void {
+  const child = cp.spawn(bin, args, {
+    detached: true,
+    stdio: "ignore",
+    env: process.env,
+  });
+  child.unref();
+}
+
+async function waitForJson(url: string, attempts = 10, delayMs = 700): Promise<unknown | null> {
+  for (let i = 0; i < attempts; i++) {
+    const body = await fetchJson(url, 1500);
+    if (body) return body;
+    await new Promise((r) => setTimeout(r, delayMs));
+  }
+  return null;
+}
+
+function openaiModelIds(body: unknown): string[] {
+  const data = (body as { data?: { id?: string }[] } | null)?.data;
+  if (!Array.isArray(data)) return [];
+  return data.map((m) => m.id || "").filter(Boolean);
+}
+
+function walkFiles(root: string, pred: (name: string) => boolean, max = 80): string[] {
+  const out: string[] = [];
+  const walk = (dir: string, depth: number) => {
+    if (out.length >= max || depth > 6) return;
+    let entries: fs.Dirent[];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= max) return;
+      if (e.name.startsWith(".")) continue;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full, depth + 1);
+      else if (pred(e.name)) out.push(full);
+    }
+  };
+  if (fs.existsSync(root)) walk(root, 0);
+  return out;
+}
+
+function switchbayModelsDir(): string {
+  const home = os.homedir();
+  if (process.platform === "darwin") return path.join(home, "Library", "Application Support", "switchbay", "models");
+  if (process.platform === "win32") {
+    const base = process.env.LOCALAPPDATA || path.join(home, "AppData", "Local");
+    return path.join(base, "switchbay", "models");
+  }
+  const base = process.env.XDG_STATE_HOME || path.join(home, ".local", "state");
+  return path.join(base, "switchbay", "models");
+}
+
+function hfHubRoot(): string {
+  return process.env.HF_HOME
+    ? path.join(process.env.HF_HOME, "hub")
+    : path.join(os.homedir(), ".cache", "huggingface", "hub");
+}
+
+function listGgufOnDisk(): string[] {
+  const roots = [
+    switchbayModelsDir(),
+    path.join(os.homedir(), "models"),
+    path.join(os.homedir(), ".llama.cpp"),
+    hfHubRoot(),
+  ];
+  const files = new Set<string>();
+  for (const root of roots) {
+    for (const f of walkFiles(root, (n) => n.toLowerCase().endsWith(".gguf"), 40)) {
+      files.add(f);
+    }
+  }
+  return [...files];
+}
+
+function repoIdFromHfDir(dirName: string): string | null {
+  // models--mlx-community--Qwen3-4bit
+  if (!dirName.startsWith("models--")) return null;
+  const rest = dirName.slice("models--".length);
+  const parts = rest.split("--");
+  if (parts.length < 2) return null;
+  return `${parts[0]}/${parts.slice(1).join("--")}`;
+}
+
+function listMlxOnDisk(): string[] {
+  const ids = new Set<string>();
+  const serveRoot = path.join(os.homedir(), ".mlx-serve", "models");
+  if (fs.existsSync(serveRoot)) {
+    for (const org of fs.readdirSync(serveRoot, { withFileTypes: true })) {
+      if (!org.isDirectory()) continue;
+      const orgDir = path.join(serveRoot, org.name);
+      let repos: fs.Dirent[] = [];
+      try { repos = fs.readdirSync(orgDir, { withFileTypes: true }); } catch { continue; }
+      for (const repo of repos) {
+        if (repo.isDirectory()) ids.add(`${org.name}/${repo.name}`);
+      }
+    }
+  }
+  const hub = hfHubRoot();
+  if (fs.existsSync(hub)) {
+    let entries: fs.Dirent[] = [];
+    try { entries = fs.readdirSync(hub, { withFileTypes: true }); } catch { entries = []; }
+    for (const e of entries) {
+      if (!e.isDirectory()) continue;
+      const id = repoIdFromHfDir(e.name);
+      if (!id) continue;
+      const lower = id.toLowerCase();
+      if (lower.includes("mlx") || lower.includes("4bit") || lower.includes("8bit")) {
+        ids.add(id);
+      }
+    }
+  }
+  return [...ids];
+}
+
+async function mlxServeList(bin: string): Promise<string[]> {
+  const text = await execCapture(bin, ["list"], 8000);
+  const models: string[] = [];
+  for (const line of text.split("\n")) {
+    const t = line.trim();
+    if (!t || t.startsWith("NAME") || /^-+$/.test(t)) continue;
+    const id = t.split(/\s+/)[0];
+    if (id.includes("/") || id.includes(":") || /^[A-Za-z0-9._-]+$/.test(id)) {
+      if (!/^(list|serve|pull|run|NAME|model)$/i.test(id)) models.push(id);
+    }
+  }
+  return [...new Set(models)];
+}
+
+async function probeOpenAiPorts(ports: number[]): Promise<{ port: number; models: string[] } | null> {
+  for (const port of ports) {
+    const body = await fetchJson(`http://127.0.0.1:${port}/v1/models`, 1200);
+    const models = openaiModelIds(body);
+    if (body) return { port, models };
+  }
+  return null;
+}
+
+async function ensureMlxServe(bin: string | undefined): Promise<{ port: number; models: string[] } | null> {
+  const live = await probeOpenAiPorts([11234, 8888, 8889, 8890, 8891, 8892]);
+  if (live) return live;
+  if (!bin) return null;
+  const modelDir = path.join(os.homedir(), ".mlx-serve", "models");
+  spawnDetached(bin, ["--serve", "--host", "127.0.0.1", "--port", "11234", "--model-dir", modelDir]);
+  const body = await waitForJson("http://127.0.0.1:11234/v1/models", 12, 800);
+  if (body) return { port: 11234, models: openaiModelIds(body) };
+  spawnDetached(bin, ["serve"]);
+  const again = await waitForJson("http://127.0.0.1:11234/v1/models", 8, 800);
+  if (again) return { port: 11234, models: openaiModelIds(again) };
+  return null;
+}
+
+async function ensureLlamaServer(bin: string | undefined, gguf?: string): Promise<{ port: number; models: string[] } | null> {
+  const live = await probeOpenAiPorts([8080, 8878, 8879, 8880]);
+  if (live) return live;
+  if (!bin || !gguf) return null;
+  spawnDetached(bin, ["-m", gguf, "--host", "127.0.0.1", "--port", "8080", "-c", "8192"]);
+  const body = await waitForJson("http://127.0.0.1:8080/v1/models", 15, 800);
+  if (body) return { port: 8080, models: openaiModelIds(body) };
+  return null;
+}
+
+export function listConfiguredLocalModels(): LocalModel[] {
   const raw = vscode.workspace.getConfiguration("switchbay").get<LocalModel[]>(CONFIG_KEY.slice("switchbay.".length));
   return Array.isArray(raw) ? raw.filter((m) => m && m.model && m.baseUrl) : [];
 }
@@ -44,34 +255,63 @@ async function fetchJson(url: string, timeoutMs = 2500): Promise<unknown | null>
   }
 }
 
-type Probe = { backend: LocalBackend; ok: boolean; models: string[]; hint: string };
+export type LocalProbe = { backend: LocalBackend; ok: boolean; models: string[]; hint: string };
 
-async function probe(): Promise<Probe[]> {
+export async function probeLocalBackends(opts?: { start?: boolean }): Promise<LocalProbe[]> {
   const ollama = await fetchJson("http://127.0.0.1:11434/api/tags");
   const ollamaModels = Array.isArray((ollama as { models?: { name?: string }[] } | null)?.models)
     ? (ollama as { models: { name?: string }[] }).models.map((m) => m.name || "").filter(Boolean)
     : [];
 
-  const llama = await fetchJson("http://127.0.0.1:8080/v1/models");
-  const llamaModels = Array.isArray((llama as { data?: { id?: string }[] } | null)?.data)
-    ? (llama as { data: { id?: string }[] }).data.map((m) => m.id || "").filter(Boolean)
-    : [];
+  const llamaBin = which(["llama-server"]);
+  const mlxServeBin = which(["mlx-serve"]);
+  const mlxLmBin = which(["mlx_lm.server", "mlx-lm"]);
+  const ggufs = listGgufOnDisk();
+  const mlxDisk = listMlxOnDisk();
 
-  const mlxModels: string[] = [];
+  const llamaLive = await probeOpenAiPorts([8080, 8878, 8879, 8880]);
+  const llamaModels = [
+    ...(llamaLive?.models ?? []),
+    ...ggufs.map((f) => f),
+  ].filter((v, i, a) => a.indexOf(v) === i);
+
+  let mlxModels: string[] = [];
   let mlxOk = false;
+  let mlxHint = "MLX is Apple silicon only.";
   if (process.platform === "darwin" && os.arch() === "arm64") {
-    for (let port = 8888; port <= 8892; port++) {
-      const mlx = await fetchJson(`http://127.0.0.1:${port}/v1/models`);
-      const ids = Array.isArray((mlx as { data?: { id?: string }[] } | null)?.data)
-        ? (mlx as { data: { id?: string }[] }).data.map((m) => m.id || "").filter(Boolean)
-        : [];
-      if (ids.length || mlx) {
-        mlxOk = true;
-        mlxModels.push(...ids.map((id) => (ids.length ? `${id} (:${port})` : `:${port}`)));
-        break;
+    if (mlxServeBin) {
+      mlxModels.push(...await mlxServeList(mlxServeBin));
+      if (opts?.start) {
+        const started = await ensureMlxServe(mlxServeBin);
+        if (started) {
+          mlxOk = true;
+          mlxModels.push(...started.models.map((id) => `${id} (:${started.port})`));
+        }
       }
     }
+    const live = await probeOpenAiPorts([11234, 8888, 8889, 8890, 8891, 8892]);
+    if (live) {
+      mlxOk = true;
+      mlxModels.push(...live.models.map((id) => `${id} (:${live.port})`));
+    }
+    mlxModels.push(...mlxDisk);
+    mlxModels = [...new Set(mlxModels)];
+    const binLabel = mlxServeBin ? "mlx-serve" : mlxLmBin ? "mlx_lm.server" : "not on PATH";
+    mlxHint = mlxOk
+      ? `${mlxModels.length} model(s) (${binLabel})`
+      : mlxServeBin || mlxLmBin
+        ? `${mlxModels.length ? mlxModels.length + " on disk; " : ""}binary found (${binLabel}) but no server answered. Pull a tag or start mlx-serve serve.`
+        : "Not found. `uv tool install mlx-lm` or install mlx-serve, then pull a tag.";
   }
+
+  const llamaOk = Boolean(llamaLive) || llamaModels.length > 0;
+  const llamaHint = llamaLive
+    ? `${llamaModels.length || "server"} on :${llamaLive.port}`
+    : llamaBin
+      ? `${ggufs.length} GGUF on disk; llama-server at ${llamaBin}`
+      : ggufs.length
+        ? `${ggufs.length} GGUF on disk; llama-server not on PATH`
+        : "Not running. `brew install llama.cpp`, pull a GGUF tag, then llama-server -m <file> --port 8080.";
 
   return [
     {
@@ -84,20 +324,15 @@ async function probe(): Promise<Probe[]> {
     },
     {
       backend: "llamacpp",
-      ok: llama != null,
+      ok: llamaOk,
       models: llamaModels,
-      hint: llama
-        ? (llamaModels.length ? llamaModels.join(", ") : "server on :8080")
-        : "Not running. `brew install llama.cpp` then `llama-server -m <model.gguf> --port 8080`.",
+      hint: llamaHint,
     },
     {
       backend: "mlx",
-      ok: mlxOk,
+      ok: mlxOk || mlxModels.length > 0,
       models: mlxModels,
-      hint: process.platform === "darwin" && os.arch() === "arm64"
-        ? (mlxOk ? (mlxModels.join(", ") || "mlx_lm.server on :8888")
-          : "Not running. `uv tool install mlx-lm` then `mlx_lm.server --port 8888`.")
-        : "MLX is Apple silicon only.",
+      hint: mlxHint,
     },
   ];
 }
@@ -121,9 +356,9 @@ function baseUrlFor(backend: LocalBackend, extraPort?: string): string {
 
 export async function configureLocalModels(): Promise<void> {
   const scanning = vscode.window.setStatusBarMessage("$(sync~spin) Scanning local models…");
-  let probes: Probe[];
+  let probes: LocalProbe[];
   try {
-    probes = await probe();
+    probes = await probeLocalBackends({ start: true });
   } finally {
     scanning.dispose();
   }
@@ -137,21 +372,26 @@ export async function configureLocalModels(): Promise<void> {
       kind: vscode.QuickPickItemKind.Default,
     });
     for (const name of p.models) {
+      const shown = name.includes(path.sep) ? path.basename(name) : name;
       picks.push({
-        label: `    $(add) ${name}`,
+        label: `    $(add) ${shown}`,
         description: `Add ${DEFAULTS[p.backend].label} model to VS Code`,
-        detail: p.backend,
+        detail: `${p.backend}\t${name}`,
       });
     }
   }
   picks.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
   picks.push({ label: "$(cloud-download) Pull an Ollama tag…", description: "ollama pull <tag>" });
+  picks.push({ label: "$(cloud-download) Pull a llama.cpp GGUF…", description: "Hugging Face repo, e.g. bartowski/Qwen2.5-7B-Instruct-GGUF" });
+  if (process.platform === "darwin" && os.arch() === "arm64") {
+    picks.push({ label: "$(cloud-download) Pull an MLX tag…", description: "mlx-serve pull <tag> or mlx-community/<repo>" });
+  }
   picks.push({ label: "$(link-external) Install Ollama…", description: "Open ollama.com/download" });
   if (process.platform === "darwin" && os.arch() === "arm64") {
-    picks.push({ label: "$(link-external) MLX install hint", description: "uv tool install mlx-lm" });
+    picks.push({ label: "$(link-external) MLX install hint", description: "uv tool install mlx-lm · or mlx-serve" });
   }
   picks.push({ label: "$(server) llama.cpp install hint", description: "brew install llama.cpp" });
-  const saved = configured();
+  const saved = listConfiguredLocalModels();
   if (saved.length) {
     picks.push({ label: "", kind: vscode.QuickPickItemKind.Separator });
     picks.push({
@@ -178,6 +418,51 @@ export async function configureLocalModels(): Promise<void> {
     term.sendText(`ollama pull ${tag}`);
     return;
   }
+  if (choice.label.includes("Pull a llama.cpp")) {
+    const tag = await vscode.window.showInputBox({
+      title: "Pull llama.cpp GGUF",
+      placeHolder: "bartowski/Qwen2.5-7B-Instruct-GGUF",
+      prompt: "Hugging Face repo (owner/name). Downloads into Switch Bay's models dir via huggingface-cli, or llama-server -hf.",
+    });
+    if (!tag) return;
+    const dest = switchbayModelsDir();
+    fs.mkdirSync(dest, { recursive: true });
+    const llama = which(["llama-server"]);
+    const hf = which(["huggingface-cli", "hf"]);
+    const term = vscode.window.createTerminal({ name: "llama.cpp pull" });
+    term.show();
+    const quotedDest = JSON.stringify(dest);
+    const quotedTag = JSON.stringify(tag);
+    if (hf) {
+      term.sendText(`mkdir -p ${quotedDest} && ${JSON.stringify(hf)} download ${quotedTag} --local-dir ${quotedDest} --include '*.gguf'`);
+    } else if (llama) {
+      term.sendText(`${JSON.stringify(llama)} -hf ${quotedTag} --host 127.0.0.1 --port 8080`);
+    } else {
+      term.sendText(`echo "Install huggingface-cli (pip install huggingface_hub) or llama-server (brew install llama.cpp). Repo: ${tag}"`);
+    }
+    return;
+  }
+  if (choice.label.includes("Pull an MLX")) {
+    const tag = await vscode.window.showInputBox({
+      title: "Pull MLX model",
+      placeHolder: "mlx-community/Qwen3-4B-4bit",
+      prompt: "mlx-serve tag or Hugging Face repo (mlx-community/…). Uses mlx-serve pull when installed.",
+    });
+    if (!tag) return;
+    const mlxServe = which(["mlx-serve"]);
+    const hf = which(["huggingface-cli", "hf"]);
+    const term = vscode.window.createTerminal({ name: "MLX pull" });
+    term.show();
+    if (mlxServe) {
+      term.sendText(`${JSON.stringify(mlxServe)} pull ${JSON.stringify(tag)}`);
+    } else if (hf) {
+      const repo = tag.includes("/") ? tag : `mlx-community/${tag}`;
+      term.sendText(`${JSON.stringify(hf)} download ${JSON.stringify(repo)}`);
+    } else {
+      term.sendText(`echo "Install mlx-serve or huggingface-cli. Then: mlx-serve pull ${tag}"`);
+    }
+    return;
+  }
   if (choice.label.includes("Install Ollama")) {
     await vscode.env.openExternal(vscode.Uri.parse("https://ollama.com/download"));
     return;
@@ -200,17 +485,42 @@ export async function configureLocalModels(): Promise<void> {
     return;
   }
 
-  const backend = (choice.detail || "") as LocalBackend;
+  const [backendRaw, payload] = (choice.detail || "").split("\t");
+  const backend = backendRaw as LocalBackend;
   if (!backend || !(backend in DEFAULTS)) return;
-  const rawName = choice.label.replace(/^\s*\$\([^)]+\)\s*/, "").trim();
-  const model = rawName.replace(/\s*\(:\d+\)\s*$/, "");
+  const rawName = (payload || choice.label.replace(/^\s*\$\([^)]+\)\s*/, "").trim()).trim();
+  const model = path.basename(rawName).replace(/\s*\(:\d+\)\s*$/, "");
+  if (backend === "llamacpp" && rawName.endsWith(".gguf")) {
+    const llama = which(["llama-server"]);
+    await vscode.window.withProgress(
+      { location: vscode.ProgressLocation.Notification, title: `Starting llama-server with ${model}…` },
+      async () => { await ensureLlamaServer(llama, rawName); },
+    );
+  }
+  if (backend === "mlx") {
+    const mlxServe = which(["mlx-serve"]);
+    if (mlxServe) {
+      await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: "Starting mlx-serve…" },
+        async () => { await ensureMlxServe(mlxServe); },
+      );
+    }
+  }
   const next: LocalModel = {
     backend,
     name: `${DEFAULTS[backend].label} · ${model}`,
     model,
     baseUrl: baseUrlFor(backend, rawName),
   };
-  const models = configured().filter((m) => !(m.backend === next.backend && m.model === next.model));
+  if (backend === "mlx") {
+    const live = await probeOpenAiPorts([11234, 8888, 8889, 8890]);
+    if (live) next.baseUrl = `http://127.0.0.1:${live.port}/v1`;
+  }
+  if (backend === "llamacpp") {
+    const live = await probeOpenAiPorts([8080, 8878, 8879]);
+    if (live) next.baseUrl = `http://127.0.0.1:${live.port}/v1`;
+  }
+  const models = listConfiguredLocalModels().filter((m) => !(m.backend === next.backend && m.model === next.model));
   models.push(next);
   await persist(models);
   void vscode.window.showInformationMessage(
@@ -240,7 +550,7 @@ class LocalChatProvider implements vscode.LanguageModelChatProvider {
   }
 
   provideLanguageModelChatInformation(): vscode.LanguageModelChatInformation[] {
-    return configured().map((m) => ({
+    return listConfiguredLocalModels().map((m) => ({
       id: `${m.backend}:${m.model}`,
       name: m.name,
       family: m.backend,
@@ -260,7 +570,7 @@ class LocalChatProvider implements vscode.LanguageModelChatProvider {
     progress: vscode.Progress<vscode.LanguageModelResponsePart>,
     token: vscode.CancellationToken,
   ): Promise<void> {
-    const saved = configured().find((m) => `${m.backend}:${m.model}` === model.id);
+    const saved = listConfiguredLocalModels().find((m) => `${m.backend}:${m.model}` === model.id);
     if (!saved) throw new Error(`Unknown local model ${model.id}`);
     const body = {
       model: saved.model,

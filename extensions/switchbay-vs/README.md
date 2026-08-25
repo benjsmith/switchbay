@@ -1,26 +1,79 @@
 # Switch Bay VS
 
-In-tree VS Code extension (alternative install of Switch Bay). No daemon.
-Open a curiosity-engine folder (`wiki/` + `vault/`) and F5 from this checkout.
+Knowledge-graph workbench over a curiosity-engine folder. **No daemon** — no
+`:8765`, no always-on Python HTTP server. VS Code owns the chrome; Switch Bay
+owns the wiki, graph, MCP tools, and Agents session.
 
-See [`docs/vscode-plugin.md`](../../docs/vscode-plugin.md) for the keep/drop
-list and verdict. Graph/Atlas is built from `frontend/` (`pnpm --dir frontend
-run build:webview`) so PWA and the webview share one widget.
+Install and update walkthrough: [docs/vscode.md](https://github.com/benjsmith/switchbay/blob/exp/vscode-plugin/docs/vscode.md)
+in the Switch Bay repo.
 
-## Debug
+![Switch Bay VS icon](media/icon.png)
 
-1. Branch `exp/vscode-plugin`. File → Open Workspace from File →
-   `switchbay.code-workspace`.
-2. Run and Debug → **Switch Bay VS**.
-3. In the Extension Development Host, open a CE folder.
+## What you get
 
-```
-make vscode-compile
-```
+- **Wiki** and **Projects** in the activity bar
+- **Graph / Atlas** webview (edges from `.curator/graph.kuzu`)
+- Wiki markdown preview with `[[wikilinks]]` and clickable sources
+- Chat participant `@switchbay` (`/curate`, `/thrusters`, …)
+- MCP stdio worker: `python -m switchbay.mcp_server` (`CSWY_PROFILE=vscode`)
+- Agent Dashboard (DAG snapshot on disk, not a live daemon)
+- **Orchestration effort** slider (Economy → Maximum) for Auto
+- **Schedules** for named agents (Auto, Curator, Draw, …) while VS Code is open
+- Local models helper for Ollama, llama.cpp, and MLX
 
-Chat: `@switchbay` — `/thrusters` `/curate` `/plot` `/deck` `/sketch`.
+## Requirements
 
-**Switch Bay VS: Local models…** probes Ollama, llama.cpp, and MLX and
-publishes them to Chat / Agents.
+This VSIX is the VS Code UI. The Python workbench still lives in a
+[Switch Bay](https://github.com/benjsmith/switchbay) git checkout.
+Requires **VS Code 1.134+**.
+
+1. Clone Switch Bay and run `make install`.
+2. Open a curiosity-engine folder (`wiki/` + `vault/`).
+3. Command Palette → **Switch Bay VS: Configure Python…** and pick that
+   checkout (the folder with `src/switchbay` and `.venv`).
+
+First-run prompts if `import switchbay` fails. You can re-run the command
+any time. Settings written: `switchbay.repoRoot` and `switchbay.pythonPath`
+(user settings).
+
+Optional: GitHub Copilot for Chat / Agents models, **or** local Ollama
+(`:11434`), llama.cpp (`:8080`), or MLX (`:8888`) via **Switch Bay VS:
+Local models…**.
+
+## Commands
+
+| Command | What it does |
+| --- | --- |
+| Open Graph | Classic force graph; **view:** switches to Atlas |
+| Open Wiki Preview | Rendered wiki page with sources |
+| Open Agent Dashboard | DAG / tools / rules / models |
+| Curate (Agents session) | Opens a VS Code Agents session on Auto |
+| Set orchestration effort… | Economy / Balanced / Maximum (also a slider on the Dashboard) |
+| Schedule a named agent… | Recurring prompt on Auto, Curator, Draw, … |
+| Run named agent… | Open a Local session on a shipped or workspace agent |
+| Update extension… | Sideload a newer VSIX from this checkout |
+| Fire Thrusters | Mars Hopper webview |
+| Rebuild Wiki Viewer | CE `wiki_render.py` |
+| Configure Python… | Point at a Switch Bay checkout |
+| Local models… | Discover Ollama / llama.cpp / MLX |
+
+Chat: `@switchbay` with `/thrusters` `/curate` `/plot` `/deck` `/sketch`.
 
 Custom agents: Auto, Curator, Reviewer. Investigator is subagent-only.
+
+## Sideload from this repo
+
+```
+make vsix
+code --install-extension dist/switchbay-vs-0.2.0.vsix
+```
+
+That same command **updates** an older sideload (same `publisher` + `name`). Then **Developer: Reload Window**. Command Palette → **Switch Bay VS: Update extension…** walks the same path if `dist/*.vsix` is already built.
+
+Sideload testers: after `make vsix`, install the VSIX again and
+**Developer: Reload Window**. Schedules fire only while VS Code is open.
+
+## License
+
+[FSL-1.1-ALv2](https://github.com/benjsmith/switchbay/blob/main/LICENSE)
+(Functional Source License, Apache 2.0 after two years).

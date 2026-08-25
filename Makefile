@@ -8,7 +8,7 @@
 .PHONY: install sync sync-semantic sync-semantic-torch sync-frontend \
         dev-daemon dev-frontend build-frontend install-service \
         uninstall-service start stop restart status refresh test test-py check e2e \
-        enterprise-local open-local enterprise-bake vscode-compile
+        enterprise-local open-local enterprise-bake vscode-compile vsix
 
 PYDIR := $(CURDIR)/src
 
@@ -65,6 +65,34 @@ vscode-compile:
 	pnpm --dir extensions/switchbay-vs install --frozen-lockfile
 	pnpm --dir extensions/switchbay-vs run compile
 	pnpm --dir frontend run build:webview
+
+# Marketplace / sideload VSIX. Graph assets are gitignored, so we stage a
+# copy outside the git worktree (vsce otherwise skips them).
+VSIX_VERSION := $(shell node -p "require('./extensions/switchbay-vs/package.json').version")
+VSIX_STAGING := /tmp/switchbay-vs-pack
+
+vsix: vscode-compile
+	@test -f extensions/switchbay-vs/media/icon.png || (echo "missing media/icon.png"; exit 1)
+	@test -f extensions/switchbay-vs/media/graph/webview-graph.html || \
+		(echo "missing graph webview — vscode-compile should have built it"; exit 1)
+	rm -rf $(VSIX_STAGING)
+	mkdir -p $(VSIX_STAGING)/out $(VSIX_STAGING)/static/mars-hopper
+	rsync -a --exclude '*.map' extensions/switchbay-vs/out/ $(VSIX_STAGING)/out/
+	rsync -a extensions/switchbay-vs/media/ $(VSIX_STAGING)/media/
+	rsync -a extensions/switchbay-vs/agents/ $(VSIX_STAGING)/agents/
+	rsync -a extensions/switchbay-vs/scripts/ $(VSIX_STAGING)/scripts/
+	cp extensions/switchbay-vs/package.json extensions/switchbay-vs/README.md \
+		extensions/switchbay-vs/.vscodeignore $(VSIX_STAGING)/
+	cp LICENSE $(VSIX_STAGING)/LICENSE
+	cp static/mars-hopper/index.html static/mars-hopper/style.css static/mars-hopper/game.js \
+		$(VSIX_STAGING)/static/mars-hopper/
+	mkdir -p dist
+	cd $(VSIX_STAGING) && $(CURDIR)/extensions/switchbay-vs/node_modules/.bin/vsce package \
+		--no-dependencies \
+		--out $(CURDIR)/dist/switchbay-vs-$(VSIX_VERSION).vsix
+	@echo "VSIX: dist/switchbay-vs-$(VSIX_VERSION).vsix"
+	@unzip -l dist/switchbay-vs-$(VSIX_VERSION).vsix | grep -E \
+		'out/extension.js|media/graph/webview-graph.html|static/mars-hopper/index.html|media/icon.png|LICENSE|README.md'
 
 # Production build: the daemon serves frontend/dist at / (so the PWA
 # installs from the always-on daemon, no vite). Run this before

@@ -28,7 +28,8 @@ and nothing leaves unless you send it.
   — chooses one Run or an adaptive multi-agent DAG for complex, long-running
   work; independent workers can use different available models and providers.
 - **Two cockpits** — **Power** mode (3-column: browser · tabs · rail) and
-  **Zen** mode (think *at* the graph). Same data, your choice.
+  **Zen** mode (think *at* the graph). Same data, your choice. Optional
+  **VS Code** install (no `:8765` daemon): [`docs/vscode.md`](docs/vscode.md).
 - **Custom tabs** — describe the view you want and an agent builds it
   just-in-time over your own data. Pin the keepers (globally or per
   workspace); throw the rest away.
@@ -139,6 +140,22 @@ and install it (dock icon + standalone window). Closing the window does
 / `make status` manage the service; `make uninstall-service` removes it.
 On macOS, the first start may show the python3.13 permission sheets
 documented [above](#macos-permission-prompts-expected).
+
+## Install in VS Code (no daemon)
+
+Same wiki, Graph/Atlas, and agents, as a VS Code extension. Nothing
+listens on `:8765`. Closing VS Code stops work.
+
+```sh
+make vsix
+code --install-extension dist/switchbay-vs-0.2.0.vsix
+```
+
+Open a curiosity-engine folder, then **Switch Bay VS: Configure Python…**
+and point at this checkout. Full walkthrough (update path, Agent
+Dashboard, local models, F5): **[`docs/vscode.md`](docs/vscode.md)**.
+Not on the Marketplace yet; sideload from this repo. Requires VS Code
+1.134+.
 
 ### Iterating without quitting the PWA
 

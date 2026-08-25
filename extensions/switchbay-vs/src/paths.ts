@@ -5,7 +5,21 @@ import * as vscode from "vscode";
 export function repoRoot(context: vscode.ExtensionContext): string {
   const configured = vscode.workspace.getConfiguration("switchbay").get<string>("repoRoot")?.trim();
   if (configured) return configured;
-  return path.resolve(context.extensionPath, "..", "..");
+  // F5 / in-tree: extensions/switchbay-vs → repo root. A Marketplace VSIX
+  // lives under ~/.vscode/extensions/, so only use parent.parent when it
+  // actually contains src/switchbay.
+  const inTree = path.resolve(context.extensionPath, "..", "..");
+  if (fs.existsSync(path.join(inTree, "src", "switchbay", "mcp_server.py"))) {
+    return inTree;
+  }
+  return context.extensionPath;
+}
+
+/** Mars Hopper assets: bundled in the VSIX, else the in-tree static/ copy. */
+export function hopperDir(context: vscode.ExtensionContext): string {
+  const bundled = path.join(context.extensionPath, "static", "mars-hopper");
+  if (fs.existsSync(path.join(bundled, "index.html"))) return bundled;
+  return path.join(repoRoot(context), "static", "mars-hopper");
 }
 
 export function pythonBin(repo: string): string {

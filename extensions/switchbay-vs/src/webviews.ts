@@ -2,15 +2,19 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
-  ensureGraphEdges, kuzuDbExists, readCachedGraph, rebuildKuzuGraph,
-  scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode,
+  ensureGraphEdges, kuzuDbExists, loadCurationHistory, readCachedGraph,
+  rebuildKuzuGraph, scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode,
 } from "./ce";
+import { startNamedAgentSession } from "./agentsSession";
 import {
   agentsDashboardHtml, dashboardPayload, deleteRule,
 } from "./dashboard";
 import { runsRoot } from "./orch";
-import { repoRoot, workspaceFolder } from "./paths";
+import { hopperDir, workspaceFolder } from "./paths";
+import { setPreference } from "./preference";
 import { openWikiPage } from "./preview";
+import { deleteSchedule, runScheduleNow, upsertSchedule } from "./schedules";
+import { checkAndOfferUpdate } from "./update";
 
 function nonce(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
@@ -101,6 +105,11 @@ export function openGraph(context: vscode.ExtensionContext): void {
       await sendGraph();
       return;
     }
+    if (msg.type === "history") {
+      const history = await loadCurationHistory(context, folder.fsPath);
+      void panel.webview.postMessage({ type: "curation-history", history });
+      return;
+    }
     const node = msg.node;
     if (!node) return;
     const uri = wikiPageUri(folder, node.path);
@@ -129,13 +138,12 @@ export function openGraph(context: vscode.ExtensionContext): void {
 }
 
 export function openHopper(context: vscode.ExtensionContext): void {
-  const repo = repoRoot(context);
-  const hopperDir = path.join(repo, "static", "mars-hopper");
-  if (!fs.existsSync(path.join(hopperDir, "index.html"))) {
-    void vscode.window.showErrorMessage("Mars Hopper assets are not bundled in this checkout.");
+  const dir = hopperDir(context);
+  if (!fs.existsSync(path.join(dir, "index.html"))) {
+    void vscode.window.showErrorMessage("Mars Hopper assets are not bundled in this install.");
     return;
   }
-  const root = vscode.Uri.file(hopperDir);
+  const root = vscode.Uri.file(dir);
   const panel = vscode.window.createWebviewPanel(
     "switchbay.thrusters",
     "Mars Hopper",
@@ -144,7 +152,7 @@ export function openHopper(context: vscode.ExtensionContext): void {
   );
   const css = panel.webview.asWebviewUri(vscode.Uri.joinPath(root, "style.css"));
   const js = panel.webview.asWebviewUri(vscode.Uri.joinPath(root, "game.js"));
-  let html = fs.readFileSync(path.join(hopperDir, "index.html"), "utf8");
+  let html = fs.readFileSync(path.join(dir, "index.html"), "utf8");
   html = html
     .replace('href="/api/easter/mars-hopper/style.css"', `href="${css}"`)
     .replace('src="/api/easter/mars-hopper/game.js"', `src="${js}"`);
@@ -166,7 +174,15 @@ export function openAgents(context: vscode.ExtensionContext): void {
       void panel.webview.postMessage({ payload });
     });
   };
-  panel.webview.onDidReceiveMessage(async (msg: { type?: string; path?: string; id?: string }) => {
+  panel.webview.onDidReceiveMessage(async (msg: {
+    type?: string;
+    path?: string;
+    id?: string;
+    value?: number;
+    item?: Record<string, unknown>;
+    enabled?: boolean;
+    agent?: string;
+  }) => {
     if (msg.type === "ready" || msg.type === "refresh") {
       push();
       return;
@@ -178,6 +194,55 @@ export function openAgents(context: vscode.ExtensionContext): void {
     }
     if (msg.type === "agentsWindow") {
       await vscode.commands.executeCommand("switchbay.openAgentsWindow");
+      return;
+    }
+    if (msg.type === "checkUpdate") {
+      await checkAndOfferUpdate(context);
+      return;
+    }
+    if (msg.type === "setPreference" && typeof msg.value === "number") {
+      await setPreference(msg.value);
+      push();
+      return;
+    }
+    if (msg.type === "saveSchedule" && folder && msg.item) {
+      upsertSchedule(folder.fsPath, {
+        title: String(msg.item.title || ""),
+        prompt: String(msg.item.prompt || ""),
+        frequency: msg.item.frequency as "hourly" | "daily" | "weekly" | "every_n_hours",
+        every_hours: Number(msg.item.every_hours) || 24,
+        agent: String(msg.item.agent || "Auto"),
+        enabled: msg.item.enabled !== false,
+      });
+      push();
+      return;
+    }
+    if (msg.type === "deleteSchedule" && folder && msg.id) {
+      deleteSchedule(folder.fsPath, msg.id);
+      push();
+      return;
+    }
+    if (msg.type === "toggleSchedule" && folder && msg.id) {
+      upsertSchedule(folder.fsPath, { id: msg.id, enabled: Boolean(msg.enabled) });
+      push();
+      return;
+    }
+    if (msg.type === "runSchedule" && folder && msg.id) {
+      const result = await runScheduleNow(context, folder.fsPath, msg.id);
+      void vscode.window.showInformationMessage(result.text.replace(/[*`]/g, "").slice(0, 220));
+      push();
+      return;
+    }
+    if (msg.type === "runAgent" && msg.agent) {
+      const session = await startNamedAgentSession(msg.agent, `Run as ${msg.agent}.`);
+      if (!session.opened) {
+        void vscode.window.showWarningMessage(`Could not open the ${msg.agent} agent.`);
+      }
+      return;
+    }
+    if (msg.type === "localModels") {
+      await vscode.commands.executeCommand("switchbay.localModels");
+      push();
       return;
     }
     if (msg.type === "openSkill" && msg.path) {
@@ -210,11 +275,18 @@ export function openAgents(context: vscode.ExtensionContext): void {
     const rulesDir = path.join(ws, ".workbench", "state");
     fs.mkdirSync(rulesDir, { recursive: true });
     watch(rulesDir);
+    const githubAgents = path.join(ws, ".github", "agents");
+    fs.mkdirSync(githubAgents, { recursive: true });
+    watch(githubAgents);
     panel.onDidDispose(() => {
       clearTimeout(debounce);
       watchers.forEach((w) => w.close());
     });
   }
+  const cfgWatch = vscode.workspace.onDidChangeConfiguration((e) => {
+    if (e.affectsConfiguration("switchbay.orchestrationPreference")) push();
+  });
+  panel.onDidDispose(() => cfgWatch.dispose());
 }
 
 export function openHtml(uri: vscode.Uri): void {

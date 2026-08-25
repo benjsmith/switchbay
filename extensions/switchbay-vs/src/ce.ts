@@ -250,6 +250,45 @@ export function rebuildViewer(
   });
 }
 
+export function loadCurationHistory(
+  context: vscode.ExtensionContext,
+  workspace: string,
+): Promise<unknown> {
+  const repo = repoRoot(context);
+  const py = pythonBin(repo);
+  const script = path.join(__dirname, "..", "scripts", "dump_curation_history.py");
+  return new Promise((resolve) => {
+    const proc = spawn(py, [script, workspace], {
+      cwd: workspace,
+      env: { ...process.env, PYTHONPATH: srcDir(repo) },
+    });
+    let out = "";
+    let err = "";
+    const timer = setTimeout(() => {
+      proc.kill();
+      resolve({ duration: 15.0, events: [], source: "timeout" });
+    }, 60000);
+    proc.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
+    proc.stderr?.on("data", (d: Buffer) => { err += d.toString(); });
+    proc.on("error", () => {
+      clearTimeout(timer);
+      resolve({ duration: 15.0, events: [], source: "error" });
+    });
+    proc.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        resolve({ duration: 15.0, events: [], source: err.slice(-200) || "error" });
+        return;
+      }
+      try {
+        resolve(JSON.parse(out));
+      } catch {
+        resolve({ duration: 15.0, events: [], source: "invalid-json" });
+      }
+    });
+  });
+}
+
 export function scanWikiMarkdown(workspace: string): GraphNode[] {
   const wiki = path.join(workspace, "wiki");
   if (!fs.existsSync(wiki)) return [];

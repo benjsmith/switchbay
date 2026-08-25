@@ -1,15 +1,19 @@
 import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
-import { openAgentsWindow, optIntoAgentsWindow } from "./agentsSession";
+import { listNamedAgents, openAgentsWindow, optIntoAgentsWindow, startNamedAgentSession } from "./agentsSession";
 import { registerChat } from "./chat";
 import { readCachedGraph, rebuildViewer, wikiPageUri, type GraphNode } from "./ce";
 import { disposeMcp } from "./mcp";
 import { registerMcpProvider } from "./mcpProvider";
 import { startCurate } from "./orch";
 import { workspaceFolder } from "./paths";
+import { getPreference, preferenceLabel, setPreference } from "./preference";
 import { openWikiPage, openWikiPreview } from "./preview";
 import { ProjectsTreeProvider } from "./projectsTree";
+import { startScheduleTicker, upsertSchedule } from "./schedules";
+import { configurePython, maybeOfferSetup, probeSwitchbay } from "./setup";
+import { checkAndOfferUpdate } from "./update";
 import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
 import { WikiTreeProvider } from "./wikiTree";
 import { registerLocalModels } from "./localModels";
@@ -99,7 +103,6 @@ export function activate(context: vscode.ExtensionContext): void {
     wiki.refresh();
     projects.refresh();
   };
-  context.subscriptions.push(vscode.workspace.onDidChangeWorkspaceFolders(() => ping()));
   const folder = workspaceFolder();
   if (folder) {
     const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, "wiki/**/*.md"));
@@ -110,14 +113,125 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
-  status.command = "switchbay.openGraph";
-  const cached = folder ? readCachedGraph(folder.fsPath) : null;
-  status.text = cached
-    ? `$(type-hierarchy) Switch Bay VS · ${cached.nodes.length} nodes · ${(cached.edges || []).length} edges`
-    : "$(type-hierarchy) Switch Bay VS";
-  status.tooltip = "Open Graph (no daemon)";
+  const paintStatus = (pythonOk: boolean) => {
+    if (!pythonOk) {
+      status.text = "$(warning) Switch Bay VS · configure Python";
+      status.command = "switchbay.configurePython";
+      status.tooltip = "import switchbay failed — click to set repoRoot / pythonPath";
+      status.backgroundColor = new vscode.ThemeColor("statusBarItem.warningBackground");
+      return;
+    }
+    const ws = workspaceFolder();
+    const cached = ws ? readCachedGraph(ws.fsPath) : null;
+    status.text = cached
+      ? `$(type-hierarchy) Switch Bay VS · ${cached.nodes.length} nodes · ${(cached.edges || []).length} edges`
+      : "$(type-hierarchy) Switch Bay VS";
+    status.command = "switchbay.openGraph";
+    status.tooltip = "Open Graph (no daemon)";
+    status.backgroundColor = undefined;
+  };
+  const refreshPythonStatus = async () => {
+    const result = await probeSwitchbay(context);
+    paintStatus(result.ok);
+  };
+  paintStatus(true);
   status.show();
-  context.subscriptions.push(status);
+  context.subscriptions.push(
+    status,
+    vscode.commands.registerCommand("switchbay.configurePython", async () => {
+      const ok = await configurePython(context);
+      if (ok) paintStatus(true);
+      else void refreshPythonStatus();
+    }),
+    vscode.commands.registerCommand("switchbay.setEffort", async () => {
+      const current = getPreference();
+      const pick = await vscode.window.showQuickPick(
+        [
+          { label: "Economy", description: "Single-step, no subagents", pref: 0.1 },
+          { label: "Balanced", description: "One investigator, then curate", pref: 0.5 },
+          { label: "Maximum", description: "Investigate → verify → synthesize", pref: 0.9 },
+        ].map((o) => ({
+          ...o,
+          picked: preferenceLabel(current) === o.label,
+          detail: preferenceLabel(current) === o.label ? "current" : undefined,
+        })),
+        { title: "Switch Bay orchestration effort" },
+      );
+      if (!pick) return;
+      await setPreference(pick.pref);
+      void vscode.window.showInformationMessage(`Orchestration effort: ${pick.label}`);
+    }),
+    vscode.commands.registerCommand("switchbay.addSchedule", async () => {
+      const folder = workspaceFolder();
+      if (!folder) {
+        void vscode.window.showWarningMessage("Open a curiosity-engine folder first.");
+        return;
+      }
+      const agents = listNamedAgents(context.extensionPath, folder.fsPath)
+        .filter((a) => a.invocable);
+      const agentPick = await vscode.window.showQuickPick(
+        agents.map((a) => ({
+          label: a.name,
+          description: a.source,
+          detail: a.description,
+        })),
+        { title: "Which named agent should this schedule run?" },
+      );
+      if (!agentPick) return;
+      const title = await vscode.window.showInputBox({ title: "Schedule title", value: `${agentPick.label} desk` });
+      if (title === undefined) return;
+      const prompt = await vscode.window.showInputBox({
+        title: `Prompt for ${agentPick.label}`,
+        placeHolder: "What should this agent do when it fires?",
+      });
+      if (prompt === undefined) return;
+      const freq = await vscode.window.showQuickPick(
+        [
+          { label: "Hourly", id: "hourly" as const },
+          { label: "Daily", id: "daily" as const },
+          { label: "Weekly", id: "weekly" as const },
+          { label: "Every N hours", id: "every_n_hours" as const },
+        ],
+        { title: "Frequency" },
+      );
+      if (!freq) return;
+      upsertSchedule(folder.fsPath, {
+        title,
+        prompt,
+        agent: agentPick.label,
+        frequency: freq.id,
+        enabled: true,
+      });
+      void vscode.window.showInformationMessage(`Scheduled “${title}” on ${agentPick.label}.`);
+      void vscode.commands.executeCommand("switchbay.openAgents");
+    }),
+    vscode.commands.registerCommand("switchbay.runNamedAgent", async () => {
+      const folder = workspaceFolder();
+      const agents = listNamedAgents(context.extensionPath, folder?.fsPath)
+        .filter((a) => a.invocable);
+      const pick = await vscode.window.showQuickPick(
+        agents.map((a) => ({ label: a.name, description: a.source, detail: a.description })),
+        { title: "Run named agent" },
+      );
+      if (!pick) return;
+      await startNamedAgentSession(pick.label, `Run as ${pick.label}.`);
+    }),
+    vscode.commands.registerCommand("switchbay.checkUpdate", () => checkAndOfferUpdate(context)),
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (
+        e.affectsConfiguration("switchbay.repoRoot")
+        || e.affectsConfiguration("switchbay.pythonPath")
+      ) {
+        void refreshPythonStatus();
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      ping();
+      void refreshPythonStatus();
+    }),
+  );
+  maybeOfferSetup(context, paintStatus);
+  startScheduleTicker(context);
 }
 
 export function deactivate(): void {

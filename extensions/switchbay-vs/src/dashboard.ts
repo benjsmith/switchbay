@@ -7,15 +7,25 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { listNamedAgents, type NamedAgent } from "./agentsSession";
 import { ceRoot, kuzuDbExists, readCachedGraph } from "./ce";
 import { getMcp, type McpTool } from "./mcp";
 import { listRuns, type RunRecord } from "./orch";
+import { listConfiguredLocalModels, probeLocalBackends, type LocalProbe } from "./localModels";
+import { getPreference, preferenceLabel } from "./preference";
+import { listSchedules, type Schedule } from "./schedules";
 
 export type DashRule = { id: string; trigger: string; action: string };
 export type DashSkill = { name: string; description: string; source: string; path: string };
-export type DashAgent = { name: string; description: string; tools: string };
+export type DashAgent = NamedAgent;
 export type DashPalette = { name: string; description: string; tools: string[]; source: string };
-export type DashModel = { id: string; name: string; vendor: string; family: string };
+export type DashModel = {
+  id: string;
+  name: string;
+  vendor: string;
+  family: string;
+  source: "vscode.lm" | "local-settings";
+};
 export type DashWiki = { nodes: number; edges: number; hasKuzu: boolean; folder: string };
 
 export type DashboardPayload = {
@@ -27,7 +37,12 @@ export type DashboardPayload = {
   rules: DashRule[];
   palettes: DashPalette[];
   models: DashModel[];
+  localRunning: LocalProbe[];
   skills: DashSkill[];
+  schedules: Schedule[];
+  preference: number;
+  preferenceLabel: string;
+  version: string;
   host: string;
 };
 
@@ -169,34 +184,36 @@ function listSkills(workspace: string): DashSkill[] {
   return [...byName.values()].sort((a, b) => a.source.localeCompare(b.source) || a.name.localeCompare(b.name));
 }
 
-function listAgents(extensionPath: string): DashAgent[] {
-  const dir = path.join(extensionPath, "agents");
-  if (!fs.existsSync(dir)) return [];
-  return fs.readdirSync(dir)
-    .filter((f) => f.endsWith(".agent.md"))
-    .map((f) => {
-      const text = fs.readFileSync(path.join(dir, f), "utf8");
-      const meta = fm(text);
-      return {
-        name: meta.name || f.replace(/\.agent\.md$/, ""),
-        description: meta.description || "",
-        tools: meta.tools || "",
-      };
-    });
-}
+
 
 async function listModels(): Promise<DashModel[]> {
+  const out: DashModel[] = [];
+  const seen = new Set<string>();
   try {
-    const models = await vscode.lm.selectChatModels();
-    return models.map((m) => ({
-      id: m.id,
-      name: m.name || m.id,
-      vendor: m.vendor || "unknown",
-      family: m.family || "",
-    }));
-  } catch {
-    return [];
+    for (const m of await vscode.lm.selectChatModels()) {
+      const id = `${m.vendor}:${m.id}`;
+      seen.add(id);
+      out.push({
+        id: m.id,
+        name: m.name || m.id,
+        vendor: m.vendor || "unknown",
+        family: m.family || "",
+        source: "vscode.lm",
+      });
+    }
+  } catch { /* vscode.lm optional */ }
+  for (const m of listConfiguredLocalModels()) {
+    const key = `switchbay-local:${m.backend}:${m.model}`;
+    if (seen.has(key)) continue;
+    out.push({
+      id: `${m.backend}:${m.model}`,
+      name: m.name,
+      vendor: "switchbay-local",
+      family: m.backend,
+      source: "local-settings",
+    });
   }
+  return out;
 }
 
 export async function dashboardPayload(
@@ -227,11 +244,16 @@ export async function dashboardPayload(
       hasKuzu: ws ? kuzuDbExists(ws) : false,
     },
     runs: ws ? listRuns(ws) : [],
-    agents: listAgents(context.extensionPath),
+    agents: listNamedAgents(context.extensionPath, ws),
+    schedules: ws ? listSchedules(ws) : [],
+    preference: getPreference(),
+    preferenceLabel: preferenceLabel(getPreference()),
+    version: String((context.extension.packageJSON as { version?: string }).version || ""),
     tools,
     rules: ws ? loadRules(ws) : [],
     palettes,
     models: await listModels(),
+    localRunning: await probeLocalBackends(),
     skills: ws ? listSkills(ws) : [],
     host: "vscode-plugin",
   };
@@ -313,6 +335,22 @@ export function agentsDashboardHtml(nonce: string): string {
         background: var(--vscode-textCodeBlock-background, #1e1e1e); padding: 0.5rem 0.65rem; border-radius: 6px; }
   .wiki { display: flex; gap: 1.2rem; flex-wrap: wrap; }
   .stat strong { display: block; font-size: 1.15rem; }
+  .orch {
+    display: flex; align-items: center; gap: 0.45rem; flex-wrap: wrap;
+    margin: 0.55rem 0 0.15rem;
+  }
+  .orch input[type=range] { width: 11rem; accent-color: var(--vscode-focusBorder); }
+  .orch-label { font-weight: 600; min-width: 5.5rem; }
+  .form { display: grid; gap: 0.35rem; margin: 0.4rem 0 0.6rem; }
+  .form input, .form select, .form textarea {
+    font: inherit; color: inherit;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, #444);
+    border-radius: 4px; padding: 0.28rem 0.45rem;
+  }
+  .form textarea { min-height: 4.2rem; resize: vertical; }
+  .form-row { display: flex; gap: 0.4rem; flex-wrap: wrap; align-items: center; }
+  .chip { font-size: 0.75rem; opacity: 0.7; }
 </style>
 </head>
 <body>
@@ -321,10 +359,11 @@ export function agentsDashboardHtml(nonce: string): string {
     <div class="row-btns">
       <button type="button" id="curate" class="primary">Curate</button>
       <button type="button" id="agents">Agents window</button>
+      <button type="button" id="update">Update…</button>
       <button type="button" id="refresh">Refresh</button>
     </div>
   </div>
-  <p class="muted" id="blurb">VS Code Agents window owns the long-running loop. Dashboard reads the workspace DAG, MCP tools, skills, and Copilot models. Nothing on :8765.</p>
+  <p class="muted" id="blurb">VS Code Agents window owns the long-running loop. Nothing on :8765. Closing VS Code stops scheduled runs.</p>
   <div id="root">Loading…</div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
@@ -347,19 +386,24 @@ export function agentsDashboardHtml(nonce: string): string {
       + (sub ? "<span class='sub'>" + esc(sub) + "</span>" : "")
       + "</h2>" + inner + "</section>";
     const empty = (t) => "<div class='empty'>" + t + "</div>";
+    const labelFor = (n) => n <= 0.2 ? "Economy" : n >= 0.8 ? "Maximum" : "Balanced";
     function render(p) {
       const runs = p.runs || [];
       const running = runs.filter((r) => live(r.phase));
       const finished = runs.filter((r) => !live(r.phase));
       const featured = running[0] || runs[0];
-      let dag = empty("No DAG yet. Curate to seed Investigate → Verify → Synthesize.");
+      const pref = typeof p.preference === "number" ? p.preference : 0.5;
+      const blurb = document.getElementById("blurb");
+      if (blurb) blurb.textContent = "v" + (p.version || "?") + " · Agents window owns the loop · schedules fire only while VS Code is open · nothing on :8765";
+      let dag = empty("No DAG yet. Curate to seed a run. Economy is a single step; Maximum is Investigate → Verify → Synthesize.");
       if (featured) {
         const pills = (featured.nodes || []).map((n, i) =>
           (i ? "<span class='arrow'>→</span>" : "")
           + "<span class='node " + nodeCls(n.status) + "'>" + esc(n.kind) + " · " + esc(n.status || "pending") + "</span>"
         ).join("");
         dag = "<div class='run'><strong>" + esc(featured.objective || featured.orchestration_id) + "</strong>"
-          + "<div class='muted'>" + esc(featured.phase) + " · " + esc(featured.via) + " · " + esc(featured.orchestration_id) + "</div>"
+          + "<div class='muted'>" + esc(featured.phase) + " · " + esc(featured.via) + " · "
+          + esc(labelFor(featured.preference || pref)) + " · " + esc(featured.orchestration_id) + "</div>"
           + "<div class='dag'>" + pills + "</div>"
           + (featured.note ? "<pre>" + esc(String(featured.note).slice(0, 1600)) + "</pre>" : "")
           + "</div>";
@@ -369,7 +413,7 @@ export function agentsDashboardHtml(nonce: string): string {
           "<span class='node " + nodeCls(n.status) + "'>" + esc(n.kind) + " · " + esc(n.status || "pending") + "</span>"
         ).join("");
         return "<div class='run'><strong>" + esc(r.objective || r.orchestration_id) + "</strong>"
-          + "<div class='muted'>" + esc(r.phase) + " · " + esc(r.via || "") + "</div>"
+          + "<div class='muted'>" + esc(r.phase) + " · " + esc(r.via || "") + " · " + esc(labelFor(r.preference || 0.5)) + "</div>"
           + "<div class='nodes'>" + pills + "</div></div>";
       };
       const wiki = p.wiki || {};
@@ -386,6 +430,46 @@ export function agentsDashboardHtml(nonce: string): string {
             ).join("") + "</ul>"
           ).join("")
         : empty("MCP tools not listed yet. Open a CE folder so the stdio server can start.");
+      const invocables = (p.agents || []).filter((a) => a.invocable !== false);
+      const agentOpts = invocables.map((a) =>
+        "<option value='" + esc(a.name) + "'>" + esc(a.name) + (a.source === "workspace" ? " (workspace)" : "") + "</option>"
+      ).join("");
+      const schedules = p.schedules || [];
+      const schedRows = schedules.map((s) =>
+        "<li class='row'><strong class='name'>" + esc(s.title) + "</strong>"
+        + "<span class='desc'>" + esc(s.agent || "Auto") + " · " + esc(s.frequency)
+        + (s.frequency === "every_n_hours" ? " · " + esc(s.every_hours) + "h" : "")
+        + "</span>"
+        + (s.enabled === false ? "<span class='chip'>off</span>" : "")
+        + (s.running_run_id ? "<span class='chip'>running</span>" : "")
+        + "<span class='meta'>" + (s.run_count || 0) + " runs</span>"
+        + "<button data-run-sch='" + esc(s.id) + "'>Run</button>"
+        + "<button data-toggle-sch='" + esc(s.id) + "' data-on='" + (s.enabled === false ? "0" : "1") + "'>"
+        + (s.enabled === false ? "Enable" : "Disable") + "</button>"
+        + "<button data-del-sch='" + esc(s.id) + "' title='Delete'>×</button></li>"
+        + "<pre>" + esc((s.prompt || "").slice(0, 280) || "(empty prompt)") + "</pre>"
+      ).join("");
+      const schedForm = "<div class='form' id='sch-form'>"
+        + "<input id='sch-title' placeholder='Title' value='Overnight desk' />"
+        + "<div class='form-row'>"
+        + "<select id='sch-agent'>" + agentOpts + "</select>"
+        + "<select id='sch-freq'>"
+        + "<option value='hourly'>Hourly</option><option value='daily' selected>Daily</option>"
+        + "<option value='weekly'>Weekly</option><option value='every_n_hours'>Every N hours</option>"
+        + "</select>"
+        + "<input id='sch-n' type='number' min='1' value='24' style='width:4.5rem' title='Hours when Every N' />"
+        + "</div>"
+        + "<textarea id='sch-prompt' placeholder='Prompt this named agent will run'></textarea>"
+        + "<div class='form-row'><button type='button' class='primary' id='sch-save'>Add schedule</button>"
+        + "<span class='muted'>New schedules are due on the next tick unless disabled. Tick is ~20s while this window is open.</span></div>"
+        + "</div>";
+      const orch = "<div class='orch'>"
+        + "<span>Economy</span>"
+        + "<input type='range' id='orch-pref' min='0' max='100' step='5' value='" + Math.round(pref * 100) + "' aria-label='Cost versus performance' />"
+        + "<span>Maximum</span>"
+        + "<span class='orch-label' id='orch-label'>" + esc(p.preferenceLabel || labelFor(pref)) + "</span>"
+        + "</div>"
+        + "<p class='muted'>How much extra quality Auto may buy. Agent count is an outcome of this slider, not a separate control.</p>";
       const root = document.getElementById("root");
       root.innerHTML = [
         section("Workspace", null, wiki.folder || "no folder",
@@ -394,17 +478,24 @@ export function agentsDashboardHtml(nonce: string): string {
           + "<div class='stat'><strong>" + (wiki.edges || 0) + "</strong><span class='muted'>kuzu edges</span></div>"
           + "<div class='stat'><strong>" + (wiki.hasKuzu ? "yes" : "no") + "</strong><span class='muted'>graph.kuzu</span></div>"
           + "</div>"),
-        section("Agent Space", featured ? 1 : 0, "file-watched DAG · last effective roster stays visible", dag, true),
+        section("Orchestrator", null, "Economy ← Balanced → Maximum", orch, true),
+        section("Agent Space", featured ? 1 : 0, "file-watched DAG · last effective roster stays visible", dag),
         section("Running", running.length, "VS Code Agents window owns the loop · this list is the Switch Bay DAG",
           running.length ? running.map(runCard).join("") : empty("No live DAG. Use Curate or @switchbay /curate.")),
         section("Recently finished", finished.length, "plugin-run.json under the machine-local runs dir",
           finished.length ? finished.map(runCard).join("") : empty("Nothing finished yet.")),
-        section("Custom agents", (p.agents || []).length, "Local harness · Auto / Curator / Investigator / Reviewer",
+        section("Schedules", schedules.length, ".workbench/state/schedules.json · named agents",
+          schedForm + (schedules.length ? "<ul>" + schedRows + "</ul>" : empty("No schedules yet. Pick an agent and Add schedule."))),
+        section("Custom agents", (p.agents || []).length, "Chat agents (.agent.md) — not Skills. Workspace: .github/agents/",
           (p.agents || []).length
             ? "<ul>" + p.agents.map((a) =>
-                "<li class='row'><strong class='name'>" + esc(a.name) + "</strong><span class='desc'>" + esc(a.description) + "</span></li>"
+                "<li class='row'><strong class='name'>" + esc(a.name) + "</strong><span class='desc'>" + esc(a.description) + "</span>"
+                + "<span class='meta'>" + esc(a.source) + (a.invocable === false ? " · subagent" : "") + "</span>"
+                + "<button data-open-agent='" + esc(a.path) + "'>Open</button>"
+                + (a.invocable === false ? "" : "<button data-run-agent='" + esc(a.name) + "'>Run</button>")
+                + "</li>"
               ).join("") + "</ul>"
-            : empty("Bundled .agent.md files not found.")),
+            : empty("No .agent.md files found. /create-agent writes .github/agents/.")),
         section("Tools", (p.tools || []).length, "plugin MCP allowlist (no :8765 tools)", toolHtml),
         section("Rules", (p.rules || []).length, ".workbench/state/agent_rules.json",
           (p.rules || []).length
@@ -419,15 +510,29 @@ export function agentsDashboardHtml(nonce: string): string {
             + (pl.tools && pl.tools.length ? " · " + pl.tools.map(esc).join(", ") : "")
             + "</span><span class='meta'>" + esc(pl.source) + "</span></li>"
           ).join("") + "</ul>"),
-        section("Providers", (p.models || []).length, "vscode.lm · Copilot is the plugin sign-in",
-          (p.models || []).length
-            ? "<ul>" + p.models.map((m) =>
-                "<li class='row'><strong>" + esc(m.name) + "</strong><span class='meta'>" + esc(m.vendor)
-                + (m.family ? " · " + esc(m.family) : "") + "</span>"
-                + "<span class='ok'>ready</span></li>"
-              ).join("") + "</ul>"
-            : empty("No vscode.lm models. Sign in to GitHub Copilot in this window.")),
-        section("Skills", (p.skills || []).length, "local SKILL.md · click to open",
+        section("Models", (p.models || []).length, "vscode.lm API — not the Chat model picker",
+          (function () {
+            const rows = (p.models || []).map((m) =>
+              "<li class='row'><strong>" + esc(m.name) + "</strong>"
+              + "<span class='meta'>" + esc(m.vendor) + (m.family ? " · " + esc(m.family) : "")
+              + " · " + esc(m.id) + "</span>"
+              + "<span class='ok'>" + (m.source === "local-settings" ? "local" : "lm") + "</span></li>"
+            ).join("");
+            const probes = (p.localRunning || []).map((b) =>
+              "<li class='row'><strong>" + esc(b.backend) + "</strong>"
+              + "<span class='desc'>" + esc(b.hint) + "</span>"
+              + (b.ok ? "<span class='ok'>running</span>" : "<span class='off'>not found</span>")
+              + "</li>"
+            ).join("");
+            return "<p class='muted'>This list is <code>vscode.lm.selectChatModels()</code> — Copilot's Language Model API plus any Switch Bay local backends you added. "
+              + "The Chat model picker is a different Copilot Chat catalog (Auto routing, Copilot CLI, subscriber SKUs). Duplicate display names are different ids.</p>"
+              + "<div class='form-row' style='margin:0.35rem 0 0.6rem'><button type='button' class='primary' id='add-local'>Add Ollama / MLX / llama.cpp…</button>"
+              + "<span class='muted'>Helper scans :11434 / :8080 / :8888 and registers them as vendor “Switch Bay VS Local”.</span></div>"
+              + ((p.models || []).length ? "<ul>" + rows + "</ul>" : empty("No vscode.lm models. Sign in to GitHub Copilot, or add a local backend."))
+              + "<div class='muted' style='margin:0.7rem 0 0.2rem'>On this machine</div>"
+              + (probes ? "<ul>" + probes + "</ul>" : empty("Local backend scan failed."));
+          })()),
+        section("Skills", (p.skills || []).length, "SKILL.md toolkits (curiosity-engine, caveman…) — not Chat agents",
           (p.skills || []).length
             ? "<ul>" + p.skills.map((s) =>
                 "<li class='row'><button data-skill='" + esc(s.path) + "'>" + esc(s.name) + "</button>"
@@ -435,16 +540,63 @@ export function agentsDashboardHtml(nonce: string): string {
               ).join("") + "</ul>"
             : empty("No SKILL.md files found.")),
       ].join("");
+      const slider = document.getElementById("orch-pref");
+      const lab = document.getElementById("orch-label");
+      if (slider) {
+        slider.addEventListener("input", () => {
+          const v = Number(slider.value) / 100;
+          if (lab) lab.textContent = labelFor(v);
+        });
+        slider.addEventListener("change", () => {
+          vscode.postMessage({ type: "setPreference", value: Number(slider.value) / 100 });
+        });
+      }
+      document.getElementById("sch-save")?.addEventListener("click", () => {
+        vscode.postMessage({
+          type: "saveSchedule",
+          item: {
+            title: document.getElementById("sch-title").value,
+            agent: document.getElementById("sch-agent").value,
+            frequency: document.getElementById("sch-freq").value,
+            every_hours: Number(document.getElementById("sch-n").value) || 24,
+            prompt: document.getElementById("sch-prompt").value,
+            enabled: true,
+          },
+        });
+      });
       root.querySelectorAll("[data-skill]").forEach((b) => {
         b.addEventListener("click", () => vscode.postMessage({ type: "openSkill", path: b.getAttribute("data-skill") }));
       });
       root.querySelectorAll("[data-del-rule]").forEach((b) => {
         b.addEventListener("click", () => vscode.postMessage({ type: "deleteRule", id: b.getAttribute("data-del-rule") }));
       });
+      root.querySelectorAll("[data-run-sch]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "runSchedule", id: b.getAttribute("data-run-sch") }));
+      });
+      root.querySelectorAll("[data-del-sch]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "deleteSchedule", id: b.getAttribute("data-del-sch") }));
+      });
+      root.querySelectorAll("[data-toggle-sch]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({
+          type: "toggleSchedule",
+          id: b.getAttribute("data-toggle-sch"),
+          enabled: b.getAttribute("data-on") !== "1",
+        }));
+      });
+      root.querySelectorAll("[data-run-agent]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "runAgent", agent: b.getAttribute("data-run-agent") }));
+      });
+      root.querySelectorAll("[data-open-agent]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "openSkill", path: b.getAttribute("data-open-agent") }));
+      });
+      document.getElementById("add-local")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "localModels" });
+      });
     }
     document.getElementById("refresh").onclick = () => vscode.postMessage({ type: "refresh" });
     document.getElementById("curate").onclick = () => vscode.postMessage({ type: "curate" });
     document.getElementById("agents").onclick = () => vscode.postMessage({ type: "agentsWindow" });
+    document.getElementById("update").onclick = () => vscode.postMessage({ type: "checkUpdate" });
     window.addEventListener("message", (ev) => {
       if (ev.data && ev.data.payload) render(ev.data.payload);
     });

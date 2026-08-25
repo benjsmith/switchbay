@@ -5,6 +5,7 @@
  */
 import "./widgets/graph/load";
 import { paletteFromCss } from "./widgets/graph/atlas";
+import { installReplayChrome, type HistoryDoc } from "./widgets/graph/curationReplayAnim";
 import { mountGraph } from "./widgets/graph/init";
 import type { GraphData } from "./widgets/graph/types";
 
@@ -60,6 +61,22 @@ function showMenu(x: number, y: number, node: NodeRef): void {
 
 let live: AbortController | null = null;
 let resizeObs: ResizeObserver | null = null;
+let historyWaiter: ((h: HistoryDoc | null) => void) | null = null;
+
+function loadHistory(): Promise<HistoryDoc | null> {
+  return new Promise((resolve) => {
+    const t = window.setTimeout(() => {
+      if (historyWaiter === wrapped) historyWaiter = null;
+      resolve(null);
+    }, 60000);
+    const wrapped = (h: HistoryDoc | null) => {
+      window.clearTimeout(t);
+      resolve(h);
+    };
+    historyWaiter = wrapped;
+    vscode.postMessage({ type: "history" });
+  });
+}
 
 function bind(data: GraphData): void {
   live?.abort();
@@ -75,6 +92,11 @@ function bind(data: GraphData): void {
     onSelectPage: (id) => openNode(themed, id),
     skipEdit: true,
   });
+  const pane = mount.querySelector("#graph-pane");
+  if (pane instanceof HTMLElement) {
+    const stopReplay = installReplayChrome(pane, loadHistory);
+    signal.addEventListener("abort", stopReplay, { once: true });
+  }
   const pingSize = () => window.dispatchEvent(new Event("resize"));
   requestAnimationFrame(() => {
     pingSize();
@@ -112,6 +134,11 @@ function bind(data: GraphData): void {
 }
 
 window.addEventListener("message", (ev: MessageEvent) => {
+  if (ev.data?.type === "curation-history") {
+    historyWaiter?.(ev.data.history ?? null);
+    historyWaiter = null;
+    return;
+  }
   const graph = ev.data?.graph as GraphData | undefined;
   if (!graph || !Array.isArray(graph.nodes)) return;
   bind(graph);

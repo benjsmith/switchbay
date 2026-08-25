@@ -316,7 +316,10 @@ export function mountAtlas(
       // Hybrid: Classic field in the core, log-compressed individual
       // nodes on the rim. corpusSize makes the first frame that view
       // (not type-cluster bubbles). Boundary drag is lens traversal
-      // (nodes/s), not a pan of the middle graph.
+      // (nodes/s), not a pan of the middle graph. The rate HUD in
+      // vendored knowledge-atlas.js is drawn at the TOP of the
+      // canvas (`fillText` y = -height/2+22). Upstream default is
+      // the bottom, which sits under the types picker in a narrow pane.
       layout: "hybrid",
       corpusSize,
       // The vendored engine otherwise opens at its generic 460-node budget,
