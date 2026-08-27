@@ -1,13 +1,13 @@
 # Switch Bay VS
 
 Switch Bay inside VS Code: the same curiosity-engine wiki, Graph/Atlas,
-MCP tools, and Auto agents — **no daemon**, nothing on `:8765`. VS Code
-owns windows, Chat, and Copilot sign-in. Closing VS Code stops scheduled
+MCP tools, and Auto agents — **no always-on daemon**. VS Code owns
+windows, Chat, and Copilot sign-in. Closing VS Code stops scheduled
 runs.
 
 Requires **VS Code 1.134+**. Not on the Marketplace yet; sideload a VSIX
-from this repo. The PWA at `http://127.0.0.1:8765` is a separate product
-(see the root README).
+from this repo. The browser PWA (always-on local daemon) is a separate
+product — see the root README.
 
 ## Install
 
@@ -16,7 +16,6 @@ from this repo. The PWA at `http://127.0.0.1:8765` is a separate product
    ```sh
    git clone https://github.com/benjsmith/switchbay.git
    cd switchbay
-   git checkout exp/vscode-plugin   # until this lands on main
    make install
    ```
 
@@ -24,7 +23,7 @@ from this repo. The PWA at `http://127.0.0.1:8765` is a separate product
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.2.0.vsix
+   code --install-extension dist/switchbay-vs-0.3.5.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).
@@ -41,7 +40,7 @@ Sideload installs do **not** auto-update. Same id
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.2.0.vsix
+code --install-extension dist/switchbay-vs-0.3.5.vsix
 ```
 
 Then **Developer: Reload Window**. Or Command Palette → **Switch Bay VS:
@@ -60,14 +59,33 @@ Update extension…** if `dist/*.vsix` is already built.
 
 ## Agent Dashboard
 
+- **Agent Space** — one live DAG. `/curate` shows CE Phase 1
+  (`ce_wave_prime`) then the Curator wave, not Investigate → Synthesize.
+  Auto research desks still use investigators. Copilot Chat does not
+  stream tool calls into this panel, so wiki page writes are the
+  heartbeat. Curator calls `orchestration_report` when a wave is done
+  (Chat staying open with Keep curating is not “still running”). Quiet
+  wiki writes also retire the DAG. **Mark finished** if you want to
+  force it.
 - **Orchestrator** — Economy → Maximum. Agent count is an outcome of this
   slider, not a second control. Workspace setting
-  `switchbay.orchestrationPreference`.
+  `switchbay.orchestrationPreference`. Economy is CE’s single-session
+  fallback (the Curator *is* the worker). Balanced/Maximum may spawn at
+  most two CE worker agents (NumericReviewer, TableExtractor, …) in one
+  turn. Auto desks still use two Investigators.
 - **Custom agents** — Chat personas (`.agent.md`). `/create-agent` writes
   `.github/agents/`. Not the same as Skills.
 - **Skills** — `SKILL.md` toolkits (`curiosity-engine`, …).
-- **Schedules** — recurring prompt on a named agent. Stored in
-  `.workbench/state/schedules.json`. Ticks only while VS Code is open.
+- **Schedules** — recurring prompt on a named agent, with an optional
+  duration. Stored in `.workbench/state/schedules.json`. Ticks only
+  while this VS Code window is open.
+- **Agent desks** — **Set up** writes `.workbench/state/desks.json`
+  (edit the prompt there). `duration` accepts `15 min`, `15 mins`,
+  `0.25` (hours), or `2h`. **Activate** / **Deactivate** turn the
+  desk on or off without firing immediately. **Add desk** or
+  `@switchbay /desk` appends a stub. Research only; never trades.
+  **Keep running 24/7** opens VS Code for the Web or a Remote Tunnel
+  so a browser tab can be the host.
 - **Models** — `vscode.lm` (Copilot Language Model API) plus any local
   backends you add. This is **not** the Chat model picker (Auto routing,
   Copilot CLI, subscriber SKUs).
@@ -85,7 +103,51 @@ Copilot Chat’s own picker.
 
 ## Develop (F5)
 
-Open `switchbay.code-workspace` on this branch → Run and Debug →
+Open `switchbay.code-workspace` → Run and Debug →
 **Switch Bay VS**. Do not F5 inside the Extension Development Host
 window. After code changes, reload that host window. Sideload testers
 should use `make vsix` instead (above).
+
+## `/curate` and Copilot MCP
+
+`/curate` starts the **Curator** custom agent in **editor Chat** (a new
+session). Curator is the curiosity-engine orchestrator (`ce_wave_prime`
+→ pick-mode → Phase 2). It does not send the prompt into the dedicated
+Agents window — that window does not inherit the query, so it used to
+open empty.
+
+Wiki tools come from MCP server **switchbay** (workspace
+`.vscode/mcp.json`, Python from **Configure Python…**). Copilot validates
+every tool schema before a turn; one bad array schema (`create_slideshow`
+historically) drops the whole Switch Bay toolset and the chat sits idle.
+
+If Chat shows `Failed to validate tool mcp_switchbay_create_slideshow`
+or “MCP tools unavailable”:
+
+1. Command Palette → **Developer: Reload Window** (after sideloading a
+   new VSIX).
+2. **MCP: List Servers** → restart **switchbay**.
+3. Start a **new** Copilot chat, then `/curate` again. An existing thread
+   keeps the poisoned tool list even after the schema is fixed.
+
+## Copilot approvals vs the tool allowlist
+
+The Auto/Curator `tools:` frontmatter (`switchbay/*`) **enables** Switch
+Bay MCP tools. It does not skip Copilot’s confirmation. MCP tools always
+prompt until you trust them or the server is sandboxed.
+
+The extension writes `.vscode/mcp.json` with the sandbox **off**.
+Copilot’s sandbox wrapper needs `rg` on the GUI app PATH (not Homebrew)
+and otherwise exits 1 before Python starts — Chat then has no wiki
+tools. Approve **switchbay** once via **Chat: Manage Tool Approval**.
+Reload the window and restart MCP **switchbay** after a VSIX update.
+
+On **Windows** (no MCP sandbox), or if you still see **Allow in this
+Session**:
+
+1. Approve once with **Allow in this Session**, or
+2. Command Palette → **Chat: Manage Tool Approval** → trust the
+   **switchbay** MCP server (top-level checkbox).
+
+Do not turn on `chat.tools.global.autoApprove` / `/yolo` just for
+Switch Bay — that bypasses every tool in every workspace.

@@ -25,6 +25,10 @@ export type Schedule = {
   enabled: boolean;
   preference?: number | null;
   agent?: string;
+  /** Set when this schedule was created from an overnight desk. */
+  desk_id?: string | null;
+  /** Unix seconds; the ticker disables the item once this is reached. */
+  until_at?: number | null;
   created_at: number;
   created_day: string;
   edited_at: number;
@@ -60,6 +64,10 @@ function normalize(raw: Record<string, unknown>): Schedule | null {
     enabled: raw.enabled !== false,
     preference: typeof raw.preference === "number" ? raw.preference : null,
     agent: String(raw.agent || "Auto") || "Auto",
+    desk_id: raw.desk_id ? String(raw.desk_id) : null,
+    until_at: raw.until_at == null || raw.until_at === ""
+      ? null
+      : Number(raw.until_at) || null,
     created_at: Number(raw.created_at) || Date.now() / 1000,
     created_day: String(raw.created_day || ""),
     edited_at: Number(raw.edited_at) || Date.now() / 1000,
@@ -111,6 +119,9 @@ export function upsertSchedule(workspace: string, patch: Partial<Schedule> & { t
     if (patch.enabled !== undefined) existing.enabled = Boolean(patch.enabled);
     if (patch.preference !== undefined) existing.preference = patch.preference;
     if (patch.agent !== undefined) existing.agent = String(patch.agent || "Auto") || "Auto";
+    if (patch.desk_id !== undefined) existing.desk_id = patch.desk_id;
+    if (patch.until_at !== undefined) existing.until_at = patch.until_at;
+    if (patch.last_run_at !== undefined) existing.last_run_at = patch.last_run_at;
     existing.edited_at = now;
     saveFile(workspace, data);
     return existing;
@@ -124,10 +135,12 @@ export function upsertSchedule(workspace: string, patch: Partial<Schedule> & { t
     enabled: patch.enabled !== false,
     preference: patch.preference ?? null,
     agent: String(patch.agent || "Auto") || "Auto",
+    desk_id: patch.desk_id ?? null,
+    until_at: patch.until_at ?? null,
     created_at: now,
     created_day: new Date().toISOString().slice(0, 10),
     edited_at: now,
-    last_run_at: null,
+    last_run_at: patch.last_run_at ?? null,
     run_count: 0,
     running_run_id: null,
   };
@@ -152,8 +165,23 @@ export function intervalSec(item: Schedule): number {
   return 86400;
 }
 
+export function expireIfNeeded(workspace: string, now = Date.now() / 1000): void {
+  const data = loadFile(workspace);
+  let changed = false;
+  for (const item of data.items) {
+    if (item.until_at && now >= item.until_at && item.enabled) {
+      item.enabled = false;
+      item.running_run_id = null;
+      item.edited_at = now;
+      changed = true;
+    }
+  }
+  if (changed) saveFile(workspace, data);
+}
+
 export function isDue(item: Schedule, now = Date.now() / 1000): boolean {
   if (!item.enabled) return false;
+  if (item.until_at && now >= item.until_at) return false;
   if (item.running_run_id) return false;
   if (item.last_run_at == null) return true;
   return now - item.last_run_at >= intervalSec(item);
@@ -199,12 +227,13 @@ export async function runScheduleNow(
       const { text, orchestrationId } = await startCurate(context, prompt, {
         preference: item.preference ?? undefined,
         via: `schedule:${item.id}`,
+        agent: "Auto",
       });
       setRunning(workspace, id, orchestrationId || "session");
       setTimeout(() => clearRunning(workspace, id), 8_000);
       return { ok: true, text };
     }
-    const session = await startNamedAgentSession(agent, prompt);
+    const session = await startNamedAgentSession(context, agent, prompt);
     setRunning(workspace, id, session.via || "session");
     setTimeout(() => clearRunning(workspace, id), 8_000);
     return {
@@ -223,6 +252,7 @@ export function startScheduleTicker(context: vscode.ExtensionContext): void {
   const tick = async () => {
     const workspace = workspaceFsPath();
     if (!workspace) return;
+    expireIfNeeded(workspace);
     for (const item of listSchedules(workspace)) {
       if (!isDue(item)) continue;
       const result = await runScheduleNow(context, workspace, item.id);

@@ -1,8 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "child_process";
+import * as fs from "fs";
+import * as path from "path";
 import * as vscode from "vscode";
 import { pythonBin, repoRoot, srcDir, workspaceFsPath } from "./paths";
 
 export const MCP_SERVER_LABEL = "switchbay";
+/** Bump with Copilot-facing schema changes so VS Code drops cached tools/list. */
+export const MCP_SCHEMA_REV = "0.3.3";
 
 export type McpLaunch = {
   command: string;
@@ -10,6 +14,35 @@ export type McpLaunch = {
   cwd: string;
   env: Record<string, string>;
 };
+
+/** Directories that contain an `rg` binary the MCP sandbox wrapper looks for. */
+export function ripgrepDirs(): string[] {
+  const dirs: string[] = [];
+  const appRoot = vscode.env.appRoot;
+  const arch = process.arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+  for (const rel of [
+    `node_modules.asar.unpacked/@vscode/ripgrep-universal/bin/${arch}`,
+    `node_modules.asar.unpacked/@github/copilot-${arch}/ripgrep/bin/${arch}`,
+    `extensions/copilot/node_modules/@github/copilot/sdk/ripgrep/bin/${arch}`,
+  ]) {
+    const dir = path.join(appRoot, rel);
+    if (fs.existsSync(path.join(dir, "rg"))) dirs.push(dir);
+  }
+  for (const dir of ["/opt/homebrew/bin", "/usr/local/bin", path.join(osHomedir(), ".local", "bin")]) {
+    if (fs.existsSync(path.join(dir, "rg"))) dirs.push(dir);
+  }
+  return dirs;
+}
+
+function osHomedir(): string {
+  return process.env.HOME || process.env.USERPROFILE || "";
+}
+
+export function ripgrepAvailable(): boolean {
+  if (ripgrepDirs().length) return true;
+  const pathEnv = process.env.PATH || "";
+  return pathEnv.split(path.delimiter).some((dir) => fs.existsSync(path.join(dir, "rg")));
+}
 
 export function mcpLaunch(context: vscode.ExtensionContext): McpLaunch | undefined {
   const workspace = workspaceFsPath();
@@ -22,12 +55,117 @@ export function mcpLaunch(context: vscode.ExtensionContext): McpLaunch | undefin
   env.PYTHONPATH = srcDir(repo);
   env.CSWY_WORKSPACE = workspace;
   env.CSWY_PROFILE = "vscode";
+  env.CSWY_MCP_REV = MCP_SCHEMA_REV;
+  const rg = ripgrepDirs();
+  if (rg.length) {
+    env.PATH = [...rg, env.PATH || process.env.PATH || ""].filter(Boolean).join(path.delimiter);
+  }
   return {
     command: pythonBin(repo),
     args: ["-m", "switchbay.mcp_server"],
     cwd: workspace,
     env,
   };
+}
+
+/**
+ * Copilot Chat / Agents window only reliably see stdio MCP from
+ * `.vscode/mcp.json`. The extension definition provider is not enough
+ * for a custom .agent.md session.
+ */
+type McpFile = {
+  servers?: Record<string, unknown>;
+  sandbox?: { filesystem?: { allowWrite?: unknown } };
+};
+
+/**
+ * Copilot confirms every MCP tool unless the stdio server is sandboxed
+ * (macOS/Linux). Workspace writes only — wiki/CE stay inside the folder.
+ */
+function withWorkspaceSandbox(data: McpFile): McpFile["sandbox"] {
+  const existing = Array.isArray(data.sandbox?.filesystem?.allowWrite)
+    ? data.sandbox.filesystem.allowWrite.filter((p): p is string => typeof p === "string")
+    : [];
+  const allowWrite = [...new Set([...existing, "${workspaceFolder}"])];
+  return {
+    ...(data.sandbox || {}),
+    filesystem: {
+      ...(data.sandbox?.filesystem || {}),
+      allowWrite,
+    },
+  };
+}
+
+export function writeWorkspaceMcpJson(context: vscode.ExtensionContext): boolean {
+  const launch = mcpLaunch(context);
+  const workspace = workspaceFsPath();
+  if (!launch || !workspace) return false;
+  const dir = path.join(workspace, ".vscode");
+  const file = path.join(dir, "mcp.json");
+  let data: McpFile = {};
+  if (fs.existsSync(file)) {
+    try {
+      data = JSON.parse(fs.readFileSync(file, "utf8")) as McpFile;
+    } catch {
+      data = {};
+    }
+  }
+  data.servers = data.servers && typeof data.servers === "object" ? data.servers : {};
+  // Copilot's MCP sandbox wrapper looks for `rg` on the *host* PATH
+  // (Dock-launched VS Code does not include Homebrew) and exits 1
+  // before Python starts. That is worse than a one-time tool approval.
+  const env: Record<string, string> = {
+    PYTHONPATH: launch.env.PYTHONPATH,
+    CSWY_PROFILE: "vscode",
+    // Literal path — Copilot does not always expand ${workspaceFolder} in env.
+    CSWY_WORKSPACE: workspace,
+    CSWY_MCP_REV: MCP_SCHEMA_REV,
+  };
+  if (launch.env.PATH) env.PATH = launch.env.PATH;
+  const next: Record<string, unknown> = {
+    type: "stdio",
+    command: launch.command,
+    args: launch.args,
+    env,
+    sandboxEnabled: false,
+  };
+  const sandbox = withWorkspaceSandbox(data);
+  const prev = JSON.stringify({ server: data.servers.switchbay ?? null, sandbox: data.sandbox ?? null });
+  const want = JSON.stringify({ server: next, sandbox });
+  if (prev === want) return true;
+  data.servers.switchbay = next;
+  data.sandbox = sandbox;
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
+  return true;
+}
+
+export async function tryStartWorkspaceMcp(): Promise<boolean> {
+  const ids = [
+    "mcp.restartServer",
+    "workbench.mcp.restartServer",
+    "mcp.startServer",
+    "workbench.mcp.startServer",
+    "mcp.servers.start",
+    "mcp.servers.restart",
+    "workbench.action.mcp.restartServer",
+    "workbench.action.mcp.startServer",
+  ];
+  const args: unknown[] = [
+    "switchbay",
+    { name: "switchbay" },
+    { id: "switchbay" },
+    { server: "switchbay" },
+  ];
+  for (const id of ids) {
+    for (const arg of args) {
+      try {
+        await vscode.commands.executeCommand(id, arg);
+        return true;
+      } catch { /* next */ }
+    }
+  }
+  return false;
 }
 
 type Pending = {

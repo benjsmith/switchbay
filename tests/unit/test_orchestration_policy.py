@@ -25,15 +25,22 @@ def test_simple_prompt_stays_n1():
 
 
 def test_maximum_broad_curation_uses_multistage_policy():
+    """Wiki CURATE is one CE orchestrator, not Switch Bay investigators."""
     feat = policy.extract_features(
         "Run the curator over this workspace.", preference=1.0,
         provider_diversity=1,
     )
     policy.apply_task_context(feat, task_kind="curation", constrained=False)
     decision = policy.decide(feat, state=None)
-    assert decision.n_investigators >= 2
-    assert decision.include_verify is True
-    assert decision.strategy == "investigate_verify_synthesize"
+    plan = plan_from_decision(
+        "Run the curator over this workspace.", decision, [],
+        task_kind="curation",
+    )
+    assert len(plan.nodes) == 1
+    assert plan.nodes[0].role == "curator"
+    assert plan.strategy == "ce_curate"
+    assert "ce_wave_prime" in plan.nodes[0].tools
+    assert "ce_wiki_commit" in plan.nodes[0].tools
 
 
 def test_focused_curation_can_remain_single():
@@ -600,12 +607,13 @@ def test_curation_plan_has_readers_and_one_ce_writer():
     plan = plan_from_decision(
         RESEARCH, decision, tasks, task_kind="curation",
     )
-    investigators = [n for n in plan.nodes if n.kind == "investigate"]
-    curator = next(n for n in plan.nodes if n.role == "curator")
-    assert len(investigators) >= 2
-    assert all("ce_run" not in n.tools for n in investigators)
+    assert [n.kind for n in plan.nodes] == ["synthesize"]
+    curator = plan.nodes[0]
+    assert curator.role == "curator"
     assert "ce_run" in curator.tools
-    assert "ce_graph_rebuild" in curator.tools
+    assert "ce_wave_prime" in curator.tools
+    assert "ce_score_diff" in curator.tools
+    assert "ce_wiki_commit" in curator.tools
     assert plan.decision["task_kind"] == "curation"
 
 

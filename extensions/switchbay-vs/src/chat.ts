@@ -1,13 +1,16 @@
 import * as vscode from "vscode";
 import { getMcp } from "./mcp";
 import { pickModel } from "./lm";
-import { startCurate } from "./orch";
+import { addBlankDesk } from "./desks";
+import { ensureLiveRun, startCurate } from "./orch";
+import { workspaceFsPath } from "./paths";
 
 const SYSTEM = `You are Switch Bay inside VS Code. The open folder is the workspace.
-Use tools to read the wiki and curiosity-engine graph. Prefer search_wiki then read_wiki_page.
-Propose wiki pages; do not invent sources. Plots: save_plot (figures land in wiki/figures).
-Slideshows: create_slideshow. Sketches: author_sketch. There is no Sheet, Table, Plot tab, or daemon.
-Never tell the user to open http://127.0.0.1:8765.`;
+QUERY: ce_graph_retrieve first (entity gate), then read pages. search_wiki is catalog only.
+Cite [[wikilinks]] and (vault:...). One probing follow-up. Do not invent sources.
+Wiki writes (analyses): ce_score_diff then ce_wiki_commit. /curate is the Curator agent.
+Plots: save_plot. Slideshows: create_slideshow. Sketches: author_sketch.
+There is no Sheet, Table, Plot tab, or daemon.`;
 
 const SLASH_HINTS: Record<string, string> = {
   plot: "Author 2–4 Vega-Lite plots from the given wiki page or data, call save_plot, and describe the figure paths under wiki/figures/.",
@@ -30,10 +33,26 @@ export function registerChat(context: vscode.ExtensionContext): vscode.ChatParti
         stream.markdown(text);
         return;
       }
+      if (cmd === "desk") {
+        const ws = workspaceFsPath();
+        if (!ws) {
+          stream.markdown("Open a curiosity-engine folder first.");
+          return;
+        }
+        const result = addBlankDesk(ws);
+        await vscode.window.showTextDocument(vscode.Uri.file(result.path), { preview: false });
+        stream.markdown(
+          "Added a desk stub in `.workbench/state/desks.json`. Edit the prompt and duration, "
+          + "then **Activate** on the Agent Dashboard. **Deactivate all** turns overnight desks off.",
+        );
+        return;
+      }
       const hint = SLASH_HINTS[cmd];
       const user = hint
         ? `${hint}\n\nUser: ${request.prompt}`
         : request.prompt;
+      const ws = workspaceFsPath();
+      if (ws) ensureLiveRun(ws, request.prompt || cmd || "Chat", { via: "chat", agent: "Auto", kind: "chat" });
       return runTurn(context, user, stream, token);
     },
   );

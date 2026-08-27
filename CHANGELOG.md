@@ -3,6 +3,33 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-27 — v0.12.1 — CE-faithful curate + Switch Bay VS 0.3.5
+
+**Migration:** none. **Breaking:** `/curate` is CE CURATE (score_diff +
+wiki git commit, planner pick-mode), not Switch Bay Investigators +
+`propose_wiki_page`. Reviews stays for charter / non-curate proposals.
+
+### Added
+
+- CE-faithful **CURATE / QUERY** on PWA and Switch Bay VS: `ce_wave_prime`
+  (evolve_guard + pick-mode), `ce_score_diff(new_text)`, `ce_wiki_commit`,
+  `ce_evolve_guard`, `ce_dispatch_worker`, sweep verbs for numeric-review
+  and multimodal table extract. Plugin `/curate` starts **Curator** with
+  CE worker agents (NumericReviewer, TableExtractor, FigureExtractor, …).
+- Agent Dashboard **overnight desks** (wiki curator, science monitor,
+  startup/market research, AI news) with a duration. Research only.
+- **Keep running 24/7** — VS Code for the Web (`code serve-web`) or
+  Remote Tunnel so a browser tab can host schedules.
+- MCP tool `orchestration_report` so Auto can retire a DAG when the
+  wave is done (Chat staying open is not “still running”).
+
+### Fixed
+
+- Agent Dashboard no longer keeps finished Chat waves in **Running**.
+- User-facing Switch Bay VS copy no longer mentions `:8765`.
+- Install docs no longer tell you to check out `exp/vscode-plugin`
+  (that branch was deleted; the plugin lives on `main`).
+
 ## 2026-08-26 — v0.12.0 — Switch Bay VS (VS Code, no daemon)
 
 **Migration:** none. **Breaking:** none. The PWA daemon at `:8765` is

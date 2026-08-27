@@ -60,8 +60,8 @@ dev-daemon: sync
 dev-frontend:
 	pnpm --dir frontend run dev
 
-# VS Code plugin experiment (exp/vscode-plugin). Compiles the extension
-# host; does not start the PWA daemon.
+# Switch Bay VS (extensions/switchbay-vs). Compiles the extension host;
+# does not start the PWA daemon.
 vscode-compile:
 	pnpm --dir extensions/switchbay-vs install --frozen-lockfile
 	pnpm --dir extensions/switchbay-vs run compile

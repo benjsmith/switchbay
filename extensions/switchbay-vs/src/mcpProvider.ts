@@ -1,5 +1,11 @@
 import * as vscode from "vscode";
-import { MCP_SERVER_LABEL, mcpLaunch } from "./mcp";
+import { MCP_SCHEMA_REV, MCP_SERVER_LABEL, mcpLaunch, writeWorkspaceMcpJson } from "./mcp";
+
+let mcpChanged: vscode.EventEmitter<void> | undefined;
+
+export function notifyMcpDefinitionsChanged(): void {
+  mcpChanged?.fire();
+}
 
 const PROVIDER_ID = "switchbay.mcp";
 
@@ -22,19 +28,24 @@ function stdioDefinition(launch: NonNullable<ReturnType<typeof mcpLaunch>>): vsc
       args: launch.args,
       env: launch.env,
       cwd: vscode.Uri.file(launch.cwd),
-      version: "0.0.1",
+      version: MCP_SCHEMA_REV,
     });
   } catch {
-    return new Ctor(MCP_SERVER_LABEL, launch.command, launch.args, launch.env, "0.0.1");
+    return new Ctor(MCP_SERVER_LABEL, launch.command, launch.args, launch.env, MCP_SCHEMA_REV);
   }
 }
 
 /** Register Switch Bay's stdio MCP so Local-harness Agents sessions can call wiki/CE tools. */
-export function registerMcpProvider(context: vscode.ExtensionContext): void {
+export function registerMcpProvider(context: vscode.ExtensionContext): vscode.EventEmitter<void> {
+  const changed = new vscode.EventEmitter<void>();
+  mcpChanged = changed;
+  context.subscriptions.push(changed);
+  writeWorkspaceMcpJson(context);
   const register = (vscode.lm as unknown as {
     registerMcpServerDefinitionProvider?: (
       id: string,
       provider: {
+        onDidChangeMcpServerDefinitions?: vscode.Event<void>;
         provideMcpServerDefinitions: () => vscode.ProviderResult<vscode.McpServerDefinition[]>;
         resolveMcpServerDefinition?: (server: vscode.McpServerDefinition) => vscode.ProviderResult<vscode.McpServerDefinition>;
       },
@@ -42,10 +53,11 @@ export function registerMcpProvider(context: vscode.ExtensionContext): void {
   }).registerMcpServerDefinitionProvider;
   if (!register) {
     console.log("[switchbay] vscode.lm.registerMcpServerDefinitionProvider is unavailable; Agents Local harness will not see Switch Bay MCP");
-    return;
+    return changed;
   }
   try {
     context.subscriptions.push(register(PROVIDER_ID, {
+      onDidChangeMcpServerDefinitions: changed.event,
       provideMcpServerDefinitions: () => {
         try {
           const launch = mcpLaunch(context);
@@ -61,4 +73,6 @@ export function registerMcpProvider(context: vscode.ExtensionContext): void {
   } catch (err) {
     console.log("[switchbay] MCP provider registration failed", err);
   }
+  queueMicrotask(() => changed.fire());
+  return changed;
 }

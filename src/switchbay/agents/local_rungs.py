@@ -69,7 +69,7 @@ _ADD_48 = (
 _ADD_64 = (
     "ce_vault_index", "ce_score_diff", "ce_scrub_check", "ce_naming",
     "ce_tables", "ce_figures", "propose_charter_edit",
-    "ce_shared_sources",
+    "ce_shared_sources", "ce_wiki_commit",
 )
 _ADD_96 = (
     "ce_run", "read_workspace_plan", "update_work_plan",

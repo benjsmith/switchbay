@@ -24,13 +24,9 @@ frontend/.vite/
 !/.vscode/launch.json
 !/.vscode/tasks.json
 
-# ── vscode plugin experiment (compiled output) ──
+# ── vscode plugin compiled output (source under extensions/ is tracked) ──
 extensions/**/out/
 extensions/**/media/graph/
-
-# VS Code plugin experiment lives only on exp/vscode-plugin. Do not ship.
-/switchbay.code-workspace
-/extensions/
 
 # ── workspace runtime (when this repo is opened as its own workspace) ──
 .workbench/

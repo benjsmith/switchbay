@@ -2,7 +2,7 @@
   "name": "switchbay-vs",
   "displayName": "Switch Bay VS",
   "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon. Local MLX / llama.cpp / Ollama models for Chat and Agents.",
-  "version": "0.2.0",
+  "version": "0.3.5",
   "publisher": "switchbay",
   "repository": {
     "type": "git",
@@ -57,6 +57,11 @@
           "minimum": 0,
           "maximum": 1,
           "description": "Auto orchestration effort (0 = Economy, 0.5 = Balanced, 1 = Maximum). Agent count is an outcome of this slider."
+        },
+        "switchbay.keepWindowOpen": {
+          "type": "boolean",
+          "default": false,
+          "description": "This VS Code window (or VS Code for the Web tab) is the 24/7 host for Switch Bay desks. Schedules fire only while it is open."
         },
         "switchbay.localModels": {
           "type": "array",
@@ -152,6 +157,10 @@
         "title": "Switch Bay VS: Open VS Code Agents Window"
       },
       {
+        "command": "switchbay.keepRunning",
+        "title": "Switch Bay VS: Keep running 24/7 (VS Code for the Web)…"
+      },
+      {
         "command": "switchbay.localModels",
         "title": "Switch Bay VS: Local models (Ollama, llama.cpp, MLX)…"
       },
@@ -174,6 +183,10 @@
       {
         "command": "switchbay.checkUpdate",
         "title": "Switch Bay VS: Update extension…"
+      },
+      {
+        "command": "switchbay.restartMcp",
+        "title": "Switch Bay VS: Restart wiki MCP (switchbay)…"
       }
     ],
     "menus": {
@@ -229,6 +242,10 @@
           {
             "name": "sketch",
             "description": "Author a sketch (companion extension)"
+          },
+          {
+            "name": "desk",
+            "description": "Add an overnight desk (opens desks.json)"
           }
         ]
       }
@@ -237,7 +254,13 @@
       { "path": "./agents/auto.agent.md" },
       { "path": "./agents/curator.agent.md" },
       { "path": "./agents/investigator.agent.md" },
-      { "path": "./agents/reviewer.agent.md" }
+      { "path": "./agents/reviewer.agent.md" },
+      { "path": "./agents/figureExtractor.agent.md" },
+      { "path": "./agents/tableExtractor.agent.md" },
+      { "path": "./agents/numericReviewer.agent.md" },
+      { "path": "./agents/batchReviewer.agent.md" },
+      { "path": "./agents/linkProposer.agent.md" },
+      { "path": "./agents/linkClassifier.agent.md" }
     ],
     "mcpServerDefinitionProviders": [
       {

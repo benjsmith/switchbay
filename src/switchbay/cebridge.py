@@ -501,6 +501,49 @@ def _script_python(cwd: Path) -> list[str]:
     return ["uv", "run", "python3"]
 
 
+_ALLOWED_SH = frozenset({"evolve_guard.sh"})
+
+
+def run_sh(
+    script: str,
+    args: list[str] | None = None,
+    *,
+    cwd: Path,
+    timeout: float = 60.0,
+) -> dict[str, Any]:
+    """Run an allowlisted CE ``.sh`` helper (evolve_guard). Not a shell."""
+    name = Path(script).name
+    if name not in _ALLOWED_SH:
+        return {"ok": False, "error": f"refusing shell script {name!r}"}
+    path = ce_root() / "scripts" / name
+    if not path.is_file():
+        return {"ok": False, "error": f"CE script not found: {name}"}
+    if not Path(cwd).is_dir():
+        return {"ok": False, "error": f"workspace is not a directory: {cwd}"}
+    try:
+        proc = subprocess.run(
+            ["bash", str(path), *(args or [])],
+            cwd=str(cwd),
+            env=_scrubbed_env(),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "error": f"{name} timed out after {int(timeout)}s"}
+    except OSError as e:
+        return {"ok": False, "error": f"failed to run {name}: {e}"}
+    stdout = (proc.stdout or "").strip()
+    stderr = (proc.stderr or "").strip()
+    if proc.returncode != 0:
+        return {
+            "ok": False,
+            "error": stderr or stdout or f"{name} exited {proc.returncode}",
+            "stdout": stdout[-2000:],
+        }
+    return {"ok": True, "stdout": stdout[-4000:], "stderr": stderr[-800:]}
+
+
 def run_script(
     script: str,
     args: list[str] | None = None,

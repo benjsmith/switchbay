@@ -1,7 +1,7 @@
 /**
  * Agent Dashboard payload + webview HTML. Mirrors the PWA sections
  * (DAG, running, finished, tools, rules, palettes, providers, skills)
- * from disk / vscode.lm / MCP. Nothing talks to :8765.
+ * from disk / vscode.lm / MCP. Does not talk to the PWA daemon.
  */
 import * as fs from "fs";
 import * as os from "os";
@@ -9,10 +9,15 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { listNamedAgents, type NamedAgent } from "./agentsSession";
 import { ceRoot, kuzuDbExists, readCachedGraph } from "./ce";
+import { deskRows, DESKS_REL, type DeskConfig } from "./desks";
+import { isWebHost, keepWindowOpen } from "./keepAlive";
 import { getMcp, type McpTool } from "./mcp";
 import { listRuns, type RunRecord } from "./orch";
 import { listConfiguredLocalModels, probeLocalBackends, type LocalProbe } from "./localModels";
 import { getPreference, preferenceLabel } from "./preference";
+import {
+  DONE_AFTER_WRITES_S, HARD_TTL_S, IDLE_CHAT_ONLY_S, IDLE_NO_WRITES_S, TERMINAL_PHASES,
+} from "./runStatus";
 import { listSchedules, type Schedule } from "./schedules";
 
 export type DashRule = { id: string; trigger: string; action: string };
@@ -40,18 +45,21 @@ export type DashboardPayload = {
   localRunning: LocalProbe[];
   skills: DashSkill[];
   schedules: Schedule[];
+  desks: Array<DeskConfig & { installed: boolean }>;
   preference: number;
   preferenceLabel: string;
   version: string;
   host: string;
+  uiKind: "desktop" | "web";
+  keepWindowOpen: boolean;
 };
 
 const SHIPPED_PALETTES: DashPalette[] = [
   {
     name: "curate",
-    description: "Wiki curator — investigate, verify, propose pages",
+    description: "CE CURATE — wave_prime, pick-mode, score_diff, wiki commit",
     source: "shipped",
-    tools: ["search_wiki", "ce_epoch_summary", "ce_planner", "ce_sweep", "ce_lint", "propose_wiki_page"],
+    tools: ["ce_wave_prime", "ce_sweep", "ce_score_diff", "ce_wiki_commit", "ce_dispatch_worker", "ce_lint"],
   },
   {
     name: "lint",
@@ -80,6 +88,12 @@ const SHIPPED_PALETTES: DashPalette[] = [
   {
     name: "thrusters",
     description: "Mars Hopper (VS Code webview)",
+    source: "plugin",
+    tools: [],
+  },
+  {
+    name: "desk",
+    description: "Add an overnight desk stub to .workbench/state/desks.json",
     source: "plugin",
     tools: [],
   },
@@ -246,6 +260,7 @@ export async function dashboardPayload(
     runs: ws ? listRuns(ws) : [],
     agents: listNamedAgents(context.extensionPath, ws),
     schedules: ws ? listSchedules(ws) : [],
+    desks: ws ? deskRows(ws) : [],
     preference: getPreference(),
     preferenceLabel: preferenceLabel(getPreference()),
     version: String((context.extension.packageJSON as { version?: string }).version || ""),
@@ -256,6 +271,8 @@ export async function dashboardPayload(
     localRunning: await probeLocalBackends(),
     skills: ws ? listSkills(ws) : [],
     host: "vscode-plugin",
+    uiKind: isWebHost() ? "web" : "desktop",
+    keepWindowOpen: keepWindowOpen(),
   };
 }
 
@@ -324,13 +341,25 @@ export function agentsDashboardHtml(nonce: string): string {
     padding: 0.15rem 0.5rem; border-radius: 999px; font-size: 0.75rem;
     background: var(--vscode-badge-background); color: var(--vscode-badge-foreground);
   }
-  .node.running { outline: 1px solid var(--vscode-focusBorder); }
+  .node.running {
+    outline: 1px solid var(--vscode-focusBorder);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
   .node.done { opacity: 0.8; }
   .node.failed { background: var(--vscode-inputValidation-errorBackground, #5a1d1d); }
   .node.pending { opacity: 0.55; }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 0 var(--vscode-focusBorder); }
+    50% { box-shadow: 0 0 0 6px transparent; }
+  }
   .run { margin: 0.45rem 0 0.7rem; }
   .dag { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin: 0.4rem 0; }
   .arrow { opacity: 0.4; }
+  .telem { display: flex; gap: 0.85rem; flex-wrap: wrap; margin: 0.4rem 0 0.15rem; font-size: 0.8rem; opacity: 0.88; }
+  .telem .hot { color: var(--vscode-focusBorder); opacity: 1; font-weight: 600; }
+  .events { list-style: none; margin: 0.45rem 0 0; padding: 0; }
+  .events li { padding: 0.1rem 0; font-size: 0.8rem; opacity: 0.82; }
+  .events .t { opacity: 0.5; margin-right: 0.45rem; font-variant-numeric: tabular-nums; }
   pre { white-space: pre-wrap; font-size: 0.78rem; max-height: 8rem; overflow: auto;
         background: var(--vscode-textCodeBlock-background, #1e1e1e); padding: 0.5rem 0.65rem; border-radius: 6px; }
   .wiki { display: flex; gap: 1.2rem; flex-wrap: wrap; }
@@ -358,21 +387,79 @@ export function agentsDashboardHtml(nonce: string): string {
     <h1>Agent Dashboard</h1>
     <div class="row-btns">
       <button type="button" id="curate" class="primary">Curate</button>
+      <button type="button" id="keep">Keep running 24/7</button>
       <button type="button" id="agents">Agents window</button>
       <button type="button" id="update">Update…</button>
       <button type="button" id="refresh">Refresh</button>
     </div>
   </div>
-  <p class="muted" id="blurb">VS Code Agents window owns the long-running loop. Nothing on :8765. Closing VS Code stops scheduled runs.</p>
+  <p class="muted" id="blurb">Chat Auto owns the loop. This panel watches wiki writes.</p>
   <div id="root">Loading…</div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
       "&":"&amp;","<":"&lt;",">":"&gt;","\\u0022":"&quot;","'":"&#39;"
     }[c] || c));
-    const live = (phase) => !["done","failed","idle"].includes(phase || "");
+    const TERMINAL = new Set(${JSON.stringify([...TERMINAL_PHASES])});
+    const DONE_AFTER_WRITES = ${DONE_AFTER_WRITES_S};
+    const IDLE_CHAT_ONLY = ${IDLE_CHAT_ONLY_S};
+    const IDLE_NO_WRITES = ${IDLE_NO_WRITES_S};
+    const HARD_TTL = ${HARD_TTL_S};
+    const lastAct = (r) => {
+      const ev = r.events || [];
+      const lastEv = ev.length ? Math.max.apply(null, ev.map((e) => e.at || 0)) : 0;
+      return Math.max(r.updated_at || 0, r.started_at || 0, lastEv);
+    };
+    const live = (r) => {
+      if (!r || TERMINAL.has(r.phase || "") || r.ended_at) return false;
+      const quiet = Date.now() / 1000 - lastAct(r);
+      const writes = r.wiki_writes || 0;
+      const kinds = (r.events || []).map((e) => e.kind);
+      const hasMcp = kinds.indexOf("mcp") >= 0;
+      if (writes > 0 && quiet >= DONE_AFTER_WRITES) return false;
+      if (writes === 0 && hasMcp && quiet >= DONE_AFTER_WRITES) return false;
+      if (writes === 0 && !hasMcp && quiet >= IDLE_CHAT_ONLY) return false;
+      if (writes === 0 && quiet >= IDLE_NO_WRITES) return false;
+      if (quiet >= HARD_TTL) return false;
+      return true;
+    };
     const nodeCls = (s) => (s === "running" || s === "agents-session") ? "running"
       : (s === "done" ? "done" : (s === "failed" ? "failed" : "pending"));
+    const labelFor = (n) => n <= 0.2 ? "Economy" : n >= 0.8 ? "Maximum" : "Balanced";
+    const elapsed = (from) => {
+      const s = Math.max(0, Date.now() / 1000 - (from || 0));
+      if (s < 60) return Math.floor(s) + "s";
+      if (s < 3600) return Math.floor(s / 60) + "m " + Math.floor(s % 60).toString().padStart(2, "0") + "s";
+      return Math.floor(s / 3600) + "h " + Math.floor((s % 3600) / 60) + "m";
+    };
+    const ago = (from) => elapsed(from) + " ago";
+    const dagPills = (nodes, arrows) => {
+      const list = nodes || [];
+      const parallel = list.filter((n) => !(n.dependencies || []).length && n.kind === "investigate");
+      return list.map((n, i) => {
+        const sep = !arrows || i === 0 ? ""
+          : (parallel.length > 1 && parallel.includes(n) ? "<span class='arrow'>∥</span>" : "<span class='arrow'>→</span>");
+        const label = n.node_id && n.node_id !== n.kind ? n.node_id : n.kind;
+        return sep + "<span class='node " + nodeCls(n.status) + "'>" + esc(label) + " · " + esc(n.status || "pending") + "</span>";
+      }).join("");
+    };
+    const eventList = (events) => {
+      const rows = (events || []).filter((e) => e.kind && e.kind !== "start").slice(-8).reverse();
+      if (!rows.length) return "";
+      return "<ul class='events'>" + rows.map((e) =>
+        "<li><span class='t' data-at='" + esc(e.at) + "'>" + esc(ago(e.at)) + "</span>" + esc(e.detail) + "</li>"
+      ).join("") + "</ul>";
+    };
+    const telem = (r, liveRun) => {
+      const writes = r.wiki_writes || 0;
+      return "<div class='telem'>"
+        + "<span data-started='" + esc(r.started_at) + "'>" + esc(elapsed(r.started_at)) + "</span>"
+        + "<span>" + esc(labelFor(r.preference || 0.5)) + "</span>"
+        + "<span>" + esc(r.via || "chat") + "</span>"
+        + (writes ? "<span class='hot'>" + writes + " wiki write" + (writes === 1 ? "" : "s") + "</span>" : "")
+        + (liveRun ? "<span class='hot'>live</span>" : "<span>" + esc(r.phase) + "</span>")
+        + "</div>";
+    };
     const groupTool = (name) => {
       if (/^(ce_|wiki|search_wiki|read_wiki|list_wiki|propose_)/.test(name)) return "Wiki / CE";
       if (/slide|deck|sketch|author_slide/.test(name)) return "Deck / sketch";
@@ -386,35 +473,44 @@ export function agentsDashboardHtml(nonce: string): string {
       + (sub ? "<span class='sub'>" + esc(sub) + "</span>" : "")
       + "</h2>" + inner + "</section>";
     const empty = (t) => "<div class='empty'>" + t + "</div>";
-    const labelFor = (n) => n <= 0.2 ? "Economy" : n >= 0.8 ? "Maximum" : "Balanced";
     function render(p) {
       const runs = p.runs || [];
-      const running = runs.filter((r) => live(r.phase));
-      const finished = runs.filter((r) => !live(r.phase));
-      const featured = running[0] || runs[0];
+      const running = runs.filter((r) => live(r));
+      const finished = runs.filter((r) => !live(r)).slice(0, 8);
+      const featured = running[0] || null;
       const pref = typeof p.preference === "number" ? p.preference : 0.5;
       const blurb = document.getElementById("blurb");
-      if (blurb) blurb.textContent = "v" + (p.version || "?") + " · Agents window owns the loop · schedules fire only while VS Code is open · nothing on :8765";
-      let dag = empty("No DAG yet. Curate to seed a run. Economy is a single step; Maximum is Investigate → Verify → Synthesize.");
+      if (blurb) {
+        const host = p.uiKind === "web"
+          ? "this browser tab is the 24/7 host"
+          : (p.keepWindowOpen
+            ? "this window is the 24/7 host"
+            : "desks fire only while this window is open");
+        blurb.textContent = "v" + (p.version || "?") + " · Chat Auto owns the loop · this panel watches wiki writes · " + host;
+      }
+      let dag = empty("Nothing in flight. Ask Auto in Chat or press Curate — wiki tools and page writes appear here.");
       if (featured) {
-        const pills = (featured.nodes || []).map((n, i) =>
-          (i ? "<span class='arrow'>→</span>" : "")
-          + "<span class='node " + nodeCls(n.status) + "'>" + esc(n.kind) + " · " + esc(n.status || "pending") + "</span>"
-        ).join("");
+        const writes = featured.wiki_writes || 0;
+        const hasMcp = (featured.events || []).some((e) => e.kind === "mcp");
+        const status = writes || hasMcp
+          ? (featured.activity || "Wiki tools running")
+          : "Saw a Chat turn start. If Auto already finished, mark idle — an open Chat thread is not a live run.";
         dag = "<div class='run'><strong>" + esc(featured.objective || featured.orchestration_id) + "</strong>"
-          + "<div class='muted'>" + esc(featured.phase) + " · " + esc(featured.via) + " · "
-          + esc(labelFor(featured.preference || pref)) + " · " + esc(featured.orchestration_id) + "</div>"
-          + "<div class='dag'>" + pills + "</div>"
-          + (featured.note ? "<pre>" + esc(String(featured.note).slice(0, 1600)) + "</pre>" : "")
+          + telem(featured, true)
+          + "<div class='dag'>" + dagPills(featured.nodes, true) + "</div>"
+          + "<div class='muted'>" + esc(status) + "</div>"
+          + eventList(featured.events)
+          + "<div class='form-row' style='margin-top:0.45rem'><button type='button' data-finish='" + esc(featured.orchestration_id) + "'>Mark idle</button>"
+          + "<span class='muted'>Clears this card if Chat already stopped.</span></div>"
           + "</div>";
       }
-      const runCard = (r) => {
-        const pills = (r.nodes || []).map((n) =>
-          "<span class='node " + nodeCls(n.status) + "'>" + esc(n.kind) + " · " + esc(n.status || "pending") + "</span>"
-        ).join("");
+      const runCard = (r, isLive) => {
         return "<div class='run'><strong>" + esc(r.objective || r.orchestration_id) + "</strong>"
-          + "<div class='muted'>" + esc(r.phase) + " · " + esc(r.via || "") + " · " + esc(labelFor(r.preference || 0.5)) + "</div>"
-          + "<div class='nodes'>" + pills + "</div></div>";
+          + telem(r, isLive)
+          + "<div class='dag'>" + dagPills(r.nodes, true) + "</div>"
+          + (r.activity ? "<div class='muted'>" + esc(r.activity) + "</div>" : "")
+          + (isLive ? "<button type='button' data-finish='" + esc(r.orchestration_id) + "'>Mark finished</button>" : "")
+          + "</div>";
       };
       const wiki = p.wiki || {};
       const toolsBy = {};
@@ -429,40 +525,7 @@ export function agentsDashboardHtml(nonce: string): string {
               "<li class='row'><code class='name'>" + esc(t.name) + "</code><span class='desc'>" + esc(t.description || "") + "</span></li>"
             ).join("") + "</ul>"
           ).join("")
-        : empty("MCP tools not listed yet. Open a CE folder so the stdio server can start.");
-      const invocables = (p.agents || []).filter((a) => a.invocable !== false);
-      const agentOpts = invocables.map((a) =>
-        "<option value='" + esc(a.name) + "'>" + esc(a.name) + (a.source === "workspace" ? " (workspace)" : "") + "</option>"
-      ).join("");
-      const schedules = p.schedules || [];
-      const schedRows = schedules.map((s) =>
-        "<li class='row'><strong class='name'>" + esc(s.title) + "</strong>"
-        + "<span class='desc'>" + esc(s.agent || "Auto") + " · " + esc(s.frequency)
-        + (s.frequency === "every_n_hours" ? " · " + esc(s.every_hours) + "h" : "")
-        + "</span>"
-        + (s.enabled === false ? "<span class='chip'>off</span>" : "")
-        + (s.running_run_id ? "<span class='chip'>running</span>" : "")
-        + "<span class='meta'>" + (s.run_count || 0) + " runs</span>"
-        + "<button data-run-sch='" + esc(s.id) + "'>Run</button>"
-        + "<button data-toggle-sch='" + esc(s.id) + "' data-on='" + (s.enabled === false ? "0" : "1") + "'>"
-        + (s.enabled === false ? "Enable" : "Disable") + "</button>"
-        + "<button data-del-sch='" + esc(s.id) + "' title='Delete'>×</button></li>"
-        + "<pre>" + esc((s.prompt || "").slice(0, 280) || "(empty prompt)") + "</pre>"
-      ).join("");
-      const schedForm = "<div class='form' id='sch-form'>"
-        + "<input id='sch-title' placeholder='Title' value='Overnight desk' />"
-        + "<div class='form-row'>"
-        + "<select id='sch-agent'>" + agentOpts + "</select>"
-        + "<select id='sch-freq'>"
-        + "<option value='hourly'>Hourly</option><option value='daily' selected>Daily</option>"
-        + "<option value='weekly'>Weekly</option><option value='every_n_hours'>Every N hours</option>"
-        + "</select>"
-        + "<input id='sch-n' type='number' min='1' value='24' style='width:4.5rem' title='Hours when Every N' />"
-        + "</div>"
-        + "<textarea id='sch-prompt' placeholder='Prompt this named agent will run'></textarea>"
-        + "<div class='form-row'><button type='button' class='primary' id='sch-save'>Add schedule</button>"
-        + "<span class='muted'>New schedules are due on the next tick unless disabled. Tick is ~20s while this window is open.</span></div>"
-        + "</div>";
+        : empty("Switch Bay MCP is not running. Command Palette → MCP: List Servers → start switchbay. If it exits immediately, ripgrep (rg) is missing — Switch Bay will disable the MCP sandbox so Python can start.");
       const orch = "<div class='orch'>"
         + "<span>Economy</span>"
         + "<input type='range' id='orch-pref' min='0' max='100' step='5' value='" + Math.round(pref * 100) + "' aria-label='Cost versus performance' />"
@@ -478,14 +541,46 @@ export function agentsDashboardHtml(nonce: string): string {
           + "<div class='stat'><strong>" + (wiki.edges || 0) + "</strong><span class='muted'>kuzu edges</span></div>"
           + "<div class='stat'><strong>" + (wiki.hasKuzu ? "yes" : "no") + "</strong><span class='muted'>graph.kuzu</span></div>"
           + "</div>"),
-        section("Orchestrator", null, "Economy ← Balanced → Maximum", orch, true),
-        section("Agent Space", featured ? 1 : 0, "file-watched DAG · last effective roster stays visible", dag),
-        section("Running", running.length, "VS Code Agents window owns the loop · this list is the Switch Bay DAG",
-          running.length ? running.map(runCard).join("") : empty("No live DAG. Use Curate or @switchbay /curate.")),
-        section("Recently finished", finished.length, "plugin-run.json under the machine-local runs dir",
-          finished.length ? finished.map(runCard).join("") : empty("Nothing finished yet.")),
-        section("Schedules", schedules.length, ".workbench/state/schedules.json · named agents",
-          schedForm + (schedules.length ? "<ul>" + schedRows + "</ul>" : empty("No schedules yet. Pick an agent and Add schedule."))),
+        section("Orchestrator", null, "Economy ← Balanced → Maximum", orch),
+        section("Agent Space", running.length,
+          running.length
+            ? "live · pulsing node is current · wiki tools and page writes are the heartbeat"
+            : "idle — Chat Auto and Curate show up here",
+          running.length
+            ? dag + running.slice(1).map((r) => runCard(r, true)).join("")
+            : dag, true),
+        section("Recently finished", finished.length, "cleared from this list only — wiki pages stay",
+          finished.length
+            ? "<div class='form-row' style='margin:0 0 0.45rem'><button type='button' id='clear-finished'>Clear</button></div>"
+              + finished.map((r) => runCard(r, false)).join("")
+            : empty("Nothing finished yet.")),
+        section("Agent desks", (p.desks || []).length, ${JSON.stringify(DESKS_REL)} + " · research only",
+          (function () {
+            const desks = p.desks || [];
+            const rows = desks.map((d) => {
+              const hours = d.duration ? " · " + esc(d.duration) : "";
+              const state = d.enabled ? "<span class='ok'>on</span>" : "<span class='chip'>off</span>";
+              const actions = d.installed
+                ? (d.enabled
+                    ? "<button type='button' data-desk-off='" + esc(d.id) + "'>Deactivate</button>"
+                    : "<button type='button' class='primary' data-desk-on='" + esc(d.id) + "'>Activate</button>")
+                  + "<button type='button' data-desk-edit='" + esc(d.id) + "'>Edit</button>"
+                : "<button type='button' data-desk-setup='" + esc(d.id) + "'>Set up</button>";
+              return "<li class='row'><strong class='name'>" + esc(d.title) + "</strong>"
+                + "<span class='desc'>" + esc(d.description) + "</span>"
+                + "<span class='meta'>" + esc(d.agent) + " · " + esc(d.frequency) + hours + "</span>"
+                + state + actions + "</li>";
+            }).join("");
+            return "<p class='muted'>Recurring research over this wiki while this window (or a VS Code for the Web tab) stays open. Never trades.</p>"
+              + "<div class='form-row' style='margin:0.35rem 0 0.6rem'>"
+              + "<button type='button' class='primary' id='desk-add'>Add desk</button>"
+              + "<button type='button' id='desk-off-all'>Deactivate all</button>"
+              + "<button type='button' id='desk-edit-file'>Open desks.json</button>"
+              + "</div>"
+              + (rows ? "<ul>" + rows + "</ul>" : empty("No desks yet."))
+              + "<p class='muted' style='margin-top:0.65rem'>Add new desks with <code>@switchbay /desk</code> in Chat, or Add desk above. Edit <code>duration</code> as <code>15 min</code>, <code>0.25</code> (hours), or <code>2h</code> in <code>" + esc(${JSON.stringify(DESKS_REL)}) + "</code>, then Activate.</p>";
+          })()
+        ),
         section("Custom agents", (p.agents || []).length, "Chat agents (.agent.md) — not Skills. Workspace: .github/agents/",
           (p.agents || []).length
             ? "<ul>" + p.agents.map((a) =>
@@ -496,7 +591,7 @@ export function agentsDashboardHtml(nonce: string): string {
                 + "</li>"
               ).join("") + "</ul>"
             : empty("No .agent.md files found. /create-agent writes .github/agents/.")),
-        section("Tools", (p.tools || []).length, "plugin MCP allowlist (no :8765 tools)", toolHtml),
+        section("Tools", (p.tools || []).length, "Switch Bay MCP tools in this workspace", toolHtml),
         section("Rules", (p.rules || []).length, ".workbench/state/agent_rules.json",
           (p.rules || []).length
             ? "<ul>" + p.rules.map((r) =>
@@ -551,37 +646,11 @@ export function agentsDashboardHtml(nonce: string): string {
           vscode.postMessage({ type: "setPreference", value: Number(slider.value) / 100 });
         });
       }
-      document.getElementById("sch-save")?.addEventListener("click", () => {
-        vscode.postMessage({
-          type: "saveSchedule",
-          item: {
-            title: document.getElementById("sch-title").value,
-            agent: document.getElementById("sch-agent").value,
-            frequency: document.getElementById("sch-freq").value,
-            every_hours: Number(document.getElementById("sch-n").value) || 24,
-            prompt: document.getElementById("sch-prompt").value,
-            enabled: true,
-          },
-        });
-      });
       root.querySelectorAll("[data-skill]").forEach((b) => {
         b.addEventListener("click", () => vscode.postMessage({ type: "openSkill", path: b.getAttribute("data-skill") }));
       });
       root.querySelectorAll("[data-del-rule]").forEach((b) => {
         b.addEventListener("click", () => vscode.postMessage({ type: "deleteRule", id: b.getAttribute("data-del-rule") }));
-      });
-      root.querySelectorAll("[data-run-sch]").forEach((b) => {
-        b.addEventListener("click", () => vscode.postMessage({ type: "runSchedule", id: b.getAttribute("data-run-sch") }));
-      });
-      root.querySelectorAll("[data-del-sch]").forEach((b) => {
-        b.addEventListener("click", () => vscode.postMessage({ type: "deleteSchedule", id: b.getAttribute("data-del-sch") }));
-      });
-      root.querySelectorAll("[data-toggle-sch]").forEach((b) => {
-        b.addEventListener("click", () => vscode.postMessage({
-          type: "toggleSchedule",
-          id: b.getAttribute("data-toggle-sch"),
-          enabled: b.getAttribute("data-on") !== "1",
-        }));
       });
       root.querySelectorAll("[data-run-agent]").forEach((b) => {
         b.addEventListener("click", () => vscode.postMessage({ type: "runAgent", agent: b.getAttribute("data-run-agent") }));
@@ -592,15 +661,51 @@ export function agentsDashboardHtml(nonce: string): string {
       document.getElementById("add-local")?.addEventListener("click", () => {
         vscode.postMessage({ type: "localModels" });
       });
+      root.querySelectorAll("[data-finish]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "finishRun", id: b.getAttribute("data-finish") }));
+      });
+      document.getElementById("clear-finished")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "clearFinished" });
+      });
+      root.querySelectorAll("[data-desk-setup]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "setupDesk", id: b.getAttribute("data-desk-setup") }));
+      });
+      root.querySelectorAll("[data-desk-on]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "activateDesk", id: b.getAttribute("data-desk-on") }));
+      });
+      root.querySelectorAll("[data-desk-off]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "deactivateDesk", id: b.getAttribute("data-desk-off") }));
+      });
+      root.querySelectorAll("[data-desk-edit]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "editDesks" }));
+      });
+      document.getElementById("desk-add")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "addDesk" });
+      });
+      document.getElementById("desk-off-all")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "deactivateAllDesks" });
+      });
+      document.getElementById("desk-edit-file")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "editDesks" });
+      });
     }
     document.getElementById("refresh").onclick = () => vscode.postMessage({ type: "refresh" });
     document.getElementById("curate").onclick = () => vscode.postMessage({ type: "curate" });
+    document.getElementById("keep").onclick = () => vscode.postMessage({ type: "keepRunning" });
     document.getElementById("agents").onclick = () => vscode.postMessage({ type: "agentsWindow" });
     document.getElementById("update").onclick = () => vscode.postMessage({ type: "checkUpdate" });
     window.addEventListener("message", (ev) => {
       if (ev.data && ev.data.payload) render(ev.data.payload);
     });
     vscode.postMessage({ type: "ready" });
+    setInterval(() => {
+      document.querySelectorAll("[data-started]").forEach((el) => {
+        el.textContent = elapsed(Number(el.getAttribute("data-started")));
+      });
+      document.querySelectorAll("[data-at]").forEach((el) => {
+        el.textContent = ago(Number(el.getAttribute("data-at")));
+      });
+    }, 1000);
   </script>
 </body></html>`;
 }

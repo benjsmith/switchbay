@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -35,7 +36,14 @@ log = logging.getLogger("switchbay.mcp_server")
 
 PROTOCOL_VERSION = "2025-06-18"
 SERVER_NAME = "switchbay"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.3.2"
+
+# Bump when Copilot-facing tool schemas change. The VS Code extension
+# writes this into `.vscode/mcp.json` and the MCP definition `version`
+# so Copilot drops a cached tools/list (it keys cache on version).
+MCP_SCHEMA_REV = "0.3.3"
+
+_SCALAR_TYPES = frozenset({"string", "number", "integer", "boolean", "null"})
 
 
 def _send(msg: dict[str, Any]) -> None:
@@ -57,6 +65,80 @@ def _ok(msg_id: Any, result: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": msg_id, "result": result}
 
 
+def _type_includes_array(type_field: Any) -> bool:
+    if type_field == "array":
+        return True
+    return isinstance(type_field, list) and "array" in type_field
+
+
+def _is_scalar_schema(node: Any) -> bool:
+    if not isinstance(node, dict):
+        return False
+    t = node.get("type")
+    if t in _SCALAR_TYPES:
+        return True
+    if isinstance(t, list) and t and all(x in _SCALAR_TYPES for x in t):
+        return True
+    return False
+
+
+def _ensure_array_items(node: Any) -> Any:
+    """Make ``inputSchema`` acceptable to VS Code Copilot Chat.
+
+    Copilot rejects the *entire* MCP server if any tool has
+    ``type: array`` without ``items`` (error: "array type must have
+    items"). It has also been observed to drop ``items`` from *nested*
+    arrays when converting MCP schemas, which then fails the same check
+    and poisons every Copilot turn (including ``/curate``).
+
+    So we recursively attach ``items``, and collapse arrays of
+    objects/arrays to a JSON string. One level of scalar arrays is all
+    Copilot reliably keeps.
+    """
+    if isinstance(node, list):
+        return [_ensure_array_items(x) for x in node]
+    if not isinstance(node, dict):
+        return node
+
+    out = {k: _ensure_array_items(v) for k, v in node.items()}
+    if not _type_includes_array(out.get("type")):
+        if "prefixItems" in out and "items" not in out:
+            out["type"] = "array"
+            out["items"] = {"type": "string"}
+        return out
+
+    items = out.get("items")
+    if items is None or isinstance(items, list):
+        # Tuple / prefixItems schemas still need a single ``items`` node.
+        out["items"] = {"type": "string"}
+        return out
+    if not _is_scalar_schema(items):
+        desc = str(out.get("description") or "").strip()
+        extra = "JSON array."
+        return {
+            "type": "string",
+            "description": f"{desc} {extra}".strip() if desc else extra,
+        }
+    return out
+
+
+def copilot_schema_violations(node: Any, path: str = "$") -> list[str]:
+    """Return paths of array schemas Copilot Chat would reject."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        if _type_includes_array(node.get("type")):
+            if "items" not in node:
+                found.append(f"{path}: array missing items")
+            elif not _is_scalar_schema(node.get("items")):
+                found.append(f"{path}: nested non-scalar array")
+        for key, val in node.items():
+            found.extend(copilot_schema_violations(val, f"{path}.{key}"))
+    elif isinstance(node, list):
+        for i, val in enumerate(node):
+            found.extend(copilot_schema_violations(val, f"{path}[{i}]"))
+    return found
+
+
 def _list_tools(allowed: list[str]) -> dict[str, Any]:
     from . import tools  # lazy import; see module docstring
 
@@ -68,9 +150,33 @@ def _list_tools(allowed: list[str]) -> dict[str, Any]:
         out.append({
             "name": t.name,
             "description": t.description,
-            "inputSchema": t.input_schema,
+            "inputSchema": _ensure_array_items(t.input_schema),
         })
     return {"tools": out}
+
+
+def _activity_detail(name: str, args: dict[str, Any]) -> str:
+    for key in ("query", "title", "page", "path", "detail"):
+        val = args.get(key)
+        if isinstance(val, str) and val.strip():
+            return f"{name}: {val.strip()[:180]}"
+    return name
+
+
+def write_mcp_activity(workspace: Path, name: str, args: dict[str, Any] | None) -> None:
+    """Heartbeat for the VS Code Agent Dashboard (Copilot Chat has no tool bus)."""
+    try:
+        from . import atomicio
+        rec = {
+            "at": time.time(),
+            "tool": name,
+            "detail": _activity_detail(name, args or {}),
+        }
+        path = workspace / ".workbench" / "state" / "mcp-activity.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        atomicio.write_json_atomic(path, rec)
+    except Exception:  # noqa: BLE001
+        log.debug("mcp activity write skipped", exc_info=True)
 
 
 def _call_tool(workspace: Path, name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -79,6 +185,7 @@ def _call_tool(workspace: Path, name: str, args: dict[str, Any]) -> dict[str, An
     calling agent sees them as tool failures, not protocol errors."""
     from . import tools  # lazy import
 
+    write_mcp_activity(workspace, name, args or {})
     try:
         result = tools.execute(name, workspace, args or {})
     except KeyError:

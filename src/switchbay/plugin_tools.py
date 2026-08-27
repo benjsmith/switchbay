@@ -36,6 +36,14 @@ DAEMON_COUPLED: frozenset[str] = frozenset({
 PROFILE_ENV = "CSWY_PROFILE"
 PLUGIN_PROFILES = frozenset({"vscode", "plugin"})
 
+# Copilot already has a terminal tool. Do not expose ``run_command`` on
+# the plugin MCP server — when that server is sandboxed, VS Code
+# auto-approves its tools, and a shell would skip Copilot's terminal
+# allowlist.
+PLUGIN_OMIT: frozenset[str] = frozenset({
+    "run_command",
+})
+
 DAEMON_UNAVAILABLE = (
     "this tool talks to the Switch Bay PWA daemon (:8765), "
     "which is not part of the VS Code plugin"
@@ -53,7 +61,7 @@ def daemon_unavailable() -> dict[str, Any]:
 def _plugin_tools() -> tuple[str, ...]:
     return tuple(
         name for name in rail_default.ALLOWED_TOOLS
-        if name not in DAEMON_COUPLED
+        if name not in DAEMON_COUPLED and name not in PLUGIN_OMIT
     )
 
 

@@ -29,7 +29,7 @@ and nothing leaves unless you send it.
   work; independent workers can use different available models and providers.
 - **Two cockpits** — **Power** mode (3-column: browser · tabs · rail) and
   **Zen** mode (think *at* the graph). Same data, your choice. Optional
-  **VS Code** install (no `:8765` daemon): [`docs/vscode.md`](docs/vscode.md).
+  **VS Code** install (no always-on daemon): [`docs/vscode.md`](docs/vscode.md).
 - **Custom tabs** — describe the view you want and an agent builds it
   just-in-time over your own data. Pin the keepers (globally or per
   workspace); throw the rest away.
@@ -144,12 +144,12 @@ documented [above](#macos-permission-prompts-expected).
 
 ## Install in VS Code (no daemon)
 
-Same wiki, Graph/Atlas, and agents, as a VS Code extension. Nothing
-listens on `:8765`. Closing VS Code stops work.
+Same wiki, Graph/Atlas, and agents, as a VS Code extension. No always-on
+Python HTTP server. Closing VS Code stops work.
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.2.0.vsix
+code --install-extension dist/switchbay-vs-0.3.5.vsix
 ```
 
 Open a curiosity-engine folder, then **Switch Bay VS: Configure Python…**

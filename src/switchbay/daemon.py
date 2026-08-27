@@ -3291,6 +3291,11 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
         fb = await asyncio.to_thread(_review_feedback_system, workspace)
         if fb:
             extra_system = (extra_system + "\n\n" + fb).strip()
+        prime = await asyncio.to_thread(
+            _curate_wave_prime_system, workspace, args, local=is_local,
+        )
+        if prime:
+            extra_system = (extra_system + "\n\n" + prime).strip()
 
     label = pid or _resolve_default_provider()
     try:
@@ -7587,15 +7592,17 @@ _LOCAL_CURATE_HOWTO = (
 )
 
 _CURATE_TOOLS = (
-    "You already have CE tools — do NOT ask what tools you have. Use "
-    "them now: ce_epoch_summary → ce_planner → ce_sweep / ce_run / "
-    "ce_graph_rebuild / ce_ingest / propose_wiki_page. Prefer those "
-    "over loading a skill. If you need extra skill prose (a mode the "
-    "tools do not name), load_skill('curiosity-engine') then "
-    "section='Heading' one chapter at a time — not the full body. "
-    "Write pages as you go (propose_wiki_page). Do NOT wait for "
-    "the user to accept each page; the Reviews tab is a non-blocking "
-    "backlog. Keep going until a sweep finishes or the user stops."
+    "You are the curiosity-engine CURATE orchestrator. Call "
+    "ce_wave_prime first (or trust the host injection). Execute that "
+    "mode's SKILL.md Phase 2 with ce_* tools — not Investigators, not "
+    "a second planner. Ladder: numeric-review → cross-table-conflicts "
+    "→ table-audit → figure-extract → multimodal-table-extract → "
+    "create → wire → repair. Use ce_sweep / ce_run for queue verbs. "
+    "Writes: ce_score_diff(new_text) → "
+    "ce_scrub_check → ce_wiki_commit. Workers: ce_dispatch_worker "
+    "(roles in .curator/prompts.md). load_skill('curiosity-engine', "
+    "section='…') only for the mode protocol — never detail=full first. "
+    "Never delete pages. Never invent numbers."
 )
 
 # Local 4B-class worker: judgment jobs that are not deterministic
@@ -7642,6 +7649,25 @@ def _provider_is_local(pid: str) -> bool:
         return False
 
 
+def _curate_wave_prime_system(
+    workspace: Path, args: str, *, local: bool,
+) -> str:
+    """Inject CE Phase 1 (pick-mode) for capable /curate. Local skips."""
+    if local:
+        return ""
+    from . import ce_host
+    token = args.split(None, 1)[0].lower() if (args or "").strip() else ""
+    payload = {"mode": token} if token else {}
+    try:
+        prime = ce_host.wave_prime(workspace, payload)
+    except Exception as exc:  # noqa: BLE001
+        return f"ce_wave_prime failed: {exc}"
+    return (
+        "ce_wave_prime result (Phase 1 already ran; execute this mode):\n"
+        + json.dumps(prime, default=str)[:6000]
+    )
+
+
 def _ce_action_prompt(
     name: str, args: str, *, local: bool = False,
     local_rung: Any = None,
@@ -7684,10 +7710,9 @@ def _ce_action_prompt(
             else (f" Focus: {a}." if a else "")
         )
         return (
-            "Run the curiosity-engine curator over this workspace as a "
-            "background sweep. " + _CURATE_TOOLS + focus
-            + " Report a short summary when a wave finishes; do not pause "
-            "for review cards."
+            "Run curiosity-engine CURATE over this workspace. "
+            + _CURATE_TOOLS + focus
+            + " Report a short summary when the wave finishes."
         )
     # `viewer` / `build-viewer` no longer return a chat prompt —
     # the dispatch in handle_ws short-circuits them into
@@ -14474,6 +14499,16 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                 if fb:
                                     extra_system = (
                                         extra_system + "\n\n" + fb
+                                    ).strip()
+                                prime = await asyncio.to_thread(
+                                    _curate_wave_prime_system,
+                                    request.app["workspace"],
+                                    sargs,
+                                    local=_ce_local,
+                                )
+                                if prime:
+                                    extra_system = (
+                                        extra_system + "\n\n" + prime
                                     ).strip()
                             if cp_pid:
                                 try:

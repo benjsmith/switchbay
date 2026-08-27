@@ -2,6 +2,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { tryStartWorkspaceMcp, writeWorkspaceMcpJson } from "./mcp";
+import { notifyMcpDefinitionsChanged } from "./mcpProvider";
 import { workspaceFsPath } from "./paths";
 
 const AGENTS_WINDOW_COMMANDS = [
@@ -148,36 +150,60 @@ export async function openAgentsWindow(): Promise<boolean> {
   return false;
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 /**
- * Start a Local Agents session on a named custom agent (Auto, Curator, Draw…).
+ * Start a named custom agent in editor Chat (Auto, Curator, Draw…).
  * VS Code owns duration, approvals, and the sessions list.
+ *
+ * Do not open the dedicated Agents *window* here. That window does not
+ * inherit the query, so `/curate` used to land on a blank "New session".
+ * Copilot also caches a failed tools/list on the current thread — start
+ * a new chat so a schema fix can take effect.
  */
 export async function startNamedAgentSession(
+  context: vscode.ExtensionContext,
   agent: string,
   prompt: string,
 ): Promise<{ opened: boolean; via: string }> {
   const name = (agent || "Auto").trim() || "Auto";
   const query = prompt.trim() || `Run as ${name}.`;
-  const windowOpened = await openAgentsWindow();
+  writeWorkspaceMcpJson(context);
+  notifyMcpDefinitionsChanged();
+  await tryStartWorkspaceMcp();
 
-  const attempts: unknown[] = [
-    { query, isPartialQuery: false, mode: name },
-    { query, isPartialQuery: false, modeId: name },
-    { query, isPartialQuery: false, agentMode: true, mode: name },
-    { query, isPartialQuery: false },
-  ];
-  for (const opts of attempts) {
+  for (const id of ["workbench.action.chat.newChat", "workbench.action.chat.newAgentSession"]) {
     try {
-      await vscode.commands.executeCommand("workbench.action.chat.open", opts);
-      return { opened: true, via: windowOpened ? "agents-window" : "chat" };
+      await vscode.commands.executeCommand(id);
+      break;
     } catch {
       continue;
     }
   }
-  if (windowOpened) return { opened: true, via: "window-only" };
+  await sleep(150);
+
+  const attempts: unknown[] = [
+    { query, isPartialQuery: false, mode: name },
+    { query, isPartialQuery: false, modeId: name },
+    { query, isPartialQuery: false, mode: "agent" },
+    { query, isPartialQuery: false, agentMode: true },
+  ];
+  for (const opts of attempts) {
+    try {
+      await vscode.commands.executeCommand("workbench.action.chat.open", opts);
+      return { opened: true, via: "chat" };
+    } catch {
+      continue;
+    }
+  }
   return { opened: false, via: "failed" };
 }
 
-export async function startAutoAgentsSession(prompt: string): Promise<{ opened: boolean; via: string }> {
-  return startNamedAgentSession("Auto", prompt);
+export async function startAutoAgentsSession(
+  context: vscode.ExtensionContext,
+  prompt: string,
+): Promise<{ opened: boolean; via: string }> {
+  return startNamedAgentSession(context, "Auto", prompt);
 }

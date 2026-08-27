@@ -266,16 +266,13 @@ def apply_task_context(
 ) -> TaskFeatures:
     """Apply product-known context that terse canned prompts cannot express.
 
-    A broad curator sweep spans wiki, vault, graph, verification, and a single
-    writing pass even when the dispatch prompt contains no literal questions.
-    Focused/local passes stay conservative and may remain one Run.
+    Wiki CURATE is one CE orchestrator (planner pick-mode + Phase 2),
+    not Switch Bay investigators. Local/focused passes stay conservative.
     """
     if task_kind == "curation":
         features.graph = True
         if not constrained:
-            features.research = True
-            features.difficulty = max(features.difficulty, 0.6)
-            features.n_subquestions = max(features.n_subquestions, 3)
+            features.n_subquestions = 1
     return features
 
 

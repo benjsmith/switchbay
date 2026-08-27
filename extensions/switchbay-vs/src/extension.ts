@@ -2,11 +2,13 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { listNamedAgents, openAgentsWindow, optIntoAgentsWindow, startNamedAgentSession } from "./agentsSession";
+import { disposeMcp, tryStartWorkspaceMcp, writeWorkspaceMcpJson } from "./mcp";
+import { notifyMcpDefinitionsChanged, registerMcpProvider } from "./mcpProvider";
 import { registerChat } from "./chat";
 import { readCachedGraph, rebuildViewer, wikiPageUri, type GraphNode } from "./ce";
-import { disposeMcp } from "./mcp";
-import { registerMcpProvider } from "./mcpProvider";
-import { startCurate } from "./orch";
+import { startChatObserver } from "./chatObserve";
+import { offerKeepRunning } from "./keepAlive";
+import { applyOrchestrationReport, recordMcpActivity, recordWikiWrite, startCurate } from "./orch";
 import { workspaceFolder } from "./paths";
 import { getPreference, preferenceLabel, setPreference } from "./preference";
 import { openWikiPage, openWikiPreview } from "./preview";
@@ -44,6 +46,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("switchbay.openPreview", (uri?: vscode.Uri) => openWikiPreview(uri)),
     vscode.commands.registerCommand("switchbay.openAgents", () => openAgents(context)),
     vscode.commands.registerCommand("switchbay.openAgentsWindow", () => openAgentsWindow()),
+    vscode.commands.registerCommand("switchbay.keepRunning", () => offerKeepRunning()),
     vscode.commands.registerCommand("switchbay.curate", async () => {
       const prompt = await vscode.window.showInputBox({
         title: "Switch Bay Auto",
@@ -86,6 +89,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   try {
     registerMcpProvider(context);
+    writeWorkspaceMcpJson(context);
   } catch (err) {
     log.appendLine(`MCP provider failed: ${err}`);
   }
@@ -96,7 +100,9 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   void optIntoAgentsWindow();
   registerLocalModels(context);
+  startChatObserver(context);
   updateWikiContext();
+  void tryStartWorkspaceMcp();
 
   const ping = () => {
     updateWikiContext();
@@ -105,11 +111,31 @@ export function activate(context: vscode.ExtensionContext): void {
   };
   const folder = workspaceFolder();
   if (folder) {
-    const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, "wiki/**/*.md"));
-    watcher.onDidChange(ping);
-    watcher.onDidCreate(ping);
-    watcher.onDidDelete(ping);
-    context.subscriptions.push(watcher);
+    const onWiki = (uri: vscode.Uri) => {
+      ping();
+      recordWikiWrite(folder.fsPath, path.relative(folder.fsPath, uri.fsPath));
+    };
+    for (const glob of ["wiki/**/*.md", ".workbench/proposals/**"]) {
+      const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(folder, glob));
+      watcher.onDidChange(onWiki);
+      watcher.onDidCreate(onWiki);
+      watcher.onDidDelete(onWiki);
+      context.subscriptions.push(watcher);
+    }
+    const onReport = () => applyOrchestrationReport(folder.fsPath);
+    const reportWatch = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, ".workbench/state/orchestration-report.json"),
+    );
+    reportWatch.onDidChange(onReport);
+    reportWatch.onDidCreate(onReport);
+    context.subscriptions.push(reportWatch);
+    const onMcp = () => recordMcpActivity(folder.fsPath);
+    const mcpWatch = vscode.workspace.createFileSystemWatcher(
+      new vscode.RelativePattern(folder, ".workbench/state/mcp-activity.json"),
+    );
+    mcpWatch.onDidChange(onMcp);
+    mcpWatch.onDidCreate(onMcp);
+    context.subscriptions.push(mcpWatch);
   }
 
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
@@ -127,7 +153,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ? `$(type-hierarchy) Switch Bay VS · ${cached.nodes.length} nodes · ${(cached.edges || []).length} edges`
       : "$(type-hierarchy) Switch Bay VS";
     status.command = "switchbay.openGraph";
-    status.tooltip = "Open Graph (no daemon)";
+    status.tooltip = "Open Graph";
     status.backgroundColor = undefined;
   };
   const refreshPythonStatus = async () => {
@@ -140,8 +166,11 @@ export function activate(context: vscode.ExtensionContext): void {
     status,
     vscode.commands.registerCommand("switchbay.configurePython", async () => {
       const ok = await configurePython(context);
-      if (ok) paintStatus(true);
-      else void refreshPythonStatus();
+      if (ok) {
+        writeWorkspaceMcpJson(context);
+        notifyMcpDefinitionsChanged();
+        paintStatus(true);
+      } else void refreshPythonStatus();
     }),
     vscode.commands.registerCommand("switchbay.setEffort", async () => {
       const current = getPreference();
@@ -214,9 +243,19 @@ export function activate(context: vscode.ExtensionContext): void {
         { title: "Run named agent" },
       );
       if (!pick) return;
-      await startNamedAgentSession(pick.label, `Run as ${pick.label}.`);
+      await startNamedAgentSession(context, pick.label, `Run as ${pick.label}.`);
     }),
     vscode.commands.registerCommand("switchbay.checkUpdate", () => checkAndOfferUpdate(context)),
+    vscode.commands.registerCommand("switchbay.restartMcp", async () => {
+      writeWorkspaceMcpJson(context);
+      notifyMcpDefinitionsChanged();
+      const started = await tryStartWorkspaceMcp();
+      void vscode.window.showInformationMessage(
+        started
+          ? "Switch Bay MCP: restart requested. If Chat still has no wiki tools, start a new chat."
+          : "Switch Bay MCP: wrote .vscode/mcp.json. Command Palette → MCP: List Servers → start switchbay, then a new chat.",
+      );
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (
         e.affectsConfiguration("switchbay.repoRoot")

@@ -9,7 +9,11 @@ import { startNamedAgentSession } from "./agentsSession";
 import {
   agentsDashboardHtml, dashboardPayload, deleteRule,
 } from "./dashboard";
-import { runsRoot } from "./orch";
+import {
+  addBlankDesk, deactivateAllDesks, desksPath, setDeskEnabled, setupDesk,
+} from "./desks";
+import { offerKeepRunning } from "./keepAlive";
+import { applyOrchestrationReport, clearFinishedRuns, finishRun, listRuns, recordMcpActivity, runsRoot } from "./orch";
 import { hopperDir, workspaceFolder } from "./paths";
 import { setPreference } from "./preference";
 import { openWikiPage } from "./preview";
@@ -160,7 +164,15 @@ export function openHopper(context: vscode.ExtensionContext): void {
   context.subscriptions.push(panel);
 }
 
+let agentsPanel: vscode.WebviewPanel | undefined;
+let agentsRefresh: (() => void) | undefined;
+
 export function openAgents(context: vscode.ExtensionContext): void {
+  if (agentsPanel) {
+    agentsPanel.reveal(agentsPanel.viewColumn ?? vscode.ViewColumn.Beside);
+    agentsRefresh?.();
+    return;
+  }
   const folder = workspaceFolder();
   const panel = vscode.window.createWebviewPanel(
     "switchbay.agents",
@@ -168,12 +180,14 @@ export function openAgents(context: vscode.ExtensionContext): void {
     vscode.ViewColumn.Beside,
     { enableScripts: true, retainContextWhenHidden: true },
   );
+  agentsPanel = panel;
   panel.webview.html = agentsDashboardHtml(nonce());
   const push = () => {
     void dashboardPayload(context, folder?.fsPath).then((payload) => {
       void panel.webview.postMessage({ payload });
     });
   };
+  agentsRefresh = push;
   panel.webview.onDidReceiveMessage(async (msg: {
     type?: string;
     path?: string;
@@ -184,12 +198,77 @@ export function openAgents(context: vscode.ExtensionContext): void {
     agent?: string;
   }) => {
     if (msg.type === "ready" || msg.type === "refresh") {
+      if (folder) {
+        applyOrchestrationReport(folder.fsPath);
+        recordMcpActivity(folder.fsPath);
+      }
       push();
       return;
     }
     if (msg.type === "curate") {
       await vscode.commands.executeCommand("switchbay.curate");
       push();
+      return;
+    }
+    if (msg.type === "finishRun" && folder && msg.id) {
+      finishRun(folder.fsPath, msg.id);
+      push();
+      return;
+    }
+    if (msg.type === "clearFinished" && folder) {
+      const n = clearFinishedRuns(folder.fsPath);
+      void vscode.window.showInformationMessage(
+        n ? `Cleared ${n} finished run${n === 1 ? "" : "s"} from the dashboard.` : "Nothing to clear.",
+      );
+      push();
+      return;
+    }
+    if (msg.type === "keepRunning") {
+      await offerKeepRunning();
+      push();
+      return;
+    }
+    if (msg.type === "setupDesk" && folder && msg.id) {
+      const result = setupDesk(folder.fsPath, msg.id);
+      if (result.ok) {
+        await vscode.window.showTextDocument(vscode.Uri.file(result.path), { preview: false });
+        void vscode.window.showInformationMessage(result.text);
+      } else {
+        void vscode.window.showWarningMessage(result.text);
+      }
+      push();
+      return;
+    }
+    if (msg.type === "activateDesk" && folder && msg.id) {
+      const result = setDeskEnabled(folder.fsPath, msg.id, true);
+      if (result.ok) void offerKeepRunning(result.text);
+      else void vscode.window.showWarningMessage(result.text);
+      push();
+      return;
+    }
+    if (msg.type === "deactivateDesk" && folder && msg.id) {
+      const result = setDeskEnabled(folder.fsPath, msg.id, false);
+      void vscode.window.showInformationMessage(result.text);
+      push();
+      return;
+    }
+    if (msg.type === "deactivateAllDesks" && folder) {
+      const result = deactivateAllDesks(folder.fsPath);
+      void vscode.window.showInformationMessage(result.text);
+      push();
+      return;
+    }
+    if (msg.type === "addDesk" && folder) {
+      const result = addBlankDesk(folder.fsPath);
+      await vscode.window.showTextDocument(vscode.Uri.file(result.path), { preview: false });
+      void vscode.window.showInformationMessage(result.text);
+      push();
+      return;
+    }
+    if (msg.type === "editDesks" && folder) {
+      const p = desksPath(folder.fsPath);
+      if (!fs.existsSync(p)) addBlankDesk(folder.fsPath);
+      await vscode.window.showTextDocument(vscode.Uri.file(desksPath(folder.fsPath)), { preview: false });
       return;
     }
     if (msg.type === "agentsWindow") {
@@ -213,7 +292,9 @@ export function openAgents(context: vscode.ExtensionContext): void {
         every_hours: Number(msg.item.every_hours) || 24,
         agent: String(msg.item.agent || "Auto"),
         enabled: msg.item.enabled !== false,
+        until_at: msg.item.until_at == null ? null : Number(msg.item.until_at) || null,
       });
+      void offerKeepRunning("This schedule will fire only while VS Code is open.");
       push();
       return;
     }
@@ -234,7 +315,7 @@ export function openAgents(context: vscode.ExtensionContext): void {
       return;
     }
     if (msg.type === "runAgent" && msg.agent) {
-      const session = await startNamedAgentSession(msg.agent, `Run as ${msg.agent}.`);
+      const session = await startNamedAgentSession(context, msg.agent, `Run as ${msg.agent}.`);
       if (!session.opened) {
         void vscode.window.showWarningMessage(`Could not open the ${msg.agent} agent.`);
       }
@@ -275,18 +356,38 @@ export function openAgents(context: vscode.ExtensionContext): void {
     const rulesDir = path.join(ws, ".workbench", "state");
     fs.mkdirSync(rulesDir, { recursive: true });
     watch(rulesDir);
+    const proposals = path.join(ws, ".workbench", "proposals");
+    fs.mkdirSync(proposals, { recursive: true });
+    watch(proposals);
+    const tick = setInterval(() => {
+      applyOrchestrationReport(ws);
+      recordMcpActivity(ws);
+      listRuns(ws);
+      push();
+    }, 8000);
+    panel.onDidDispose(() => clearInterval(tick));
     const githubAgents = path.join(ws, ".github", "agents");
     fs.mkdirSync(githubAgents, { recursive: true });
     watch(githubAgents);
     panel.onDidDispose(() => {
       clearTimeout(debounce);
       watchers.forEach((w) => w.close());
+      if (agentsPanel === panel) {
+        agentsPanel = undefined;
+        agentsRefresh = undefined;
+      }
     });
   }
   const cfgWatch = vscode.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration("switchbay.orchestrationPreference")) push();
   });
-  panel.onDidDispose(() => cfgWatch.dispose());
+  panel.onDidDispose(() => {
+    cfgWatch.dispose();
+    if (agentsPanel === panel) {
+      agentsPanel = undefined;
+      agentsRefresh = undefined;
+    }
+  });
 }
 
 export function openHtml(uri: vscode.Uri): void {

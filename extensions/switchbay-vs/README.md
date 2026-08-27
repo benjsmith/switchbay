@@ -1,10 +1,10 @@
 # Switch Bay VS
 
-Knowledge-graph workbench over a curiosity-engine folder. **No daemon** — no
-`:8765`, no always-on Python HTTP server. VS Code owns the chrome; Switch Bay
-owns the wiki, graph, MCP tools, and Agents session.
+Knowledge-graph workbench over a curiosity-engine folder. **No always-on
+Python HTTP server.** VS Code owns the chrome; Switch Bay owns the wiki,
+graph, MCP tools, and Agents session.
 
-Install and update walkthrough: [docs/vscode.md](https://github.com/benjsmith/switchbay/blob/exp/vscode-plugin/docs/vscode.md)
+Install and update walkthrough: [docs/vscode.md](https://github.com/benjsmith/switchbay/blob/main/docs/vscode.md)
 in the Switch Bay repo.
 
 ![Switch Bay VS icon](media/icon.png)
@@ -65,7 +65,7 @@ Custom agents: Auto, Curator, Reviewer. Investigator is subagent-only.
 
 ```
 make vsix
-code --install-extension dist/switchbay-vs-0.2.0.vsix
+code --install-extension dist/switchbay-vs-0.3.5.vsix
 ```
 
 That same command **updates** an older sideload (same `publisher` + `name`). Then **Developer: Reload Window**. Command Palette → **Switch Bay VS: Update extension…** walks the same path if `dist/*.vsix` is already built.

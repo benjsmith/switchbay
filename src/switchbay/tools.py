@@ -33,6 +33,19 @@ from . import (
 ToolHandler = Callable[[Path, dict[str, Any]], dict[str, Any] | str]
 
 
+def _parse_json_value(value: Any) -> Any:
+    """Accept native JSON or a JSON-encoded string (Copilot-safe MCP schemas)."""
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if len(text) >= 2 and text[0] in "[{" and text[-1] in "]}":
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            return value
+    return value
+
+
 @dataclass
 class Tool:
     name: str
@@ -70,7 +83,7 @@ def _list_starters(workspace: Path, _: dict[str, Any]) -> dict[str, Any]:
 
 
 def _add_starters(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    new = payload.get("starters") or []
+    new = _parse_json_value(payload.get("starters") or [])
     if not isinstance(new, list):
         return {"ok": False, "error": "`starters` must be an array"}
     current = duckdb_starters.load(workspace)
@@ -85,7 +98,7 @@ def _add_starters(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _replace_starters(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    items = payload.get("starters") or []
+    items = _parse_json_value(payload.get("starters") or [])
     if not isinstance(items, list):
         return {"ok": False, "error": "`starters` must be an array"}
     duckdb_starters.save(workspace, items)
@@ -231,24 +244,36 @@ register(Tool(
 
 def _create_slideshow(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     title = str(payload.get("title") or "").strip()
-    raw_slides = payload.get("slides")
+    raw_slides = _parse_json_value(payload.get("slides"))
     if not title:
         return {"ok": False, "error": "title is required"}
     if not isinstance(raw_slides, list) or not raw_slides:
         return {"ok": False, "error": "slides must be a non-empty array"}
-    if not all(isinstance(slide, dict) for slide in raw_slides):
-        return {"ok": False, "error": "every slide must be an object"}
+    slides: list[dict[str, Any]] = []
+    for slide in raw_slides:
+        if not isinstance(slide, dict):
+            return {"ok": False, "error": "every slide must be an object"}
+        item = dict(slide)
+        if "bullets" in item:
+            item["bullets"] = _parse_json_value(item["bullets"])
+            if isinstance(item["bullets"], str):
+                item["bullets"] = [
+                    ln.strip() for ln in item["bullets"].splitlines() if ln.strip()
+                ]
+        if "cards" in item:
+            item["cards"] = _parse_json_value(item["cards"])
+        slides.append(item)
     slug = str(payload.get("slug") or "").strip()
     if not slug:
         slug = slideshow_from_md.slugify(title)
-    topics = payload.get("wiki_topics")
+    topics = _parse_json_value(payload.get("wiki_topics"))
     if not isinstance(topics, list):
         topics = []
     result = slideshow_html.write_slideshow(
         workspace,
         slug,
         title=title,
-        slides=[dict(slide) for slide in raw_slides],
+        slides=slides,
         wiki_topics=[str(topic) for topic in topics],
     )
     try:
@@ -303,8 +328,17 @@ register(Tool(
                         "eyebrow": {"type": "string"},
                         "heading": {"type": "string"},
                         "lede": {"type": "string"},
-                        "bullets": {"type": "array"},
-                        "cards": {"type": "array"},
+                        "bullets": {"type": "array", "items": {"type": "string"}},
+                        "cards": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "title": {"type": "string"},
+                                    "body": {"type": "string"},
+                                },
+                            },
+                        },
                         "media": {"type": "string"},
                         "media_kind": {"type": "string", "enum": ["image", "video"]},
                         "cite": {"type": "string"},
@@ -1444,7 +1478,7 @@ register(Tool(
             "values": {
                 "type": "array",
                 "description": "2D grid. First row = headers.",
-                "items": {"type": "array"},
+                "items": {"type": "array", "items": {"type": "string"}},
             },
             "origin": {
                 "type": "string",
@@ -2743,4 +2777,6 @@ register(Tool(
 # CE script wrappers (Copilot / HTTP providers have no CE-aware shell).
 from . import ce_tools as _ce_tools  # noqa: E402,F401
 from . import workspace_plan as _workspace_plan  # noqa: E402
+from . import orchestration_report as _orchestration_report  # noqa: E402
 _workspace_plan.register_tools()
+_orchestration_report.register_tools()

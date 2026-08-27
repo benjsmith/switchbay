@@ -38,6 +38,15 @@ def test_pending_running_id_is_stale(tmp_path):
     assert cleared["running_run_id"] is None
 
 
+def test_until_at_stops_due(tmp_path):
+    item = schedules.create(tmp_path, title="window", prompt="p", frequency="hourly")
+    now = time.time()
+    updated = schedules.update(tmp_path, item["id"], {"until_at": now + 60})
+    assert updated is not None
+    assert schedules.is_due(updated, now=now)
+    assert not schedules.is_due(updated, now=now + 120)
+
+
 def test_update_and_delete(tmp_path):
     item = schedules.create(tmp_path, title="a", prompt="p", frequency="daily")
     sid = item["id"]

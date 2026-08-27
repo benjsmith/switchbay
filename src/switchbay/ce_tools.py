@@ -18,7 +18,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import cebridge, ingest_prep
+from . import ce_host, cebridge, ingest_prep
 from .tools import Tool, register
 
 # Scripts CE's SKILL.md names on the bash allowlist, plus the rest of
@@ -134,6 +134,24 @@ def _ce_sweep(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     extra, err = _safe_args(payload.get("args"))
     if err:
         return {"error": err}
+    extraction = str(payload.get("extraction") or "").strip()
+    if extraction:
+        extra.extend(["--extraction", extraction])
+    json_file = str(payload.get("json_file") or "").strip()
+    if json_file:
+        extra.extend(["--json-file", json_file])
+    tab_page = str(payload.get("tab_page") or "").strip()
+    if tab_page:
+        extra.extend(["--tab-page", tab_page])
+    verdict = payload.get("verdict")
+    if verdict is None:
+        verdict = payload.get("verdict_json")
+    if verdict is not None:
+        if isinstance(verdict, (dict, list)):
+            raw = json.dumps(verdict)
+        else:
+            raw = str(verdict)
+        extra.extend(["--verdict-json", raw])
     args = [verb, "wiki", *extra]
     return cebridge.run_script(
         "sweep.py", args, cwd=workspace, timeout=180.0, require_json=False,
@@ -255,6 +273,16 @@ def _ce_score_diff(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {"error": err}
     if not page:
         return {"error": "page is required"}
+    new_text = payload.get("new_text")
+    new_file = str(payload.get("new_text_file") or payload.get("new_file") or "").strip()
+    if new_text is not None and str(new_text):
+        tmp = ce_host.write_temp(workspace, ".tmp-score-diff.md", str(new_text))
+        extra.extend(["--new-text-file", str(tmp)])
+    elif new_file:
+        extra.extend(["--new-text-file", new_file])
+    vault_db = workspace / "vault" / "vault.db"
+    if vault_db.is_file() and "--vault-db" not in extra:
+        extra.extend(["--vault-db", str(vault_db)])
     args = [page, *extra]
     if payload.get("new_page"):
         args.append("--new-page")
@@ -333,13 +361,18 @@ def _ce_scan(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
 _SCRIPT_BLURB = (
     "Available scripts (pass as `script`): "
     + ", ".join(_KNOWN_SCRIPTS)
-    + ". Common verbs: sweep.py scan|fix-index|fix-source-stubs|promote-extracted-tables; "
+    + ". Common verbs: sweep.py scan|fix-index|fix-source-stubs|"
+    "promote-extracted-tables|pending-numeric-review|apply-numeric-review|"
+    "multimodal-table-candidates|write-extracted-tables|"
+    "mark-multimodal-extracted|figure-candidates|pending-multimodal|"
+    "annotate-cross-table-conflicts; "
     "graph.py rebuild|retrieve|neighbors|path|shared-sources|bridge-candidates|"
     "link-candidates|embed; query_router.py introspect|sql|cypher|classify; "
-    "tables.py list|query|schema|sync|insert|update; "
-    "figures.py list|check|regen|render-all; naming.py; local_ingest.py; "
-    "vault_index.py; lint_scores.py; score_diff.py; scrub_check.py; "
-    "epoch_summary.py; planner.py pick-mode; scan.py all."
+    "tables.py list|query|schema|sync|insert|update|cross-table-conflicts|"
+    "extracted-query|list-backups|restore-backup|audit|risk; "
+    "figures.py list|check|regen|render-all|mark-extracted; naming.py; "
+    "local_ingest.py; vault_index.py; lint_scores.py; score_diff.py; "
+    "scrub_check.py; epoch_summary.py; planner.py pick-mode; scan.py all."
 )
 
 
@@ -400,18 +433,26 @@ register(Tool(
 register(Tool(
     name="ce_sweep",
     description=(
-        "CE mechanical hygiene (sweep.py). Verbs: scan, fix-index, "
-        "fix-source-stubs, fix-citation-paths, promote-extracted-tables, "
-        "concept-candidates, evidence-candidates, figure-candidates, "
-        "orphan-sources, sync-notes, sync-todos, and the other sweep "
-        "commands in the CE skill. Always pass wiki as the target — "
-        "this tool adds it."
+        "CE sweep.py. Hygiene: scan, fix-index, fix-source-stubs, "
+        "fix-citation-paths, promote-extracted-tables, sync-notes, "
+        "sync-todos. CURATE queues/persist: pending-numeric-review, "
+        "apply-numeric-review, multimodal-table-candidates, "
+        "write-extracted-tables, mark-multimodal-extracted, "
+        "pending-multimodal, figure-candidates, "
+        "annotate-cross-table-conflicts, concept-candidates, "
+        "evidence-candidates, orphan-sources. Always adds wiki as "
+        "the positional target. For apply-numeric-review pass "
+        "tab_page + verdict (JSON object or string)."
     ),
     input_schema={
         "type": "object",
         "properties": {
             "verb": {"type": "string", "description": "sweep.py subcommand (default scan)."},
             "args": {"description": "Extra args after `wiki`."},
+            "extraction": {"type": "string", "description": "--extraction path"},
+            "json_file": {"type": "string", "description": "--json-file path"},
+            "tab_page": {"type": "string", "description": "--tab-page for apply-numeric-review"},
+            "verdict": {"type": "string", "description": "apply-numeric-review JSON (stringified object ok)"},
         },
     },
     handler=_ce_sweep,
@@ -509,12 +550,18 @@ register(Tool(
 
 register(Tool(
     name="ce_score_diff",
-    description="Citation/bloat gate (score_diff.py) for a wiki page.",
+    description=(
+        "CE citation/bloat gate (score_diff.py). Pass new_text; on "
+        "accept the script writes the page. Then ce_scrub_check and "
+        "ce_wiki_commit. CURATE write path — not propose_wiki_page."
+    ),
     input_schema={
         "type": "object",
         "required": ["page"],
         "properties": {
             "page": {"type": "string"},
+            "new_text": {"type": "string", "description": "Full page body to gate and write."},
+            "new_text_file": {"type": "string"},
             "new_page": {"type": "boolean"},
             "args": {},
         },
@@ -545,7 +592,11 @@ register(Tool(
 
 register(Tool(
     name="ce_tables",
-    description="Class-table store (tables.py). Verbs: list, schema, query, sync, insert, update.",
+    description=(
+        "Class-table store (tables.py). Verbs: list, schema, query, "
+        "sync, insert, update, cross-table-conflicts, extracted-query, "
+        "extracted-list, list-backups, restore-backup, audit, risk."
+    ),
     input_schema={
         "type": "object",
         "properties": {
@@ -558,7 +609,10 @@ register(Tool(
 
 register(Tool(
     name="ce_figures",
-    description="Figure assets (figures.py). Verbs: list, check, regen, render-all, pages, extract.",
+    description=(
+        "Figure assets (figures.py). Verbs: list, check, regen, "
+        "render-all, pages, extract, mark-extracted."
+    ),
     input_schema={
         "type": "object",
         "properties": {
@@ -600,6 +654,80 @@ register(Tool(
         },
     },
     handler=_ce_scan,
+))
+
+register(Tool(
+    name="ce_wiki_commit",
+    description=(
+        "git -C wiki add -A && commit. CE CURATE end-of-wave only. "
+        "Message is required; no vault body in the message."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["message"],
+        "properties": {
+            "message": {"type": "string", "description": "Commit message, e.g. curate: numeric-review"},
+        },
+    },
+    handler=ce_host.wiki_commit,
+))
+
+register(Tool(
+    name="ce_evolve_guard",
+    description=(
+        "CE evolve_guard.sh snapshot|check|hash. Snapshot at wave "
+        "start; check at wave end. Drift aborts the wave."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "verb": {"type": "string", "enum": ["snapshot", "check", "hash"]},
+            "path": {"type": "string", "description": "Snapshot file (default .curator/.guard.snapshot)"},
+        },
+    },
+    handler=ce_host.evolve_guard,
+))
+
+register(Tool(
+    name="ce_wave_prime",
+    description=(
+        "CURATE Phase 1 (mechanical): evolve_guard snapshot, scan, "
+        "epoch_summary, planner pick-mode. Call at /curate start. "
+        "Optional mode overrides pick-mode (tables, figures, numeric, "
+        "repair, …). Then execute that mode's Phase 2."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "mode": {"type": "string", "description": "Optional /curate alias or CE wave mode"},
+        },
+    },
+    handler=ce_host.wave_prime,
+))
+
+register(Tool(
+    name="ce_dispatch_worker",
+    description=(
+        "Load a CE worker template from .curator/prompts.md and fill "
+        "it. Roles: figure_extractor, scientific_table_extractor, "
+        "numeric_transcription_review, batch_reviewer, link_proposer, "
+        "link_classifier, worker, notes_curator, summary_table_builder. "
+        "VS Code: spawn the named Copilot agent with the returned prompt. "
+        "PWA: completes one fresh-context worker when a provider is keyed."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+            "role": {"type": "string"},
+            "brief": {"type": "string"},
+            "substitutions": {
+                "type": "string",
+                "description": "JSON object of <PLACEHOLDER> → value",
+            },
+        },
+    },
+    handler=ce_host.dispatch_worker,
 ))
 
 MECHANICAL_SWEEP_VERBS: tuple[str, ...] = (
@@ -678,4 +806,8 @@ CE_TOOL_NAMES = (
     "ce_epoch_summary",
     "ce_planner",
     "ce_scan",
+    "ce_wiki_commit",
+    "ce_evolve_guard",
+    "ce_wave_prime",
+    "ce_dispatch_worker",
 )

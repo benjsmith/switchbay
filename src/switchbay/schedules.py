@@ -85,6 +85,13 @@ def is_due(item: dict[str, Any], *, now: float | None = None) -> bool:
     if item.get("running_run_id"):
         return False
     now = now if now is not None else time.time()
+    until = item.get("until_at")
+    try:
+        until_f = float(until) if until is not None else None
+    except (TypeError, ValueError):
+        until_f = None
+    if until_f is not None and now >= until_f:
+        return False
     last = item.get("last_run_at")
     try:
         last_f = float(last) if last is not None else None
@@ -115,6 +122,7 @@ def create(
         "every_hours": float(every_hours) if every_hours is not None else 24.0,
         "enabled": bool(enabled),
         "preference": preference,
+        "until_at": None,
         "created_at": now,
         "created_day": datetime.now(timezone.utc).strftime("%Y-%m-%d"),
         "edited_at": now,
@@ -151,6 +159,15 @@ def update(workspace: Path, sid: str, patch: dict[str, Any]) -> dict[str, Any] |
             it["enabled"] = bool(patch["enabled"])
         if "preference" in patch:
             it["preference"] = patch["preference"]
+        if "until_at" in patch:
+            raw = patch["until_at"]
+            if raw is None or raw == "":
+                it["until_at"] = None
+            else:
+                try:
+                    it["until_at"] = float(raw)
+                except (TypeError, ValueError):
+                    pass
         it["edited_at"] = time.time()
         found = it
         break
