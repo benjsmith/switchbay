@@ -40,6 +40,7 @@ skills-lock.json
 charter.md
 work-plan.md
 log.md
+.local/
 docs/enterprise-windows-design.md
 docs/*-design.md
 docs/product-pilot-judge-results-*.md
