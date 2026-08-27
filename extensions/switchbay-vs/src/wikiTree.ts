@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
-import { readCachedGraph, scanWikiMarkdown, wikiPageUri, type GraphNode } from "./ce";
-import { workspaceFolder } from "./paths";
+import { readCachedGraph, wikiPageUri, type GraphNode } from "./ce";
+import { wikiFolderUri } from "./wikiRoot";
 
 export class WikiPageItem extends vscode.TreeItem {
   constructor(public readonly node: GraphNode, folder: vscode.Uri) {
@@ -40,17 +40,18 @@ export class WikiTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem
   }
 
   getChildren(element?: vscode.TreeItem): vscode.TreeItem[] {
-    const folder = workspaceFolder();
+    const folder = wikiFolderUri();
     if (!folder) return [];
     if (element instanceof TypeGroupItem) return element.children;
     if (element) return [];
 
+    // Same WikiPage set as the graph webview (graph.kuzu). Markdown on
+    // disk is harvested into kuzu by Refresh / graph.py rebuild, not here.
     let nodes: GraphNode[] = [];
     try {
-      const graph = readCachedGraph(folder.fsPath);
-      nodes = graph?.nodes?.length ? graph.nodes : scanWikiMarkdown(folder.fsPath);
+      nodes = readCachedGraph(folder.fsPath)?.nodes ?? [];
     } catch (err) {
-      console.log("[switchbay] wiki tree scan failed", err);
+      console.log("[switchbay] wiki tree graph read failed", err);
       return [];
     }
     const groups = new Map<string, GraphNode[]>();

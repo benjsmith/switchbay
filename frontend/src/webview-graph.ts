@@ -78,11 +78,29 @@ function loadHistory(): Promise<HistoryDoc | null> {
   });
 }
 
-function bind(data: GraphData): void {
+function waitForSize(el: HTMLElement, timeoutMs = 2500): Promise<void> {
+  if (el.clientWidth > 32 && el.clientHeight > 32) return Promise.resolve();
+  return new Promise((resolve) => {
+    const ro = new ResizeObserver(() => {
+      if (el.clientWidth > 32 && el.clientHeight > 32) {
+        ro.disconnect();
+        resolve();
+      }
+    });
+    ro.observe(el);
+    window.setTimeout(() => {
+      ro.disconnect();
+      resolve();
+    }, timeoutMs);
+  });
+}
+
+async function bind(data: GraphData): Promise<void> {
   live?.abort();
   live = new AbortController();
   const { signal } = live;
   resizeObs?.disconnect();
+  await waitForSize(mount);
 
   const themed: GraphData = {
     ...data,
@@ -101,9 +119,12 @@ function bind(data: GraphData): void {
   requestAnimationFrame(() => {
     pingSize();
     window.setTimeout(pingSize, 120);
+    window.setTimeout(pingSize, 400);
+    window.setTimeout(pingSize, 1200);
   });
   resizeObs = new ResizeObserver(pingSize);
   resizeObs.observe(mount);
+  if (pane instanceof HTMLElement) resizeObs.observe(pane);
   if (window.Modal) {
     window.Modal.open = (id: string) => {
       openNode(themed, id);

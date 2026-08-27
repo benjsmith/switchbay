@@ -4,6 +4,8 @@ import * as vscode from "vscode";
 import { parseWikiFrontmatter } from "./ce";
 import { nextWikiPlacement, previewButtonPlacement, PREVIEW_TYPE } from "./layout";
 import { workspaceFolder } from "./paths";
+import { candidateImagePaths, expandImageWikilinks } from "./wikiPointer";
+import { wikiFolderUri } from "./wikiRoot";
 
 const WIKILINK_RE = /\[\[([^\]|]+?)(?:\|([^\]]+))?\]\]/g;
 
@@ -86,10 +88,19 @@ function renderMarkdown(md: string): string {
       }
       continue;
     }
-    if (/^!\[/.test(line)) {
-      flushPara(para);
-      const m = line.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
-      if (m) out.push(`<img alt="${escapeHtml(m[1])}" data-src="${escapeHtml(m[2])}" />`);
+    const withImgs = line.replace(
+      /!\[([^\]]*)\]\(([^)]+)\)/g,
+      (_m, alt: string, src: string) => `<img alt="${escapeHtml(alt)}" data-src="${escapeHtml(src)}" />`,
+    );
+    if (withImgs !== line) {
+      const rest = withImgs.replace(/<img [^>]+>/g, "").trim();
+      if (!rest) {
+        flushPara(para);
+        out.push(withImgs);
+        i++;
+        continue;
+      }
+      para.push(withImgs);
       i++;
       continue;
     }
@@ -156,14 +167,18 @@ async function paintPreview(
 ): Promise<void> {
   const doc = await vscode.workspace.openTextDocument(docUri);
   const { properties, lists, body } = parseWikiFrontmatter(doc.getText());
-  let htmlBody = renderMarkdown(expandWikilinks(body));
+  let htmlBody = renderMarkdown(expandWikilinks(expandImageWikilinks(body)));
   htmlBody = expandVaultCites(htmlBody);
+  const pageDir = path.dirname(docUri.fsPath);
+  const wikiRoot = wikiFolderUri()?.fsPath || folder.fsPath;
   htmlBody = htmlBody.replace(
     /<img alt="([^"]*)" data-src="([^"]+)" \/>/g,
     (_m, alt: string, src: string) => {
       const rel = src.replace(/^\.\//, "");
+      const hit = candidateImagePaths(rel, pageDir, wikiRoot).find((p) => fs.existsSync(p));
       try {
-        const web = panel.webview.asWebviewUri(vscode.Uri.joinPath(folder, rel));
+        const uri = hit ? vscode.Uri.file(hit) : vscode.Uri.joinPath(folder, rel);
+        const web = panel.webview.asWebviewUri(uri);
         return `<img alt="${alt}" src="${web}" />`;
       } catch {
         return `<img alt="${alt}" />`;
@@ -270,8 +285,19 @@ function bindPreviewMessages(panel: vscode.WebviewPanel, folder: vscode.Uri): vo
   });
 }
 
+function previewResourceRoots(folder: vscode.Uri): vscode.Uri[] {
+  const wiki = wikiFolderUri() || folder;
+  return [
+    folder,
+    wiki,
+    vscode.Uri.joinPath(wiki, "wiki"),
+    vscode.Uri.joinPath(wiki, "wiki", "figures"),
+    vscode.Uri.joinPath(wiki, "wiki", "figures", "_assets"),
+  ];
+}
+
 async function showPreviewInColumn(docUri: vscode.Uri, column: vscode.ViewColumn, preserveFocus: boolean): Promise<void> {
-  const folder = workspaceFolder();
+  const folder = wikiFolderUri() || workspaceFolder();
   if (!folder) return;
   let panel = panelInColumn(column);
   if (!panel) {
@@ -279,7 +305,7 @@ async function showPreviewInColumn(docUri: vscode.Uri, column: vscode.ViewColumn
       PREVIEW_TYPE,
       `Preview: ${path.basename(docUri.fsPath)}`,
       { viewColumn: column, preserveFocus },
-      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [folder] },
+      { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: previewResourceRoots(folder) },
     );
     previewPanels.add(panel);
     panel.onDidDispose(() => previewPanels.delete(panel!));
@@ -317,12 +343,14 @@ export async function openWikiPreview(uri?: vscode.Uri): Promise<void> {
 }
 
 function wikiGuess(folder: vscode.Uri, slug: string): vscode.Uri | undefined {
+  const root = wikiFolderUri() || folder;
   const trimmed = slug.replace(/^wiki\//, "").replace(/\.md$/i, "");
   const candidates = [
     `wiki/${trimmed}.md`,
     `wiki/${trimmed}`,
     `${trimmed}.md`,
   ];
+  folder = root;
   for (const rel of candidates) {
     const uri = vscode.Uri.joinPath(folder, rel);
     if (fs.existsSync(uri.fsPath)) return uri;
@@ -333,13 +361,15 @@ function wikiGuess(folder: vscode.Uri, slug: string): vscode.Uri | undefined {
 function resolveSourceUri(folder: vscode.Uri, raw: string): vscode.Uri {
   const cleaned = raw.replace(/^["']|["']$/g, "").replace(/^vault:/, "").replace(/^\.\//, "");
   const base = path.basename(cleaned);
+  const wiki = wikiFolderUri()?.fsPath || folder.fsPath;
   const cands = [
     path.isAbsolute(cleaned) ? cleaned : "",
     path.join(folder.fsPath, cleaned),
-    path.join(folder.fsPath, "vault", cleaned),
-    path.join(folder.fsPath, "vault", base),
-    path.join(folder.fsPath, "wiki", cleaned),
-    path.join(folder.fsPath, "wiki", base),
+    path.join(wiki, cleaned),
+    path.join(wiki, "vault", cleaned),
+    path.join(wiki, "vault", base),
+    path.join(wiki, "wiki", cleaned),
+    path.join(wiki, "wiki", base),
   ].filter(Boolean);
   for (const p of cands) {
     if (fs.existsSync(p)) return vscode.Uri.file(p);

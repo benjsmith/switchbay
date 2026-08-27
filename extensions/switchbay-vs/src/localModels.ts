@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
+import { looksLikeVisionModel } from "./wikiPointer";
 
 export type LocalBackend = "ollama" | "llamacpp" | "mlx";
 
@@ -541,6 +542,32 @@ function flattenContent(content: readonly unknown[]): string {
   return bits.join("");
 }
 
+type OpenAiContent =
+  | string
+  | Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }>;
+
+function openaiContent(content: readonly unknown[]): OpenAiContent {
+  const parts: Array<{ type: "text"; text: string } | { type: "image_url"; image_url: { url: string } }> = [];
+  let sawImage = false;
+  for (const part of content) {
+    if (part instanceof vscode.LanguageModelTextPart) {
+      parts.push({ type: "text", text: part.value });
+      continue;
+    }
+    if (part instanceof vscode.LanguageModelDataPart && /^image\//.test(part.mimeType)) {
+      sawImage = true;
+      const b64 = Buffer.from(part.data).toString("base64");
+      parts.push({ type: "image_url", image_url: { url: `data:${part.mimeType};base64,${b64}` } });
+      continue;
+    }
+    if (part && typeof part === "object" && "value" in part) {
+      parts.push({ type: "text", text: String((part as { value: unknown }).value) });
+    }
+  }
+  if (!sawImage) return flattenContent(content);
+  return parts;
+}
+
 class LocalChatProvider implements vscode.LanguageModelChatProvider {
   private readonly _onChange = new vscode.EventEmitter<void>();
   readonly onDidChangeLanguageModelChatInformation = this._onChange.event;
@@ -559,7 +586,10 @@ class LocalChatProvider implements vscode.LanguageModelChatProvider {
       maxOutputTokens: 4096,
       tooltip: `${m.backend} @ ${m.baseUrl}`,
       detail: m.baseUrl,
-      capabilities: { toolCalling: true },
+      capabilities: {
+        toolCalling: true,
+        imageInput: looksLikeVisionModel(m.model, m.backend, m.name),
+      },
     }));
   }
 
@@ -577,7 +607,7 @@ class LocalChatProvider implements vscode.LanguageModelChatProvider {
       stream: true,
       messages: messages.map((m) => ({
         role: roleOf(m.role),
-        content: flattenContent(m.content),
+        content: openaiContent(m.content),
       })),
     };
     const ac = new AbortController();

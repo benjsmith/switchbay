@@ -64,7 +64,7 @@ dev-frontend:
 # does not start the PWA daemon.
 vscode-compile:
 	pnpm --dir extensions/switchbay-vs install --frozen-lockfile
-	pnpm --dir extensions/switchbay-vs run compile
+	pnpm --dir extensions/switchbay-vs run test
 	pnpm --dir frontend run build:webview
 
 # Marketplace / sideload VSIX. Graph assets are gitignored, so we stage a

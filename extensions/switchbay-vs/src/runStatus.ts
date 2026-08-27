@@ -41,7 +41,7 @@ export type RunRecord = {
 };
 
 export const TERMINAL_PHASES = new Set([
-  "done", "failed", "idle", "superseded", "stale",
+  "done", "failed", "idle", "superseded", "stale", "cancelled",
 ]);
 
 /** After wiki writes (or MCP tools) stop, the wave is finished even if Chat stays open. */

@@ -23,7 +23,7 @@ product — see the root README.
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.3.5.vsix
+   code --install-extension dist/switchbay-vs-0.3.9.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).
@@ -40,17 +40,33 @@ Sideload installs do **not** auto-update. Same id
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.3.5.vsix
+code --install-extension dist/switchbay-vs-0.3.9.vsix
 ```
 
 Then **Developer: Reload Window**. Or Command Palette → **Switch Bay VS:
 Update extension…** if `dist/*.vsix` is already built.
 
+## Operating modes
+
+| Mode | Open in VS Code | Wiki Switch Bay uses |
+| --- | --- | --- |
+| **Wiki-native** | The curiosity-engine folder (`wiki/` + `vault/`) | That folder |
+| **Code-repo** | A code or documents project | `.curiosity/config.toml` `workspace = …`, or setting `switchbay.wikiRoot` |
+| **Dual cockpit** | Coding window on a code-repo (or wiki) | Same wiki on disk as the PWA / a VS Code for the Web tab that **Keep running 24/7**. Neither host starts the other. One curator writing at a time. |
+
+**One-click register:** in a code or docs window, Wiki view **Register this folder with a wiki…** (or the welcome button). Pick the shared wiki and a project tag. That writes `.curiosity/config.toml` and adds the folder to the wiki’s `.curator/project-dirs.json`. From a wiki window the same command links *other* folders into this wiki.
+
+**SBH** (status bar, left): knowledge harness for *this window*. Click → On / Off. `@switchbay /sbh`, `/sbh on`, `/sbh off`. Off = coding Chat only. On = `@switchbay` / Curator / wiki MCP.
+
+PWA **+ Add workspace** adds a *wiki* to the PWA switcher. It does not write a code-repo pointer. Register repos from VS Code as above (or CE `setup.sh --register-code-repo`).
+
+Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (cheap pypdf/text extract + `vault.db` index). Vision is **not** used here — CE flags `multimodal_recommended` when figures/tables need a later CURATE wave. Files outside the wiki use `--source-path-only` (originals stay put).
+
 ## What to open
 
 | Surface | How |
 | --- | --- |
-| Wiki / Projects | Activity bar (Switch Bay icon) |
+| Wiki / Projects | Activity bar (Switch Bay icon). Same WikiPage nodes as Graph (`graph.kuzu`). **Refresh** runs `graph.py rebuild`. |
 | Graph / Atlas | Wiki view title **Open Graph**; **view:** switches Atlas |
 | Wiki preview | Editor title on a `wiki/**/*.md` tab |
 | Agent Dashboard | Wiki view title, or **Open Agent Dashboard** |
@@ -66,7 +82,8 @@ Update extension…** if `dist/*.vsix` is already built.
   heartbeat. Curator calls `orchestration_report` when a wave is done
   (Chat staying open with Keep curating is not “still running”). Quiet
   wiki writes also retire the DAG. **Mark finished** if you want to
-  force it.
+  force it. **Stop** tries to cancel the Chat request and always retires
+  the card.
 - **Orchestrator** — Economy → Maximum. Agent count is an outcome of this
   slider, not a second control. Workspace setting
   `switchbay.orchestrationPreference`. Economy is CE’s single-session

@@ -42,12 +42,16 @@ export function mountGraph(
   window.Subgraph.init(data);
   window.Modal.init(data, container);
   let mode: ViewerMode = "classic";
-  const wantAtlas = opts?.forceMode === "atlas"
-    || (opts?.forceMode !== "classic" && atlasEnabled(data));
-  if (wantAtlas && mountAtlas(data, { onSelectPage: opts?.onSelectPage })) {
-    mode = "atlas";
-  } else {
-    window.Graph.init(data);
+  try {
+    const wantAtlas = opts?.forceMode === "atlas"
+      || (opts?.forceMode !== "classic" && atlasEnabled(data));
+    if (wantAtlas && mountAtlas(data, { onSelectPage: opts?.onSelectPage })) {
+      mode = "atlas";
+    } else {
+      window.Graph.init(data);
+    }
+  } catch (err) {
+    console.error("[switchbay] graph mount failed", err);
   }
   document.body.dataset.viewer = mode;
   initAtlasChoice(data, mode);

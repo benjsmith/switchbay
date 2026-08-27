@@ -2,7 +2,7 @@
   "name": "switchbay-vs",
   "displayName": "Switch Bay VS",
   "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon. Local MLX / llama.cpp / Ollama models for Chat and Agents.",
-  "version": "0.3.5",
+  "version": "0.3.9",
   "publisher": "switchbay",
   "repository": {
     "type": "git",
@@ -63,6 +63,16 @@
           "default": false,
           "description": "This VS Code window (or VS Code for the Web tab) is the 24/7 host for Switch Bay desks. Schedules fire only while it is open."
         },
+        "switchbay.wikiRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Curiosity-engine workspace (the folder that contains wiki/). Empty: this folder if it has wiki/, else .curiosity/config.toml (code-repo mode)."
+        },
+        "switchbay.knowledgeHarness": {
+          "type": "boolean",
+          "default": true,
+          "description": "When on, @switchbay and Curator join Chat and Switch Bay MCP is written to .vscode/mcp.json. Turn off in a code-repo window so the coding agent is not pulled into wiki tools."
+        },
         "switchbay.localModels": {
           "type": "array",
           "default": [],
@@ -108,7 +118,7 @@
       },
       {
         "view": "switchbay.wiki",
-        "contents": "This folder has no `wiki/` directory. Open a curiosity-engine workspace, or add `wiki/` here.\n[Open Folder](command:switchbay.openWorkspace)",
+        "contents": "This folder is not a wiki. Register it with a shared Switch Bay wiki (one wiki, many code/docs repos), or open a wiki folder.\n[Register this folder with a wiki…](command:switchbay.registerFolder)\n[Open a wiki folder](command:switchbay.openWorkspace)",
         "when": "workspaceFolderCount != 0 && !switchbay.hasWiki"
       }
     ],
@@ -145,7 +155,7 @@
       },
       {
         "command": "switchbay.refreshTrees",
-        "title": "Switch Bay VS: Refresh Wiki & Projects",
+        "title": "Switch Bay VS: Refresh Wiki & Projects (rebuild graph)",
         "icon": "$(refresh)"
       },
       {
@@ -187,6 +197,36 @@
       {
         "command": "switchbay.restartMcp",
         "title": "Switch Bay VS: Restart wiki MCP (switchbay)…"
+      },
+      {
+        "command": "switchbay.ingestFile",
+        "title": "Switch Bay VS: Ingest file…",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "switchbay.ingestFolder",
+        "title": "Switch Bay VS: Ingest folder…"
+      },
+      {
+        "command": "switchbay.ingestPath",
+        "title": "Switch Bay VS: Ingest into wiki vault"
+      },
+      {
+        "command": "switchbay.setWikiRoot",
+        "title": "Switch Bay VS: Set wiki folder…"
+      },
+      {
+        "command": "switchbay.registerFolder",
+        "title": "Switch Bay VS: Register this folder with a wiki…",
+        "icon": "$(link)"
+      },
+      {
+        "command": "switchbay.chooseHarness",
+        "title": "Switch Bay VS: Knowledge harness (SBH)…"
+      },
+      {
+        "command": "switchbay.toggleHarness",
+        "title": "Switch Bay VS: Toggle knowledge harness"
       }
     ],
     "menus": {
@@ -212,6 +252,23 @@
           "command": "switchbay.refreshTrees",
           "when": "view == switchbay.wiki || view == switchbay.projects",
           "group": "navigation@3"
+        },
+        {
+          "command": "switchbay.ingestFile",
+          "when": "view == switchbay.wiki",
+          "group": "navigation@4"
+        },
+        {
+          "command": "switchbay.registerFolder",
+          "when": "view == switchbay.wiki",
+          "group": "navigation@5"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "switchbay.ingestPath",
+          "when": "resourceScheme == file",
+          "group": "switchbay@1"
         }
       ]
     },
@@ -246,6 +303,10 @@
           {
             "name": "desk",
             "description": "Add an overnight desk (opens desks.json)"
+          },
+          {
+            "name": "sbh",
+            "description": "Switch Bay knowledge harness: /sbh, /sbh on, /sbh off"
           }
         ]
       }
@@ -278,6 +339,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "test": "tsc -p ./ && node --test out/wikiPointer.test.js",
     "package": "echo 'From the Switch Bay repo root run: make vsix' && exit 1"
   },
   "devDependencies": {

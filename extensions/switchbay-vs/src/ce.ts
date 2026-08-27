@@ -42,18 +42,37 @@ export function dataJsonPath(workspace: string): string {
   );
 }
 
-export function readCachedGraph(workspace: string): GraphData | null {
+function readViewerJson(workspace: string): GraphData | null {
   const p = dataJsonPath(workspace);
   if (!fs.existsSync(p)) return null;
   try {
     const data = JSON.parse(fs.readFileSync(p, "utf8")) as GraphData;
     if (!data || !Array.isArray(data.nodes)) return null;
-    // wiki_render emits nodes-only when the build interpreter lacks
-    // kuzu. Edges live in ``.curator/graph.kuzu`` (WikiLink / Depicts).
-    return ensureGraphEdges(data, workspace);
+    return data;
   } catch {
     return null;
   }
+}
+
+/**
+ * Same view as the graph webview: WikiPage nodes + WikiLink/Depicts
+ * from ``.curator/graph.kuzu``. Viewer ``data.json`` only fills palette /
+ * pages when kuzu has nodes; it is not the tree source of truth.
+ */
+export function readCachedGraph(workspace: string): GraphData | null {
+  const dump = readKuzuGraph(workspace);
+  const cached = readViewerJson(workspace);
+  if (dump?.nodes.length) {
+    const data: GraphData = {
+      ...(cached || { nodes: [], edges: [] }),
+      nodes: dump.nodes,
+      edges: dump.edges,
+    };
+    applyDegrees(data);
+    return data;
+  }
+  if (cached) return ensureGraphEdges(cached, workspace);
+  return null;
 }
 
 function graphKuzuPath(workspace: string): string {
@@ -92,11 +111,34 @@ function dumpKuzuScript(): string {
   return path.join(__dirname, "..", "scripts", "dump_kuzu_edges.py");
 }
 
-type EdgeCache = { key: string; edges: GraphData["edges"] };
-let kuzuEdgeCache: EdgeCache | null = null;
+type KuzuDump = { nodes: GraphNode[]; edges: GraphData["edges"] };
+type GraphCache = { key: string; dump: KuzuDump };
+let kuzuGraphCache: GraphCache | null = null;
 
-/** WikiLink + Depicts from ``.curator/graph.kuzu``. Null if unreadable. */
-export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
+export function invalidateKuzuCache(): void {
+  kuzuGraphCache = null;
+}
+
+function parseKuzuDump(raw: string): KuzuDump | null {
+  try {
+    const data = JSON.parse(raw) as unknown;
+    if (Array.isArray(data)) {
+      return { nodes: [], edges: data as GraphData["edges"] };
+    }
+    if (data && typeof data === "object") {
+      const obj = data as { nodes?: GraphNode[]; edges?: GraphData["edges"] };
+      if (!Array.isArray(obj.edges)) return null;
+      return {
+        nodes: Array.isArray(obj.nodes) ? obj.nodes : [],
+        edges: obj.edges,
+      };
+    }
+  } catch { /* fall through */ }
+  return null;
+}
+
+/** WikiPage nodes + WikiLink/Depicts from ``.curator/graph.kuzu``. */
+export function readKuzuGraph(workspace: string): KuzuDump | null {
   if (!kuzuDbExists(workspace)) return null;
   const db = graphKuzuPath(workspace);
   const py = pythonWithKuzu(workspace);
@@ -105,7 +147,7 @@ export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
   let st: fs.Stats;
   try { st = fs.statSync(db); } catch { return null; }
   const key = `${db}:${st.mtimeMs}:${st.size}`;
-  if (kuzuEdgeCache?.key === key) return kuzuEdgeCache.edges;
+  if (kuzuGraphCache?.key === key) return kuzuGraphCache.dump;
   const r = spawnSync(py, [script, db], {
     encoding: "utf8",
     timeout: 15000,
@@ -113,23 +155,27 @@ export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
     windowsHide: true,
   });
   if (r.status !== 0) return null;
-  try {
-    const edges = JSON.parse(r.stdout || "[]") as GraphData["edges"];
-    if (!Array.isArray(edges)) return null;
-    kuzuEdgeCache = { key, edges };
-    return edges;
-  } catch {
-    return null;
-  }
+  const dump = parseKuzuDump(r.stdout || "");
+  if (!dump) return null;
+  kuzuGraphCache = { key, dump };
+  return dump;
+}
+
+/** WikiLink + Depicts from ``.curator/graph.kuzu``. Null if unreadable. */
+export function readKuzuEdges(workspace: string): GraphData["edges"] | null {
+  return readKuzuGraph(workspace)?.edges ?? null;
 }
 
 /**
- * Run CE ``graph.py rebuild wiki`` only when ``graph.kuzu`` is absent.
- * Markdown harvest happens inside that rebuild, then edges are read
- * from kuzu — never applied from markdown directly.
+ * Run CE ``graph.py rebuild wiki``. Harvests markdown into WikiPage
+ * nodes and WikiLink/Depicts edges. Pass ``force`` to rebuild even when
+ * graph.kuzu already exists (Refresh). Without force, a missing db only.
  */
-export function rebuildKuzuGraph(workspace: string): Promise<{ ok: boolean; text: string }> {
-  if (kuzuDbExists(workspace)) {
+export function rebuildKuzuGraph(
+  workspace: string,
+  opts?: { force?: boolean },
+): Promise<{ ok: boolean; text: string }> {
+  if (!opts?.force && kuzuDbExists(workspace)) {
     return Promise.resolve({ ok: true, text: "graph.kuzu already present" });
   }
   const py = pythonWithKuzu(workspace);
@@ -161,7 +207,7 @@ export function rebuildKuzuGraph(workspace: string): Promise<{ ok: boolean; text
     });
     proc.on("close", (code) => {
       clearTimeout(timer);
-      kuzuEdgeCache = null;
+      kuzuGraphCache = null;
       resolve({
         ok: code === 0 && kuzuDbExists(workspace),
         text: text.slice(-4000),

@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import { pythonBin, repoRoot, srcDir, workspaceFsPath } from "./paths";
+import { knowledgeHarnessOn, wikiFsPath } from "./wikiRoot";
 
 export const MCP_SERVER_LABEL = "switchbay";
 /** Bump with Copilot-facing schema changes so VS Code drops cached tools/list. */
@@ -45,8 +46,11 @@ export function ripgrepAvailable(): boolean {
 }
 
 export function mcpLaunch(context: vscode.ExtensionContext): McpLaunch | undefined {
-  const workspace = workspaceFsPath();
-  if (!workspace) return undefined;
+  if (!knowledgeHarnessOn()) return undefined;
+  const openFolder = workspaceFsPath();
+  if (!openFolder) return undefined;
+  // Mode B: CE tools must run against the wiki, not the code folder.
+  const workspace = wikiFsPath() || openFolder;
   const repo = repoRoot(context);
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) {
@@ -97,9 +101,21 @@ function withWorkspaceSandbox(data: McpFile): McpFile["sandbox"] {
 }
 
 export function writeWorkspaceMcpJson(context: vscode.ExtensionContext): boolean {
-  const launch = mcpLaunch(context);
   const workspace = workspaceFsPath();
-  if (!launch || !workspace) return false;
+  if (!workspace) return false;
+  if (!knowledgeHarnessOn()) {
+    const file = path.join(workspace, ".vscode", "mcp.json");
+    if (!fs.existsSync(file)) return true;
+    try {
+      const data = JSON.parse(fs.readFileSync(file, "utf8")) as McpFile;
+      if (!data.servers?.switchbay) return true;
+      delete data.servers.switchbay;
+      fs.writeFileSync(file, JSON.stringify(data, null, 2) + "\n", "utf8");
+    } catch { /* leave file */ }
+    return true;
+  }
+  const launch = mcpLaunch(context);
+  if (!launch) return false;
   const dir = path.join(workspace, ".vscode");
   const file = path.join(dir, "mcp.json");
   let data: McpFile = {};
@@ -117,8 +133,8 @@ export function writeWorkspaceMcpJson(context: vscode.ExtensionContext): boolean
   const env: Record<string, string> = {
     PYTHONPATH: launch.env.PYTHONPATH,
     CSWY_PROFILE: "vscode",
-    // Literal path — Copilot does not always expand ${workspaceFolder} in env.
-    CSWY_WORKSPACE: workspace,
+    // Literal CE workspace — Mode B wiki may sit outside the open folder.
+    CSWY_WORKSPACE: launch.env.CSWY_WORKSPACE || workspace,
     CSWY_MCP_REV: MCP_SCHEMA_REV,
   };
   if (launch.env.PATH) env.PATH = launch.env.PATH;

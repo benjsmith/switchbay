@@ -3,6 +3,40 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-27 — v0.12.2 — Switch Bay VS 0.3.9
+
+**Migration:** none. **Breaking:** none. PWA daemon unchanged.
+
+### Added
+
+- **Register this folder with a wiki…** — one click from a code/docs
+  window (or link folders from a wiki window). Writes
+  `.curiosity/config.toml` and CE `project-dirs.json`. SBH defaults off
+  in the code window.
+- Status-bar **SBH on/off** pill (click → On / Off). `@switchbay /sbh`,
+  `/sbh on`, `/sbh off`.
+- **Ingest file… / folder…** (Wiki view, Explorer, Dashboard) via CE
+  `local_ingest.py`. Paths outside the wiki use `--source-path-only`.
+  Mechanical only: pypdf/text + `vault.db`. Vision stays on CURATE’s
+  bounded queues (figure-extract, multimodal-table-extract,
+  numeric-review) when `multimodal_recommended` is set.
+
+### Fixed
+
+- Wiki / Projects trees and the graph webview share WikiPage nodes from
+  `.curator/graph.kuzu` (same query as CE `wiki_render`). Refresh runs
+  `graph.py rebuild wiki`.
+- Wiki preview resolves CE / Obsidian figure embeds (`![[figures/_assets/…]]`,
+  `_assets/` relative to the page).
+- Graph webview waits for a non-zero panel size before `fit`, keeps Atlas /
+  label HUD inside the webview, and allows wiki figure paths as webview
+  resources.
+- Agent Dashboard **Stop** retires the DAG and writes `orchestration-report`
+  cancelled (then tries VS Code Chat stop commands).
+- Code-repo mode: resolve wiki from `.curiosity/config.toml` or
+  `switchbay.wikiRoot`. Dual-cockpit (PWA or VS Code for the Web + this
+  window) is documented, not a third pointer.
+
 ## 2026-08-27 — v0.12.1 — CE-faithful curate + Switch Bay VS 0.3.5
 
 **Migration:** none. **Breaking:** `/curate` is CE CURATE (score_diff +

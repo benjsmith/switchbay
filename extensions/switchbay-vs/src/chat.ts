@@ -4,8 +4,10 @@ import { pickModel } from "./lm";
 import { addBlankDesk } from "./desks";
 import { ensureLiveRun, startCurate } from "./orch";
 import { workspaceFsPath } from "./paths";
+import { chooseKnowledgeHarness, parseSbhArg } from "./registerRepo";
+import { knowledgeHarnessOn, setKnowledgeHarness } from "./wikiRoot";
 
-const SYSTEM = `You are Switch Bay inside VS Code. The open folder is the workspace.
+const SYSTEM = `You are Switch Bay inside VS Code. The curiosity-engine wiki may be this folder (wiki-native) or another directory named by .curiosity/config.toml / switchbay.wikiRoot (code-repo). MCP CSWY_WORKSPACE is that wiki.
 QUERY: ce_graph_retrieve first (entity gate), then read pages. search_wiki is catalog only.
 Cite [[wikilinks]] and (vault:...). One probing follow-up. Do not invent sources.
 Wiki writes (analyses): ce_score_diff then ce_wiki_commit. /curate is the Curator agent.
@@ -23,6 +25,29 @@ export function registerChat(context: vscode.ExtensionContext): vscode.ChatParti
     "switchbay.participant",
     async (request, _ctx, stream, token) => {
       const cmd = request.command || "";
+      if (cmd === "sbh") {
+        const arg = parseSbhArg(request.prompt);
+        if (arg === "ask") {
+          const next = await chooseKnowledgeHarness();
+          if (next == null) return;
+          stream.markdown(next
+            ? "SBH **on** — `@switchbay` and Curator may join Chat in this window."
+            : "SBH **off** — coding Chat stays on this folder.");
+          return;
+        }
+        await setKnowledgeHarness(arg === "on");
+        stream.markdown(arg === "on"
+          ? "SBH **on** — `@switchbay` and Curator may join Chat in this window."
+          : "SBH **off** — coding Chat stays on this folder.");
+        return;
+      }
+      if (cmd !== "thrusters" && !knowledgeHarnessOn()) {
+        stream.markdown(
+          "SBH is **off** in this window. Click the **SBH** pill in the status bar, "
+          + "or `@switchbay /sbh on`.",
+        );
+        return;
+      }
       if (cmd === "thrusters") {
         await vscode.commands.executeCommand("switchbay.fireThrusters");
         stream.markdown("Thrusters armed. Hopper is in a tab.");

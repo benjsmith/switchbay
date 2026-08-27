@@ -9,19 +9,30 @@
     html, body, #root, #mount, .ce-graph-root {
       height: 100%; width: 100%; margin: 0; padding: 0;
       overflow: hidden; box-sizing: border-box; min-width: 0;
+      min-height: 100%; min-height: 100vh;
     }
     /* VS Code injects body padding; width:100% + padding clips right chrome. */
     body { padding: 0 !important; scrollbar-width: none; }
     html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
-    .ce-graph-root { display: flex; flex-direction: column; }
+    #root, .sy-graph-host, .sy-graph-mount, .ce-graph-root {
+      display: flex; flex-direction: column;
+    }
     #graph-pane {
       flex: 1; min-height: 0; min-width: 0;
       display: flex; flex-direction: column;
+      position: relative;
     }
-    #graph { flex: 1; min-height: 0; min-width: 0; }
+    #graph { flex: 1; min-height: 120px; min-width: 0; }
+    /* HUD at top-left so a 0-height first layout does not clip it under
+       overflow:hidden at bottom:14px. z-index above the canvas. */
+    .graph-controls {
+      top: 12px !important; bottom: auto !important;
+      left: 12px !important; z-index: 40;
+    }
+    .label-types-panel { top: 40px; bottom: auto !important; }
     /* Keep gear + minimap inside the webview; overflow:hidden eats their
        right edge at the PWA's 12–14px inset. */
-    .settings-trigger, .settings-panel { right: 22px; }
+    .settings-trigger, .settings-panel { right: 22px; z-index: 40; }
     .atlas-minimap, .classic-minimap { right: 20px !important; }
     body { background: var(--bg, #0f1115); color: var(--text, #e6e8eb); }
     .ctx-menu {

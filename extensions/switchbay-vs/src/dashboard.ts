@@ -9,6 +9,7 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { listNamedAgents, type NamedAgent } from "./agentsSession";
 import { ceRoot, kuzuDbExists, readCachedGraph } from "./ce";
+import { modeLabel, resolveWiki } from "./wikiRoot";
 import { deskRows, DESKS_REL, type DeskConfig } from "./desks";
 import { isWebHost, keepWindowOpen } from "./keepAlive";
 import { getMcp, type McpTool } from "./mcp";
@@ -31,7 +32,13 @@ export type DashModel = {
   family: string;
   source: "vscode.lm" | "local-settings";
 };
-export type DashWiki = { nodes: number; edges: number; hasKuzu: boolean; folder: string };
+export type DashWiki = {
+  nodes: number;
+  edges: number;
+  hasKuzu: boolean;
+  folder: string;
+  mode: string;
+};
 
 export type DashboardPayload = {
   workspace: string;
@@ -235,7 +242,9 @@ export async function dashboardPayload(
   workspace: string | undefined,
 ): Promise<DashboardPayload> {
   const ws = workspace || "";
-  const graph = ws ? readCachedGraph(ws) : null;
+  const wikiRes = resolveWiki(ws || undefined);
+  const wikiRoot = wikiRes.wikiRoot || "";
+  const graph = wikiRoot ? readCachedGraph(wikiRoot) : (ws ? readCachedGraph(ws) : null);
   const overrides = ws ? loadPaletteOverrides(ws) : {};
   const palettes = SHIPPED_PALETTES.map((p) => (
     overrides[p.name]?.length
@@ -252,10 +261,11 @@ export async function dashboardPayload(
   return {
     workspace: ws,
     wiki: {
-      folder: ws ? path.basename(ws) : "",
+      folder: wikiRoot ? path.basename(wikiRoot) : (ws ? path.basename(ws) : ""),
+      mode: modeLabel(wikiRes),
       nodes: graph?.nodes.length ?? 0,
       edges: (graph?.edges || []).length,
-      hasKuzu: ws ? kuzuDbExists(ws) : false,
+      hasKuzu: wikiRoot ? kuzuDbExists(wikiRoot) : false,
     },
     runs: ws ? listRuns(ws) : [],
     agents: listNamedAgents(context.extensionPath, ws),
@@ -500,8 +510,10 @@ export function agentsDashboardHtml(nonce: string): string {
           + "<div class='dag'>" + dagPills(featured.nodes, true) + "</div>"
           + "<div class='muted'>" + esc(status) + "</div>"
           + eventList(featured.events)
-          + "<div class='form-row' style='margin-top:0.45rem'><button type='button' data-finish='" + esc(featured.orchestration_id) + "'>Mark idle</button>"
-          + "<span class='muted'>Clears this card if Chat already stopped.</span></div>"
+          + "<div class='form-row' style='margin-top:0.45rem'>"
+          + "<button type='button' class='primary' data-stop='" + esc(featured.orchestration_id) + "'>Stop</button>"
+          + "<button type='button' data-finish='" + esc(featured.orchestration_id) + "'>Mark idle</button>"
+          + "<span class='muted'>Stop cancels Chat if VS Code exposes it, then retires this DAG.</span></div>"
           + "</div>";
       }
       const runCard = (r, isLive) => {
@@ -509,7 +521,10 @@ export function agentsDashboardHtml(nonce: string): string {
           + telem(r, isLive)
           + "<div class='dag'>" + dagPills(r.nodes, true) + "</div>"
           + (r.activity ? "<div class='muted'>" + esc(r.activity) + "</div>" : "")
-          + (isLive ? "<button type='button' data-finish='" + esc(r.orchestration_id) + "'>Mark finished</button>" : "")
+          + (isLive
+            ? "<button type='button' class='primary' data-stop='" + esc(r.orchestration_id) + "'>Stop</button>"
+              + "<button type='button' data-finish='" + esc(r.orchestration_id) + "'>Mark finished</button>"
+            : "")
           + "</div>";
       };
       const wiki = p.wiki || {};
@@ -540,6 +555,12 @@ export function agentsDashboardHtml(nonce: string): string {
           + "<div class='stat'><strong>" + (wiki.nodes || 0) + "</strong><span class='muted'>wiki nodes</span></div>"
           + "<div class='stat'><strong>" + (wiki.edges || 0) + "</strong><span class='muted'>kuzu edges</span></div>"
           + "<div class='stat'><strong>" + (wiki.hasKuzu ? "yes" : "no") + "</strong><span class='muted'>graph.kuzu</span></div>"
+          + "<div class='stat'><strong>" + esc(wiki.mode || "") + "</strong><span class='muted'>mode</span></div>"
+          + "</div>"
+          + "<div class='form-row' style='margin-top:0.55rem'>"
+          + "<button type='button' id='ingest-file'>Ingest file…</button>"
+          + "<button type='button' id='ingest-folder'>Ingest folder…</button>"
+          + "<button type='button' id='register-folder'>Register folder with wiki…</button>"
           + "</div>"),
         section("Orchestrator", null, "Economy ← Balanced → Maximum", orch),
         section("Agent Space", running.length,
@@ -663,6 +684,18 @@ export function agentsDashboardHtml(nonce: string): string {
       });
       root.querySelectorAll("[data-finish]").forEach((b) => {
         b.addEventListener("click", () => vscode.postMessage({ type: "finishRun", id: b.getAttribute("data-finish") }));
+      });
+      root.querySelectorAll("[data-stop]").forEach((b) => {
+        b.addEventListener("click", () => vscode.postMessage({ type: "stopRun", id: b.getAttribute("data-stop") }));
+      });
+      document.getElementById("ingest-file")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "ingestFile" });
+      });
+      document.getElementById("ingest-folder")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "ingestFolder" });
+      });
+      document.getElementById("register-folder")?.addEventListener("click", () => {
+        vscode.postMessage({ type: "registerFolder" });
       });
       document.getElementById("clear-finished")?.addEventListener("click", () => {
         vscode.postMessage({ type: "clearFinished" });

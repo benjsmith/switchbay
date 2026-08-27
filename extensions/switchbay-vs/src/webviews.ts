@@ -2,8 +2,8 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
-  ensureGraphEdges, kuzuDbExists, loadCurationHistory, readCachedGraph,
-  rebuildKuzuGraph, scanWikiMarkdown, wikiPageUri, type GraphData, type GraphNode,
+  kuzuDbExists, loadCurationHistory, readCachedGraph,
+  rebuildKuzuGraph, wikiPageUri, type GraphData, type GraphNode,
 } from "./ce";
 import { startNamedAgentSession } from "./agentsSession";
 import {
@@ -13,8 +13,9 @@ import {
   addBlankDesk, deactivateAllDesks, desksPath, setDeskEnabled, setupDesk,
 } from "./desks";
 import { offerKeepRunning } from "./keepAlive";
-import { applyOrchestrationReport, clearFinishedRuns, finishRun, listRuns, recordMcpActivity, runsRoot } from "./orch";
+import { applyOrchestrationReport, clearFinishedRuns, finishRun, listRuns, recordMcpActivity, runsRoot, stopRun } from "./orch";
 import { hopperDir, workspaceFolder } from "./paths";
+import { wikiFolderUri, wikiFsPath } from "./wikiRoot";
 import { setPreference } from "./preference";
 import { openWikiPage } from "./preview";
 import { deleteSchedule, runScheduleNow, upsertSchedule } from "./schedules";
@@ -54,12 +55,14 @@ function graphWebviewHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): strin
 }
 
 export function openGraph(context: vscode.ExtensionContext): void {
-  const folder = workspaceFolder();
+  const folder = wikiFolderUri() || workspaceFolder();
   if (!folder) {
     void vscode.window.showWarningMessage("Open a curiosity-engine folder first.");
     return;
   }
   const mediaRoot = graphMediaRoot(context);
+  const wikiRoot = vscode.Uri.file(wikiFsPath() || folder.fsPath);
+  const figures = vscode.Uri.joinPath(wikiRoot, "wiki", "figures");
   const panel = vscode.window.createWebviewPanel(
     "switchbay.graph",
     "Graph",
@@ -67,7 +70,7 @@ export function openGraph(context: vscode.ExtensionContext): void {
     {
       enableScripts: true,
       retainContextWhenHidden: true,
-      localResourceRoots: [mediaRoot],
+      localResourceRoots: [mediaRoot, wikiRoot, figures],
     },
   );
   const html = graphWebviewHtml(panel.webview, mediaRoot);
@@ -95,10 +98,7 @@ export function openGraph(context: vscode.ExtensionContext): void {
         },
       );
     }
-    const graph: GraphData = readCachedGraph(ws) ?? ensureGraphEdges({
-      nodes: scanWikiMarkdown(ws),
-      edges: [],
-    }, ws);
+    const graph: GraphData = readCachedGraph(ws) ?? { nodes: [], edges: [] };
     if (graph.pages) {
       for (const page of Object.values(graph.pages)) delete page.body_html;
     }
@@ -212,6 +212,26 @@ export function openAgents(context: vscode.ExtensionContext): void {
     }
     if (msg.type === "finishRun" && folder && msg.id) {
       finishRun(folder.fsPath, msg.id);
+      push();
+      return;
+    }
+    if (msg.type === "stopRun" && folder && msg.id) {
+      await stopRun(folder.fsPath, msg.id);
+      push();
+      return;
+    }
+    if (msg.type === "ingestFile") {
+      await vscode.commands.executeCommand("switchbay.ingestFile");
+      push();
+      return;
+    }
+    if (msg.type === "ingestFolder") {
+      await vscode.commands.executeCommand("switchbay.ingestFolder");
+      push();
+      return;
+    }
+    if (msg.type === "registerFolder") {
+      await vscode.commands.executeCommand("switchbay.registerFolder");
       push();
       return;
     }

@@ -11,15 +11,28 @@ in the Switch Bay repo.
 
 ## What you get
 
-- **Wiki** and **Projects** in the activity bar
+- **Wiki** and **Projects** in the activity bar (same WikiPage set as Graph, from `.curator/graph.kuzu`; Refresh rebuilds that graph)
 - **Graph / Atlas** webview (edges from `.curator/graph.kuzu`)
-- Wiki markdown preview with `[[wikilinks]]` and clickable sources
+- Wiki markdown preview with `[[wikilinks]]`, `![[figures/_assets/…]]`, and clickable sources
+- **Ingest file / folder** from the Wiki view and Explorer (CE `local_ingest.py`)
+- **Stop** on the Agent Dashboard (retires the DAG; tries to cancel Chat)
 - Chat participant `@switchbay` (`/curate`, `/thrusters`, …)
 - MCP stdio worker: `python -m switchbay.mcp_server` (`CSWY_PROFILE=vscode`)
 - Agent Dashboard (DAG snapshot on disk, not a live daemon)
 - **Orchestration effort** slider (Economy → Maximum) for Auto
 - **Schedules** for named agents (Auto, Curator, Draw, …) while VS Code is open
 - Local models helper for Ollama, llama.cpp, and MLX
+- **Operating modes:** wiki-native, code-repo (`.curiosity/config.toml` / `switchbay.wikiRoot`), dual cockpit (PWA or VS Code for the Web hosts overnight desks; this window codes)
+
+## Operating modes
+
+| Mode | What you open | What Switch Bay attaches to |
+| --- | --- | --- |
+| Wiki-native | The CE folder (`wiki/` + `vault/`) | That folder |
+| Code-repo | A git project with `.curiosity/config.toml` | The wiki named in the pointer (`switchbay.wikiRoot` overrides) |
+| Dual cockpit | Same wiki, two hosts | Desktop VS Code for coding; PWA or VS Code for the Web for 24/7 desks. One writer at a time. |
+
+**Register this folder with a wiki…** (Wiki view title, welcome view, Dashboard) writes the pointer and registers the project-dir. From a wiki window it asks which folders to link. The **SBH** pill in the status bar turns the knowledge harness on or off in *this* window (`@switchbay /sbh on|off`). Leave SBH off in coding windows; on in the wiki window.
 
 ## Requirements
 
@@ -54,6 +67,11 @@ Local models…**.
 | Update extension… | Sideload a newer VSIX from this checkout |
 | Fire Thrusters | Mars Hopper webview |
 | Rebuild Wiki Viewer | CE `wiki_render.py` |
+| Refresh Wiki & Projects | Re-scan `wiki/**/*.md` on disk |
+| Ingest file… / folder… | CE `local_ingest.py` into the resolved vault |
+| Register this folder with a wiki… | One-click Mode B pointer + project-dir registry |
+| Set wiki folder… | Point at a wiki without rewriting the pointer |
+| Knowledge harness (SBH)… | On/off for this window (status bar pill) |
 | Configure Python… | Point at a Switch Bay checkout |
 | Local models… | Discover Ollama / llama.cpp / MLX |
 
@@ -65,7 +83,7 @@ Custom agents: Auto, Curator, Reviewer. Investigator is subagent-only.
 
 ```
 make vsix
-code --install-extension dist/switchbay-vs-0.3.5.vsix
+code --install-extension dist/switchbay-vs-0.3.9.vsix
 ```
 
 That same command **updates** an older sideload (same `publisher` + `name`). Then **Developer: Reload Window**. Command Palette → **Switch Bay VS: Update extension…** walks the same path if `dist/*.vsix` is already built.

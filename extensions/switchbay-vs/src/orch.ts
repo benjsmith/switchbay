@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 import { startNamedAgentSession } from "./agentsSession";
 import { getMcp } from "./mcp";
 import { workspaceFsPath } from "./paths";
+import { wikiFsPath } from "./wikiRoot";
 import { getPreference, preferenceLabel, spawnCuratePlan, spawnPlan } from "./preference";
 import {
   isLiveRun, markNodesTerminal, settlePhase, TERMINAL_PHASES,
@@ -160,6 +161,59 @@ export function finishRun(workspace: string, id: string, phase = "done"): void {
   persist(workspace, rec);
 }
 
+const CHAT_STOP_COMMANDS = [
+  "workbench.action.chat.stop",
+  "workbench.action.chat.cancel",
+  "workbench.action.chat.abort",
+  "workbench.action.chat.stopGenerating",
+  "inlineChat.stop",
+];
+
+async function tryStopChat(): Promise<boolean> {
+  for (const id of CHAT_STOP_COMMANDS) {
+    try {
+      await vscode.commands.executeCommand(id);
+      return true;
+    } catch { /* next */ }
+  }
+  return false;
+}
+
+function writeStopReport(workspace: string, id: string): void {
+  const payload = JSON.stringify({
+    at: Date.now() / 1000,
+    phase: "cancelled",
+    detail: "Stopped from Agent Dashboard",
+    orchestration_id: id,
+  }, null, 2) + "\n";
+  const roots = new Set([workspace]);
+  const wiki = wikiFsPath();
+  if (wiki) roots.add(wiki);
+  for (const root of roots) {
+    const file = path.join(root, ".workbench", "state", "orchestration-report.json");
+    try {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, payload, "utf8");
+    } catch { /* ignore */ }
+  }
+}
+
+/** Mark the DAG cancelled, tell Curator via orchestration-report, try to halt Chat. */
+export async function stopRun(workspace: string, id: string): Promise<void> {
+  const rec = listRuns(workspace).find((r) => r.orchestration_id === id);
+  if (rec) {
+    rec.activity = "Stopped from Agent Dashboard";
+    rec.events = [...(rec.events || []), {
+      at: Date.now() / 1000,
+      kind: "stop",
+      detail: rec.activity,
+    }].slice(-24);
+    finishRun(workspace, id, "cancelled");
+  }
+  writeStopReport(workspace, id);
+  await tryStopChat();
+}
+
 export function applyOrchestrationReport(workspace: string): boolean {
   const file = path.join(workspace, ".workbench", "state", "orchestration-report.json");
   if (!fs.existsSync(file)) return false;
@@ -179,7 +233,7 @@ export function applyOrchestrationReport(workspace: string): boolean {
     || runs[0];
   if (!rec) return false;
   if (rec.ended_at && report.at && rec.ended_at >= report.at) return false;
-  if (phase === "done" || phase === "failed") {
+  if (phase === "done" || phase === "failed" || phase === "cancelled") {
     rec.activity = report.detail || rec.activity;
     finishRun(workspace, rec.orchestration_id, phase);
     return true;
