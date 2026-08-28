@@ -18,9 +18,9 @@ import AgentSpace, {
  *
  * Each running row is expandable — click the row, the activity
  * strip, or the caret to inline a live per-step transcript. A
- * solo live run auto-expands. Finished runs linger briefly under
- * "Recently finished" so you can re-inspect without hunting the
- * rail. Reasoning events render as collapsible 💭 blocks (same
+ * solo live run auto-expands. Finished DAGs stay pageable in
+ * Agent Space; there is no separate "recently finished" list.
+ * Reasoning events render as collapsible 💭 blocks (same
  * pattern as the rail).
  */
 
@@ -589,27 +589,6 @@ export default function AgentDashboardTab() {
                   </button>
                 </div>
               </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
-      {recentFinished.length > 0 && (
-        <Section
-          title="Recently finished"
-          count={recentFinished.length}
-          subtitle="kept ~60 min for inspection and Agent Space navigation"
-        >
-          <ul className="sy-agents-list">
-            {recentFinished.map((r) => (
-              <RunRow
-                key={`done-${r.run_id}`}
-                run={r}
-                onCancel={() => { /* already done */ }}
-                onBackground={() => { /* n/a */ }}
-                focusedWs={focusedWs}
-                finished
-              />
             ))}
           </ul>
         </Section>
@@ -1188,6 +1167,7 @@ function RunRow(props: {
           title={finished ? "finished" : stale ? "no recent activity" : "active"}
         />
         <code className="sy-agents-name">{run.run_id}</code>
+        <div className="sy-agents-run-main">
         <span className="sy-agents-run-meta">
           <code>{run.provider}</code>
           <span className="sy-agents-arrow">·</span>
@@ -1238,6 +1218,7 @@ function RunRow(props: {
         <span className="sy-agents-run-input" title={run.input_excerpt}>
           “{run.input_excerpt}”
         </span>
+        <div className="sy-agents-run-extras">
         {run.decision_reason && (
           <span className="sy-agents-run-reason" title={run.decision_reason}>
             {run.decision_reason}
@@ -1261,6 +1242,8 @@ function RunRow(props: {
             {run.tokens} tok
           </span>
         )}
+        </div>
+        </div>
         {typeof workerCount === "number" && workerCount > 0 && (
           <button
             type="button"

@@ -47,6 +47,7 @@ window.Graph = (function () {
   let _labelsHidden = false;
   let focusId = null;       // hover OR modal target; null = idle
   let focusOrigin = null;   // 'hover' | 'modal' — for ordering rules
+  let searchHits = null;    // Set of ids from graph search; null = idle
   let _autoVisibleIds = new Set();    // cache: ids whose labels show in auto mode
   let _autoRecomputeScheduled = false;
   let _isDragging = false;            // suppress hover-focus changes mid-drag
@@ -914,6 +915,22 @@ window.Graph = (function () {
    * loop that runs every tick). */
   function applyVisibility() {
     if (!g) return;
+    const searching = searchHits && searchHits.size > 0;
+    if (searching) {
+      nodeSel.attr('data-vis', d => searchHits.has(d.id) ? 'focus' : 'dim');
+      nodeSel.classed('search-hit', d => searchHits.has(d.id));
+      edgeSel.attr('data-vis', e => {
+        const sId = (typeof e.source === 'object') ? e.source.id : e.source;
+        const tId = (typeof e.target === 'object') ? e.target.id : e.target;
+        if (searchHits.has(sId) && searchHits.has(tId)) return 'focus';
+        if (searchHits.has(sId) || searchHits.has(tId)) return 'neighbour';
+        return 'dim';
+      });
+      applyLabelOpacity();
+      return;
+    }
+    if (nodeSel) nodeSel.classed('search-hit', false);
+
     const hasFocus = focusId != null;
     const focusSet = hasFocus
       ? (() => { const s = new Set(neighbours.get(focusId) || []); s.add(focusId); return s; })()
@@ -949,12 +966,15 @@ window.Graph = (function () {
    * `_autoVisibleIds` and reused until zoom/layout settles. */
   function applyLabelOpacity() {
     if (!textSel || _isZooming || _labelsHidden) return;
+    const searching = searchHits && searchHits.size > 0;
     const hasFocus = focusId != null;
     const focusSet = hasFocus
       ? (() => { const s = new Set(neighbours.get(focusId) || []); s.add(focusId); return s; })()
       : null;
 
     textSel.style('opacity', function(d) {
+      if (searching) return searchHits.has(d.id) ? 1 : 0;
+
       // Types the user has filtered out → label only on direct hover.
       // Defaults to concept/entity/note/todo; user toggles others via
       // the label-types popover.
@@ -1133,6 +1153,38 @@ window.Graph = (function () {
     refreshSplitStyles();
   }
 
+  function fitSearchHits() {
+    if (!searchHits || !svg || !nodes || !zoomBehavior) return;
+    const pts = nodes.filter((d) => searchHits.has(d.id) && d.x != null);
+    if (!pts.length) return;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    pts.forEach((d) => {
+      if (d.x < minX) minX = d.x;
+      if (d.x > maxX) maxX = d.x;
+      if (d.y < minY) minY = d.y;
+      if (d.y > maxY) maxY = d.y;
+    });
+    const cx = (minX + maxX) / 2;
+    const cy = (minY + maxY) / 2;
+    const span = Math.max(maxX - minX, maxY - minY, 48);
+    const r = svg.node().getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    const k = Math.min(2.4, Math.max(0.35, 0.65 * Math.min(r.width, r.height) / span));
+    svg.transition().duration(320)
+      .call(zoomBehavior.transform,
+            d3.zoomIdentity.translate(-cx * k, -cy * k).scale(k));
+  }
+
+  function highlightSearch(ids) {
+    if (!ids || ids.length === 0) {
+      searchHits = null;
+    } else {
+      searchHits = new Set(ids);
+    }
+    applyVisibility();
+    if (searchHits && searchHits.size > 0) fitSearchHits();
+  }
+
   function initSplitInteractions() {
     // ctrl/cmd-drag rubber-band. d3-zoom's default filter ignores
     // ctrl+mousedown, so the gesture doesn't fight panning.
@@ -1180,6 +1232,7 @@ window.Graph = (function () {
     setLabelMode,
     cycleLabelMode,
     clearFocus: () => setFocus(null),
+    highlightSearch,
     splitEnter,
     splitExit,
   };

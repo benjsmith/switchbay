@@ -9,6 +9,11 @@
 export const template = /* html */ `
 <main id="graph-pane">
   <div id="graph"></div>
+  <div class="graph-search" id="graph-search">
+    <input id="graph-search-input" type="search" placeholder="Search wiki…" autocomplete="off" spellcheck="false" aria-label="Search wiki graph">
+    <button id="graph-search-clear" type="button" hidden title="Clear search" aria-label="Clear search">×</button>
+    <span id="graph-search-count" class="graph-search-count" hidden aria-live="polite"></span>
+  </div>
   <div class="graph-controls">
     <button id="viewer-mode" class="ctrl-btn hidden" title="Switch graph viewer" aria-label="Switch graph viewer">
       <span class="ctrl-label">view:</span><span id="viewer-mode-state">classic</span>

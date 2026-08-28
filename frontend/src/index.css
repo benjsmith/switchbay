@@ -1890,6 +1890,11 @@ a.sy-source-cite { color: var(--accent); }
 .sy-fb-row--pulse {
   animation: sy-fb-pulse 1.6s ease-out;
 }
+.sy-fb-row--search-hit {
+  background: color-mix(in oklab, var(--accent), transparent 82%);
+  color: var(--text);
+}
+.sy-fb-row--search-hit .sy-fb-name { color: var(--accent); }
 @keyframes sy-fb-pulse {
   0%   { background: color-mix(in oklab, var(--accent), transparent 70%); }
   100% { background: transparent; }
@@ -4295,6 +4300,10 @@ a.sy-source-cite { color: var(--accent); }
   color: var(--text);
   font-weight: 500;
   flex-shrink: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .sy-agents-desc {
   color: var(--text-muted);
@@ -4453,10 +4462,24 @@ a.sy-source-cite { color: var(--accent); }
 }
 .sy-agents-run {
   display: grid;
-  grid-template-columns: 12px 100px 1fr auto auto;
-  gap: 10px;
-  align-items: center;
+  grid-template-columns: 12px 12px minmax(64px, 120px) minmax(0, 1fr) auto auto;
+  gap: 8px 10px;
+  align-items: start;
+  min-width: 0;
 }
+.sy-agents-run-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sy-agents-run-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-width: 0;
+}
+.sy-agents-run-extras:empty { display: none; }
 .sy-agents-run-dot {
   width: 8px;
   height: 8px;
@@ -4632,11 +4655,6 @@ a.sy-source-cite { color: var(--accent); }
 .sy-agents-run {
   cursor: pointer;
   user-select: none;
-  /* Seven columns: caret · dot · run_id · meta · input · worker-
-   * chip (optional) · actions. The worker chip's auto column stays
-   * collapsed to 0 when no chip renders, so single-agent rows
-   * look unchanged. */
-  grid-template-columns: 12px 12px 100px 1fr auto auto auto;
 }
 /* Action buttons (bg / kill — and bg pill when backgrounded) live
  * in the last grid cell as a flex group so the kill glyph isn't
@@ -6768,6 +6786,7 @@ a.sy-source-cite { color: var(--accent); }
   text-align: center;
 }
 .sy-agents-run-reason {
+  min-width: 0;
   font-size: 10.5px;
   color: var(--text-faint);
   max-width: 220px;

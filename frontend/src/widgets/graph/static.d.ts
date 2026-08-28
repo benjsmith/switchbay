@@ -15,6 +15,8 @@ declare global {
       focus(pageId: string): void;
       clearFocus(): void;
       focusOnPage?(pageId: string): void;
+      /** Highlight a set of node ids (graph search). Empty clears. */
+      highlightSearch?(ids: string[]): void;
       splitEnter(
         seed: Array<string | { id: string; policy?: "move" | "copy" }>,
         onChange: (sel: Array<{ id: string; policy: "move" | "copy" }>) => void,

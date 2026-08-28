@@ -23,13 +23,12 @@
       position: relative;
     }
     #graph { flex: 1; min-height: 120px; min-width: 0; }
-    /* HUD at top-left so a 0-height first layout does not clip it under
-       overflow:hidden at bottom:14px. z-index above the canvas. */
-    .graph-controls {
-      top: 12px !important; bottom: auto !important;
-      left: 12px !important; z-index: 40;
-    }
-    .label-types-panel { top: 40px; bottom: auto !important; }
+    /* Labels/view stay bottom-left (PWA default). Search is center-top.
+       z-index above the canvas; waitForSize in the host avoids a 0-height
+       first layout clipping the HUD. */
+    .graph-controls { z-index: 40; }
+    .label-types-panel { z-index: 41; }
+    .graph-search { z-index: 42; }
     /* Keep gear + minimap inside the webview; overflow:hidden eats their
        right edge at the PWA's 12–14px inset. */
     .settings-trigger, .settings-panel { right: 22px; z-index: 40; }

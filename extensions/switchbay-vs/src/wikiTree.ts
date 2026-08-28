@@ -27,12 +27,51 @@ class TypeGroupItem extends vscode.TreeItem {
   }
 }
 
+/** Explorer / wiki-tree badge for graph-search hits. */
+export class WikiSearchDecorations implements vscode.FileDecorationProvider {
+  private readonly _onDidChange = new vscode.EventEmitter<vscode.Uri | vscode.Uri[] | undefined>();
+  readonly onDidChangeFileDecorations = this._onDidChange.event;
+  private hits = new Set<string>();
+
+  setHits(fsPaths: string[]): void {
+    this.hits = new Set(fsPaths);
+    this._onDidChange.fire(undefined);
+  }
+
+  provideFileDecoration(uri: vscode.Uri): vscode.FileDecoration | undefined {
+    if (!this.hits.has(uri.fsPath)) return undefined;
+    return {
+      badge: "●",
+      tooltip: "Graph search match",
+      color: new vscode.ThemeColor("list.highlightForeground"),
+      propagate: false,
+    };
+  }
+}
+
 export class WikiTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
   private _onDidChange = new vscode.EventEmitter<void>();
   readonly onDidChangeTreeData = this._onDidChange.event;
+  /** Relative wiki/… paths currently highlighted by graph search. */
+  private searchRel = new Set<string>();
 
   refresh(): void {
     this._onDidChange.fire();
+  }
+
+  setSearchPaths(relPaths: string[]): void {
+    this.searchRel = new Set(relPaths.map((p) => p.replace(/^\.\//, "")));
+    this._onDidChange.fire();
+  }
+
+  private pathIsHit(nodePath: string): boolean {
+    if (this.searchRel.size === 0) return false;
+    const rel = nodePath.replace(/^\.\//, "");
+    const withWiki = rel.startsWith("wiki/") ? rel : `wiki/${rel}`;
+    const without = withWiki.slice("wiki/".length);
+    return this.searchRel.has(rel)
+      || this.searchRel.has(withWiki)
+      || this.searchRel.has(without);
   }
 
   getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
@@ -63,11 +102,22 @@ export class WikiTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem
     }
     const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
     return keys.map((k) => {
-      const items = (groups.get(k) ?? [])
+      const nodesOfType = (groups.get(k) ?? [])
         .slice()
-        .sort((a, b) => (a.title || a.id).localeCompare(b.title || b.id))
-        .map((n) => new WikiPageItem(n, folder));
-      return new TypeGroupItem(k, items);
+        .sort((a, b) => (a.title || a.id).localeCompare(b.title || b.id));
+      const items = nodesOfType.map((n) => {
+        const item = new WikiPageItem(n, folder);
+        if (this.pathIsHit(n.path)) {
+          item.description = "match";
+          item.iconPath = new vscode.ThemeIcon("target");
+        }
+        return item;
+      });
+      const group = new TypeGroupItem(k, items);
+      if (this.searchRel.size > 0 && items.some((it) => it.description === "match")) {
+        group.collapsibleState = vscode.TreeItemCollapsibleState.Expanded;
+      }
+      return group;
     });
   }
 }

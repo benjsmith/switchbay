@@ -174,6 +174,19 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     return () => window.removeEventListener("sy:graph-viewer-change", onViewer);
   }, []);
 
+  // After search is cleared, restore the page-selection focus ring.
+  useEffect(() => {
+    const onSearch = (ev: Event) => {
+      const q = String((ev as CustomEvent<{ query?: string }>).detail?.query || "");
+      if (q) return;
+      if (selection?.kind === "page") {
+        try { window.Graph.focus(selection.id); } catch { /* ignore */ }
+      }
+    };
+    window.addEventListener("sy:graph-search", onSearch);
+    return () => window.removeEventListener("sy:graph-search", onSearch);
+  }, [selection]);
+
   // Mount / re-mount CE viewer when data arrives or changes
   // (e.g. workspace switch). Modal-close → clear selection
   // (wired here so the callback can capture setSelection).

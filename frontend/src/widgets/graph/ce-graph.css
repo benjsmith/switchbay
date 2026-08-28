@@ -526,7 +526,57 @@ body[data-sidebar="collapsed"] .sidebar-restore { display: inline-flex; }
  */
 .node[data-vis="hidden"]     { opacity: 0; pointer-events: none; }
 .node[data-vis="dim"]        { opacity: 0.18; }
-.node[data-vis="focus"] circle { stroke: var(--accent); stroke-width: 2px; }
+.node[data-vis="neighbour"]  { opacity: 0.85; }
+.node[data-vis="focus"] circle,
+.node.search-hit circle { stroke: var(--accent); stroke-width: 2px; }
+
+.graph-search {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: min(420px, calc(100% - 200px));
+  padding: 3px 8px 3px 12px;
+  background: color-mix(in srgb, var(--bg-soft, #1a1f27) 92%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: 0 1px 8px color-mix(in srgb, var(--bg, #000) 35%, transparent);
+}
+#graph-search-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: 13px var(--font-sans);
+  outline: none;
+}
+#graph-search-input::-webkit-search-cancel-button { -webkit-appearance: none; }
+#graph-search-input::placeholder { color: var(--text-faint); }
+#graph-search-clear {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+}
+#graph-search-clear:hover { color: var(--text); background: var(--bg-elev); }
+.graph-search-count {
+  flex-shrink: 0;
+  font: 11px var(--font-mono);
+  color: var(--text-faint);
+  min-width: 1.2em;
+  text-align: right;
+}
 .node:not([data-vis]),
 .node[data-vis="visible"]    { opacity: 1; }
 
@@ -540,6 +590,7 @@ body[data-sidebar="collapsed"] .sidebar-restore { display: inline-flex; }
 .edge[data-vis="hidden"]     { opacity: 0; }
 .edge[data-vis="dim"]        { stroke-opacity: 0.06; }
 .edge[data-vis="focus"]      { stroke: var(--accent); stroke-opacity: 0.9; }
+.edge[data-vis="neighbour"]  { stroke: var(--accent); stroke-opacity: 0.4; }
 
 .graph-controls {
   position: absolute;

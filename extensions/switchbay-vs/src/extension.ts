@@ -22,7 +22,7 @@ import { startScheduleTicker, upsertSchedule } from "./schedules";
 import { configurePython, maybeOfferSetup, probeSwitchbay } from "./setup";
 import { checkAndOfferUpdate } from "./update";
 import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
-import { WikiTreeProvider } from "./wikiTree";
+import { WikiSearchDecorations, WikiTreeProvider } from "./wikiTree";
 import { registerLocalModels } from "./localModels";
 
 function updateWikiContext(): void {
@@ -37,10 +37,21 @@ export function activate(context: vscode.ExtensionContext): void {
   const log = vscode.window.createOutputChannel("Switch Bay VS");
   context.subscriptions.push(log);
   const wiki = new WikiTreeProvider();
+  const wikiDecor = new WikiSearchDecorations();
   const projects = new ProjectsTreeProvider();
+  const applyGraphSearch = (paths: string[]) => {
+    wiki.setSearchPaths(paths);
+    const folder = wikiFolderUri();
+    if (!folder) {
+      wikiDecor.setHits([]);
+      return;
+    }
+    wikiDecor.setHits(paths.map((p) => wikiPageUri(folder, p).fsPath));
+  };
   // Views first — MCP/chat failures must not leave "no data provider".
   context.subscriptions.push(
-    vscode.window.registerTreeDataProvider("switchbay.wiki", wiki),
+    vscode.window.createTreeView("switchbay.wiki", { treeDataProvider: wiki }),
+    vscode.window.registerFileDecorationProvider(wikiDecor),
     vscode.window.registerTreeDataProvider("switchbay.projects", projects),
     vscode.commands.registerCommand("switchbay.openWorkspace", () =>
       vscode.commands.executeCommand("workbench.action.files.openFolder")),
@@ -98,7 +109,8 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.commands.registerCommand("switchbay.toggleHarness", () =>
       vscode.commands.executeCommand("switchbay.chooseHarness")),
-    vscode.commands.registerCommand("switchbay.openGraph", () => openGraph(context)),
+    vscode.commands.registerCommand("switchbay.openGraph", () =>
+      openGraph(context, { onSearch: applyGraphSearch })),
     vscode.commands.registerCommand("switchbay.openPreview", (uri?: vscode.Uri) => openWikiPreview(uri)),
     vscode.commands.registerCommand("switchbay.openAgents", () => openAgents(context)),
     vscode.commands.registerCommand("switchbay.openAgentsWindow", () => openAgentsWindow()),

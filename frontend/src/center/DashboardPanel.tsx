@@ -117,10 +117,6 @@ function workingToward(r: ActiveRun): string {
 }
 
 const LIVE_STATUSES_SET = new Set(LIVE_STATUSES);
-const DASH_RECENT_TTL_S = 15 * 60;
-const DASH_RECENT_MAX = 8;
-
-type DashRow = ActiveRun & { finished?: boolean; finished_at?: number };
 
 export default function DashboardPanel({ runs, workspace, onJump, onExpandedChange }: Props) {
   const initial = useMemo(readPersisted, []);
@@ -131,8 +127,6 @@ export default function DashboardPanel({ runs, workspace, onJump, onExpandedChan
   // retired runs fall out of `runs` and their entries just go stale.
   const [openRows, setOpenRows] = useState<Set<string>>(() => new Set());
   const userCollapsed = useRef<Set<string>>(new Set());
-  const prevRunsRef = useRef<Map<string, ActiveRun>>(new Map());
-  const [recentFinished, setRecentFinished] = useState<DashRow[]>([]);
 
   const toggleRow = useCallback((runId: string) => {
     setOpenRows((cur) => {
@@ -148,41 +142,8 @@ export default function DashboardPanel({ runs, workspace, onJump, onExpandedChan
     });
   }, []);
 
-  // Detect finished runs + C1 auto-expand solo live agent.
+  // C1 auto-expand solo live agent.
   useEffect(() => {
-    const nextMap = new Map(runs.map((r) => [r.run_id, r]));
-    const departed: DashRow[] = [];
-    for (const [id, prev] of prevRunsRef.current) {
-      if (!nextMap.has(id) && prev.provider !== "pty") {
-        departed.push({
-          ...prev,
-          finished: true,
-          finished_at: Date.now() / 1000,
-          status: "done",
-        });
-      }
-    }
-    prevRunsRef.current = nextMap;
-    if (departed.length > 0) {
-      setRecentFinished((cur) => {
-        const now = Date.now() / 1000;
-        return [
-          ...departed,
-          ...cur.filter((c) => !departed.some((d) => d.run_id === c.run_id)),
-        ]
-          .filter((c) => now - (c.finished_at ?? c.started_at ?? 0) < DASH_RECENT_TTL_S)
-          .slice(0, DASH_RECENT_MAX);
-      });
-    } else {
-      setRecentFinished((cur) => {
-        const now = Date.now() / 1000;
-        const next = cur.filter(
-          (c) => now - (c.finished_at ?? c.started_at ?? 0) < DASH_RECENT_TTL_S,
-        );
-        return next.length === cur.length ? cur : next;
-      });
-    }
-
     const liveAgents = runs.filter(
       (r) =>
         (!r.status || LIVE_STATUSES_SET.has(r.status))
@@ -396,13 +357,13 @@ export default function DashboardPanel({ runs, workspace, onJump, onExpandedChan
           </button>
         </div>
         <div className="sy-dash-rows">
-          {rows.length === 0 && recentFinished.length === 0 && (
+          {rows.length === 0 && (
             <div className="sy-dash-empty">no runs — everything is quiet</div>
           )}
-          {([...rows, ...recentFinished] as DashRow[]).map((r) => {
+          {rows.map((r) => {
             const foreign = !!r.workspace && r.workspace !== workspace;
             const idle = r.status === "idle";
-            const done = !!r.finished || r.status === "done";
+            const done = r.status === "done";
             const live = !done && (!r.status || LIVE_STATUSES.includes(r.status));
             const opened = openRows.has(r.run_id);
             const activity = (r.activity || "").trim();

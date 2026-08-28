@@ -257,6 +257,8 @@ export default function FileBrowser({
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [query, setQuery] = useState("");
+  /** Wiki/vault paths highlighted by the graph-view search overlay. */
+  const [searchHits, setSearchHits] = useState<Set<string> | null>(null);
   const [sort, setSort] = useState<SortMode>("asc");
   const [extFilter, setExtFilter] = useState<Set<string>>(() => new Set());
   const [filterOpen, setFilterOpen] = useState(false);
@@ -332,19 +334,26 @@ export default function FileBrowser({
   }, [files, matcher, extFilter]);
 
   const filterActive = query.trim().length > 0 || extFilter.size > 0;
+  const searchActive = !!searchHits && searchHits.size > 0;
 
   const tree = useMemo(() => buildTree(filtered, sort), [filtered, sort]);
 
   // When a filter is active, show every ancestor of a match — otherwise
   // matches deep in the tree are hidden inside collapsed dirs. Also
   // auto-inspect slideshow packages that contain a match so sealed
-  // media files can surface under search.
+  // media files can surface under search. Graph-search hits expand
+  // the same way so highlighted files are visible.
   const effectiveExpanded = useMemo(() => {
-    if (!filterActive) return expanded;
+    if (!filterActive && !searchActive) return expanded;
     const set = new Set(expanded);
-    for (const f of filtered) for (const dir of ancestorDirs(f)) set.add(dir);
+    if (filterActive) {
+      for (const f of filtered) for (const dir of ancestorDirs(f)) set.add(dir);
+    }
+    if (searchHits) {
+      for (const f of searchHits) for (const dir of ancestorDirs(f)) set.add(dir);
+    }
     return set;
-  }, [expanded, filtered, filterActive]);
+  }, [expanded, filtered, filterActive, searchActive, searchHits]);
 
   const effectiveInspected = useMemo(() => {
     if (!filterActive) return inspectedPackages;
@@ -386,6 +395,32 @@ export default function FileBrowser({
     window.addEventListener("sy:reveal-file", onReveal);
     return () => window.removeEventListener("sy:reveal-file", onReveal);
   }, [revealPath]);
+
+  useEffect(() => {
+    const onSearch = (ev: Event) => {
+      const paths = (ev as CustomEvent<{ paths?: string[] }>).detail?.paths;
+      if (!paths?.length) {
+        setSearchHits(null);
+        return;
+      }
+      setSearchHits(new Set(paths));
+    };
+    window.addEventListener("sy:graph-search", onSearch);
+    return () => window.removeEventListener("sy:graph-search", onSearch);
+  }, []);
+
+  useEffect(() => {
+    if (!searchHits || searchHits.size === 0) return;
+    const first = [...searchHits][0];
+    if (!first) return;
+    const tid = window.setTimeout(() => {
+      const row = document.querySelector<HTMLElement>(
+        `[data-fb-path="${cssEscapeAttr(first)}"]`,
+      );
+      row?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }, 80);
+    return () => window.clearTimeout(tid);
+  }, [searchHits]);
 
   // When the active selection points at a page path (likely from
   // a wiki-sidebar click), expand the file-browser tree to reveal
@@ -958,6 +993,7 @@ export default function FileBrowser({
             "sy-fb-row"
             + (isSelected ? " sy-fb-row--active" : "")
             + (isPkg ? " sy-fb-row--package" : "")
+            + (searchHits?.has(node.path) ? " sy-fb-row--search-hit" : "")
           }
           style={{ paddingLeft: 8 + depth * 12 }}
           data-fb-path={node.path}

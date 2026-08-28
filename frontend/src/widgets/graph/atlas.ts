@@ -272,6 +272,9 @@ function installGraphFacade(handle: AtlasHandle): void {
     clearFocus: () => {
       // Host close must not leave engine focus so a later echo reopens.
     },
+    highlightSearch: (ids: string[]) => {
+      if (ids.length) handle.engine.focus(ids[0]!, "system");
+    },
     splitEnter: () => { /* Atlas has no rubber-band split surface */ },
     splitExit: () => {},
   };

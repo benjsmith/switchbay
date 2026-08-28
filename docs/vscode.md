@@ -23,7 +23,7 @@ product — see the root README.
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.3.9.vsix
+   code --install-extension dist/switchbay-vs-0.3.10.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).
@@ -40,7 +40,7 @@ Sideload installs do **not** auto-update. Same id
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.3.9.vsix
+code --install-extension dist/switchbay-vs-0.3.10.vsix
 ```
 
 Then **Developer: Reload Window**. Or Command Palette → **Switch Bay VS:
@@ -67,7 +67,7 @@ Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (cheap pyp
 | Surface | How |
 | --- | --- |
 | Wiki / Projects | Activity bar (Switch Bay icon). Same WikiPage nodes as Graph (`graph.kuzu`). **Refresh** runs `graph.py rebuild`. |
-| Graph / Atlas | Wiki view title **Open Graph**; **view:** switches Atlas |
+| Graph / Atlas | Wiki view title **Open Graph**; **view:** switches Atlas. Center-top search highlights nodes and Wiki-tree files; **×** clears. |
 | Wiki preview | Editor title on a `wiki/**/*.md` tab |
 | Agent Dashboard | Wiki view title, or **Open Agent Dashboard** |
 | Chat | `@switchbay` (`/curate`, `/thrusters`, `/plot`, `/deck`, `/sketch`) |

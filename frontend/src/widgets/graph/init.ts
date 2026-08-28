@@ -11,6 +11,7 @@
  */
 
 import { atlasEnabled, destroyAtlas, initAtlasChoice, mountAtlas, type ViewerMode } from "./atlas";
+import { installGraphSearch } from "./graphSearch";
 import { template } from "./template";
 import type { GraphData } from "./types";
 
@@ -55,6 +56,7 @@ export function mountGraph(
   }
   document.body.dataset.viewer = mode;
   initAtlasChoice(data, mode);
+  installGraphSearch(data);
 
   // Edit module wires the modal padlock + textarea editor. The refetch
   // callback re-pulls the rebuilt data.json (cebridge updates its

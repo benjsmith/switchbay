@@ -206,4 +206,16 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
 
   await space.locator(".sy-agent-space-roster-btn").filter({ hasText: "blackboard" }).click();
   await expect(space.getByRole("heading", { name: "Blackboard" })).toBeVisible();
+
+  await expect(page.getByRole("heading", { name: "Recently finished" })).toHaveCount(0);
+
+  const runBoxes = await page.locator(".sy-agents-run").evaluateAll((els) =>
+    els.map((el) => {
+      const r = (el as HTMLElement).getBoundingClientRect();
+      return { y: r.y, bottom: r.bottom, height: r.height };
+    }),
+  );
+  for (let i = 1; i < runBoxes.length; i++) {
+    expect(runBoxes[i]!.y + 0.5).toBeGreaterThanOrEqual(runBoxes[i - 1]!.bottom);
+  }
 });

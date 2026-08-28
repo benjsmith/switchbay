@@ -54,7 +54,10 @@ function graphWebviewHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): strin
   return html;
 }
 
-export function openGraph(context: vscode.ExtensionContext): void {
+export function openGraph(
+  context: vscode.ExtensionContext,
+  opts?: { onSearch?: (paths: string[]) => void },
+): void {
   const folder = wikiFolderUri() || workspaceFolder();
   if (!folder) {
     void vscode.window.showWarningMessage("Open a curiosity-engine folder first.");
@@ -104,7 +107,11 @@ export function openGraph(context: vscode.ExtensionContext): void {
     }
     void panel.webview.postMessage({ graph });
   };
-  panel.webview.onDidReceiveMessage(async (msg: { type?: string; node?: GraphNode }) => {
+  panel.webview.onDidReceiveMessage(async (msg: {
+    type?: string;
+    node?: GraphNode;
+    paths?: string[];
+  }) => {
     if (msg.type === "ready") {
       await sendGraph();
       return;
@@ -112,6 +119,10 @@ export function openGraph(context: vscode.ExtensionContext): void {
     if (msg.type === "history") {
       const history = await loadCurationHistory(context, folder.fsPath);
       void panel.webview.postMessage({ type: "curation-history", history });
+      return;
+    }
+    if (msg.type === "search") {
+      opts?.onSearch?.(msg.paths ?? []);
       return;
     }
     const node = msg.node;
@@ -138,6 +149,7 @@ export function openGraph(context: vscode.ExtensionContext): void {
     }
   });
   panel.webview.html = html;
+  panel.onDidDispose(() => opts?.onSearch?.([]));
   context.subscriptions.push(panel);
 }
 

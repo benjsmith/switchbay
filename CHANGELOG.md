@@ -3,6 +3,25 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-28 — v0.12.3 — Switch Bay VS 0.3.10
+
+**Migration:** none. **Breaking:** none.
+
+### Added
+
+- Graph view **search** (center-top). Matches wiki nodes; highlights
+  them on the canvas and their files in the File browser. **×** (or
+  Escape) clears. Same overlay in the VS Code graph webview, which
+  badges matching Wiki-tree / Explorer files.
+
+### Fixed
+
+- VS Code graph **view / labels / types** controls sit at the
+  bottom-left again (search took the top).
+- PWA Agent Dashboard no longer lists **Recently finished** (Agent
+  Space still pages recent DAGs). Compact Agents strip shows live
+  runs only. Run-row extras no longer overlap neighbouring rows.
+
 ## 2026-08-27 — v0.12.2 — Switch Bay VS 0.3.9
 
 **Migration:** none. **Breaking:** none. PWA daemon unchanged.

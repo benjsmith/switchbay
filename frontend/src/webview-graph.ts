@@ -138,6 +138,15 @@ async function bind(data: GraphData): Promise<void> {
   window.addEventListener("sy:graph-viewer-change", () => {
     bind(data);
   }, { signal });
+  window.addEventListener("sy:graph-search", (ev) => {
+    const detail = (ev as CustomEvent<{ query?: string; ids?: string[]; paths?: string[] }>).detail || {};
+    vscode.postMessage({
+      type: "search",
+      query: detail.query || "",
+      ids: detail.ids || [],
+      paths: detail.paths || [],
+    });
+  }, { signal });
   mount.addEventListener("contextmenu", (ev) => {
     const t = ev.target as HTMLElement | null;
     const el = t?.closest?.("[data-id]");
