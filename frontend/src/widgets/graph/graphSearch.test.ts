@@ -3,6 +3,8 @@ import { test } from "node:test";
 import {
   hitFilePaths,
   matchGraphNodes,
+  peekPersistedQuery,
+  persistGraphQuery,
   wikiFilePath,
   type GraphSearchHit,
 } from "./graphSearch.ts";
@@ -68,4 +70,12 @@ test("hitFilePaths includes associated vault sources", () => {
   const paths = hitFilePaths(data, hits);
   assert.ok(paths.includes("wiki/concepts/alpha.md"));
   assert.ok(paths.includes("vault/raw/helium.pdf"));
+});
+
+test("persisted query survives until cleared and ignores other workspaces", () => {
+  persistGraphQuery("/tmp/ws", "attention");
+  assert.equal(peekPersistedQuery("/tmp/ws"), "attention");
+  assert.equal(peekPersistedQuery("/tmp/other"), "");
+  persistGraphQuery("/tmp/ws", "");
+  assert.equal(peekPersistedQuery("/tmp/ws"), "");
 });

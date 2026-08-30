@@ -34,6 +34,14 @@ test("graph search highlights nodes and files; X clears", async ({ page }) => {
   await expect(page.locator('.sy-fb-row--search-hit[data-fb-path="wiki/concepts/attention.md"]')).toBeVisible();
   await expect(page.locator(".sy-fb-row--search-hit")).toHaveCount(4);
 
+  await page.locator('.sy-fb-row--search-hit[data-fb-path="wiki/concepts/attention.md"]').click();
+  await page.getByRole("tab", { name: "Graph" }).click();
+  await graphReady(page);
+  await expect(page.locator("#graph-search-input")).toHaveValue("attention");
+  await expect(page.locator("#graph-search-clear")).toBeVisible();
+  await expect(page.locator("#graph-search-count")).not.toHaveText("0");
+  await expect(page.locator(".sy-fb-row--search-hit")).toHaveCount(4);
+
   await page.locator("#graph-search-clear").click();
   await expect(page.locator("#graph-search-clear")).toBeHidden();
   await expect(page.locator(".sy-fb-row--search-hit")).toHaveCount(0);

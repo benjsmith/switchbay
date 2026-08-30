@@ -92,6 +92,22 @@ export type GraphSearchDetail = {
   paths: string[];
 };
 
+/** Lives outside GraphTab so leaving for Editor doesn't wipe the query. */
+let persistedQuery = "";
+let persistedWorkspace = "";
+
+export function peekPersistedQuery(workspace?: string): string {
+  if (workspace != null && persistedWorkspace && persistedWorkspace !== workspace) {
+    return "";
+  }
+  return persistedQuery;
+}
+
+export function persistGraphQuery(workspace: string, query: string): void {
+  persistedWorkspace = workspace;
+  persistedQuery = query;
+}
+
 function paint(
   data: GraphData,
   query: string,
@@ -99,6 +115,7 @@ function paint(
   countEl: HTMLElement | null,
 ): GraphSearchDetail {
   const q = query.trim();
+  persistGraphQuery(data.workspace || "", q);
   const hits = matchGraphNodes(data, q);
   const ids = hits.map((h) => h.id);
   const paths = hitFilePaths(data, hits);
@@ -172,4 +189,10 @@ export function installGraphSearch(data: GraphData): void {
     input.focus();
     input.select();
   }, { signal });
+
+  const saved = peekPersistedQuery(data.workspace || "");
+  if (saved) {
+    input.value = saved;
+    applyNow(saved);
+  }
 }
