@@ -276,6 +276,26 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
           ↗ Editor
         </button>
       )}
+      <div className="graph-search" id="graph-search">
+        <input
+          id="graph-search-input"
+          type="search"
+          placeholder="Search wiki…"
+          autoComplete="off"
+          spellCheck={false}
+          aria-label="Search wiki graph"
+        />
+        <button
+          id="graph-search-clear"
+          type="button"
+          hidden
+          title="Clear search"
+          aria-label="Clear search"
+        >
+          ×
+        </button>
+        <span id="graph-search-count" className="graph-search-count" hidden aria-live="polite" />
+      </div>
       <button
         type="button"
         className="sy-graph-replay-btn"

@@ -120,13 +120,19 @@ function paint(
   return detail;
 }
 
-/** Bind the search overlay already in the graph template. */
+/** Bind the host-level search overlay (`#graph-search-input`). */
 export function installGraphSearch(data: GraphData): void {
   const input = document.getElementById("graph-search-input") as HTMLInputElement | null;
   const clearBtn = document.getElementById("graph-search-clear") as HTMLButtonElement | null;
   const countEl = document.getElementById("graph-search-count");
-  const pane = document.getElementById("graph-pane");
+  const host = input?.closest(".sy-graph-host") ?? document.getElementById("graph-pane");
   if (!input || !clearBtn) return;
+
+  const prev = (input as HTMLInputElement & { _sbSearchAbort?: AbortController })._sbSearchAbort;
+  prev?.abort();
+  const ac = new AbortController();
+  (input as HTMLInputElement & { _sbSearchAbort?: AbortController })._sbSearchAbort = ac;
+  const { signal } = ac;
 
   let timer = 0;
   const applyNow = (q: string) => {
@@ -142,12 +148,12 @@ export function installGraphSearch(data: GraphData): void {
     }
     window.clearTimeout(timer);
     timer = window.setTimeout(() => paint(data, q, clearBtn, countEl), 160);
-  });
+  }, { signal });
   clearBtn.addEventListener("click", () => {
     input.value = "";
     applyNow("");
     input.focus();
-  });
+  }, { signal });
   input.addEventListener("keydown", (ev) => {
     if (ev.key !== "Escape") return;
     ev.preventDefault();
@@ -158,11 +164,12 @@ export function installGraphSearch(data: GraphData): void {
     } else {
       input.blur();
     }
-  });
-  pane?.addEventListener("keydown", (ev) => {
-    if (!(ev.metaKey || ev.ctrlKey) || ev.key.toLowerCase() !== "f") return;
-    ev.preventDefault();
+  }, { signal });
+  host?.addEventListener("keydown", (ev) => {
+    const ke = ev as KeyboardEvent;
+    if (!(ke.metaKey || ke.ctrlKey) || ke.key.toLowerCase() !== "f") return;
+    ke.preventDefault();
     input.focus();
     input.select();
-  });
+  }, { signal });
 }

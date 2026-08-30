@@ -530,21 +530,25 @@ body[data-sidebar="collapsed"] .sidebar-restore { display: inline-flex; }
 .node[data-vis="focus"] circle,
 .node.search-hit circle { stroke: var(--accent); stroke-width: 2px; }
 
+/* Host-level chrome (sibling of the canvas), not inside #graph-pane —
+ * the SVG/canvas stack was painting over an in-pane overlay. */
+.sy-graph-host > .graph-search,
 .graph-search {
   position: absolute;
   top: 12px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 30;
+  z-index: 70;
   display: flex;
   align-items: center;
   gap: 6px;
   width: min(420px, calc(100% - 200px));
-  padding: 3px 8px 3px 12px;
-  background: color-mix(in srgb, var(--bg-soft, #1a1f27) 92%, transparent);
+  padding: 5px 10px 5px 14px;
+  background: var(--bg-soft, #1a1f27);
   border: 1px solid var(--line);
   border-radius: 999px;
-  box-shadow: 0 1px 8px color-mix(in srgb, var(--bg, #000) 35%, transparent);
+  box-shadow: 0 2px 14px color-mix(in srgb, var(--bg, #000) 45%, transparent);
+  pointer-events: auto;
 }
 #graph-search-input {
   flex: 1;

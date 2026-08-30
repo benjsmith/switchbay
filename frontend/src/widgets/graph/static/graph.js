@@ -384,6 +384,7 @@ window.Graph = (function () {
     neighbours.clear();
     focusId = null;
     focusOrigin = null;
+    searchHits = null;
     _autoVisibleIds = new Set();
     _autoRecomputeScheduled = false;
     _isDragging = false;

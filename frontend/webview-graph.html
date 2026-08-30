@@ -49,6 +49,11 @@
 </head>
 <body>
   <div id="root" class="sy-graph-host">
+    <div class="graph-search" id="graph-search">
+      <input id="graph-search-input" type="search" placeholder="Search wiki…" autocomplete="off" spellcheck="false" aria-label="Search wiki graph">
+      <button id="graph-search-clear" type="button" hidden title="Clear search" aria-label="Clear search">×</button>
+      <span id="graph-search-count" class="graph-search-count" hidden aria-live="polite"></span>
+    </div>
     <div id="mount" class="sy-graph-mount"></div>
   </div>
   <div id="ctx" class="ctx-menu" hidden></div>
