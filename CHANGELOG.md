@@ -3,6 +3,32 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-31 — v0.12.4 — Switch Bay VS 0.3.11
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` — a daemon restart alone does not rebuild
+the Agent Dashboard JS.
+
+### Changed
+
+- Auto / chief of staff **prefers signed-in non-local catalogs** (GitHub
+  Copilot, subscriptions, BYOK) over a local rail picker. A Copilot +
+  MLX desk no longer locks investigators onto MLX or a single local
+  worker. Intra-provider Copilot families still fan out. Local models
+  remain the fallback when remotes are denied or cooled down.
+- Agent Dashboard **Chief of staff models** checkboxes under the DAG
+  allowlist which catalog rows Auto may use. The effort slider still
+  buys fan-out and how readily flagship models are recruited.
+- `/curate` stays one CE curator (not a Switch Bay investigator DAG)
+  but that curator uses the same non-local preference unless the CE
+  hard rung or a per-run provider override is pinned.
+- Provider-backed `/curate` again runs CE Phase 2 **workers**: the
+  curator dispatches `ce_dispatch_worker` (page workers, extractors,
+  then `batch_reviewer`) as fresh-context child runs on the DAG.
+  Local models keep the single-session fallback (the curator *is* the
+  worker) so a 7B does not nest another local server. The effort
+  slider prices how many CE workers the wave may buy.
+
 ## 2026-08-28 — v0.12.3 — Switch Bay VS 0.3.10
 
 **Migration:** none. **Breaking:** none.

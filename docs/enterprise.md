@@ -58,8 +58,18 @@ Set `copilot.host` to github.com or your GitHub Enterprise URL at bake.
   from the subscription catalog (`GET /models`, cached). If that list
   is cold, static suggestions are the current Copilot chat ids
   (gpt-5.4, claude-sonnet-4.6, gemini-3.x, grok-4.6 — not gpt-4o).
+  A signed-in non-local catalog **outranks** a local rail picker
+  (MLX / llama.cpp / Ollama): the chief of staff will not stay on a
+  local 7B just because the picker is local. Uncheck models under the
+  Agent Dashboard DAG to deny them; local remains the overnight
+  fallback when subscriptions cool down. The effort slider buys
+  fan-out and how readily Auto recruits flagship models.
   Admin-disallowed providers are never used, even if a workspace
-  ladder still names them.
+  ladder still names them. `/curate` stays one CE curator — not a
+  Switch Bay investigator DAG — but that curator uses the same
+  non-local preference, and on Copilot it dispatches CE Phase 2
+  workers (then a batch reviewer) as child runs. Local `/curate`
+  stays the single-session fallback.
 - **`features`** — see table below. Missing keys inherit the profile.
 - **`SWITCHBAY_PROFILE=open`** restores mainline behaviour without a file.
 

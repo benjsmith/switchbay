@@ -46,7 +46,10 @@ Named-entity / “what do we know about X?”:
 6. Writes: `ce_score_diff` (`new_text`) → `ce_scrub_check` →
    `ce_wiki_commit`. Not `propose_wiki_page`.
 7. Workers: `ce_dispatch_worker` or spawn the named Copilot agents
-   (at most two in one turn). Roles match `.curator/prompts.md`.
+   (FigureExtractor, TableExtractor, NumericReviewer, BatchReviewer,
+   Link*). Dispatch the wave’s workers, then one reviewer. If Chat
+   serializes subagents, still finish the wave — do not skip the
+   reviewer or fake worker JSON. Roles match `.curator/prompts.md`.
 8. `ce_evolve_guard` check at wave end; `ce_graph_rebuild` if structure
    changed. `load_skill('curiosity-engine', section='…')` if you need
    the mode protocol — never `detail=full` first.

@@ -191,6 +191,7 @@ export default function AgentDashboardTab() {
   const [rules, setRules] = useState<Rule[] | null>(null);
   const [palettes, setPalettes] = useState<PalettesPayload | null>(null);
   const [providers, setProviders] = useState<Provider[] | null>(null);
+  const [modelTick, setModelTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [interrupted, setInterrupted] = useState<{
     orchestration_id: string;
@@ -281,6 +282,7 @@ export default function AgentDashboardTab() {
       setRules(r.rules as Rule[]);
       setPalettes(Array.isArray(pal?.commands) ? pal as PalettesPayload : null);
       setProviders(p.providers as Provider[]);
+      setModelTick((n) => n + 1);
     } catch (e) { setError((e as Error).message); }
   }, []);
 
@@ -516,6 +518,12 @@ export default function AgentDashboardTab() {
               if (runId && id !== CHIEF_ID) setPendingExpand(runId);
             }}
           />
+          <ModelAccessPanel refreshTick={modelTick} />
+        </div>
+      )}
+      {!space && (
+        <div className="sy-agent-space-root">
+          <ModelAccessPanel refreshTick={modelTick} />
         </div>
       )}
 
@@ -910,6 +918,187 @@ function PaletteEditor({
         </div>
       )}
     </li>
+  );
+}
+
+
+type OrchModelRow = {
+  key: string;
+  provider: string;
+  provider_label: string;
+  model: string;
+  category: string;
+  local: boolean;
+  allowed: boolean;
+  strength: number;
+};
+
+function rowsFromProviders(body: {
+  providers?: Array<{
+    id: string;
+    label?: string;
+    category?: string;
+    default_model?: string;
+    chosen_model?: string | null;
+    has_key?: boolean;
+    models?: string[];
+  }>;
+}): OrchModelRow[] {
+  const out: OrchModelRow[] = [];
+  const seen = new Set<string>();
+  for (const p of body.providers ?? []) {
+    if (!p.has_key || !p.id) continue;
+    const models = (p.models && p.models.length > 0)
+      ? p.models
+      : [p.chosen_model || p.default_model || "default"];
+    const local = p.category === "local" || p.id === "mlx"
+      || p.id === "llamacpp" || p.id === "ollama";
+    for (const model of models) {
+      if (!model) continue;
+      const key = `${p.id}/${model}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({
+        key,
+        provider: p.id,
+        provider_label: p.label || p.id,
+        model,
+        category: p.category || (local ? "local" : ""),
+        local,
+        allowed: true,
+        strength: 0.5,
+      });
+    }
+  }
+  return out;
+}
+
+function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
+  const [rows, setRows] = useState<OrchModelRow[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [hint, setHint] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await fetch("/api/orchestration/models");
+      if (r.ok) {
+        const body = await r.json() as { models?: OrchModelRow[] };
+        const list = Array.isArray(body.models) ? body.models : [];
+        if (list.length > 0) {
+          setRows(list);
+          setHint(null);
+          return;
+        }
+      } else if (r.status !== 404) {
+        setHint("Could not load chief-of-staff models.");
+      } else {
+        setHint(
+          "This UI needs a daemon that serves /api/orchestration/models. "
+          + "Run make refresh BUILD=1 (restart alone is not enough).",
+        );
+      }
+      const p = await fetch("/api/llm/providers");
+      if (!p.ok) {
+        setRows([]);
+        return;
+      }
+      const pb = await p.json() as Parameters<typeof rowsFromProviders>[0];
+      setRows(rowsFromProviders(pb));
+    } catch {
+      setRows([]);
+      setHint(
+        "Could not reach the daemon. After this update, run "
+        + "make refresh BUILD=1 so both the API and the dashboard JS load.",
+      );
+    }
+  }, []);
+
+  useEffect(() => { void load(); }, [load, refreshTick]);
+
+  const toggle = useCallback(async (key: string, allowed: boolean) => {
+    setBusy(key);
+    setRows((cur) =>
+      (cur ?? []).map((row) => (row.key === key ? { ...row, allowed } : row)),
+    );
+    try {
+      const r = await fetch("/api/orchestration/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ key, allowed }),
+      });
+      if (!r.ok) {
+        setRows((cur) =>
+          (cur ?? []).map((row) => (row.key === key ? { ...row, allowed: !allowed } : row)),
+        );
+        if (r.status === 404) {
+          setHint(
+            "Saving the allowlist needs a current daemon. "
+            + "Run make refresh BUILD=1.",
+          );
+        }
+        return;
+      }
+      const body = await r.json() as { models?: OrchModelRow[] };
+      if (Array.isArray(body.models)) setRows(body.models);
+    } catch {
+      setRows((cur) =>
+        (cur ?? []).map((row) => (row.key === key ? { ...row, allowed: !allowed } : row)),
+      );
+    } finally { setBusy(null); }
+  }, []);
+
+  const groups = new Map<string, OrchModelRow[]>();
+  for (const row of rows ?? []) {
+    const list = groups.get(row.provider) ?? [];
+    list.push(row);
+    groups.set(row.provider, list);
+  }
+
+  return (
+    <div className="sy-orch-models">
+      <h4>Chief of staff models</h4>
+      <p className="sy-orch-models-hint">
+        Auto may use checked models. Non-local catalogs are preferred
+        when available; the effort slider buys fan-out and stronger
+        models. Local stays a fallback.
+      </p>
+      {hint && <p className="sy-orch-models-hint">{hint}</p>}
+      {rows === null && (
+        <p className="sy-orch-models-hint">Loading available models…</p>
+      )}
+      {rows !== null && rows.length === 0 && !hint && (
+        <p className="sy-orch-models-hint">
+          No keyed models yet. Sign in to Copilot or start a local
+          server, then Refresh.
+        </p>
+      )}
+      {groups.size > 0 && (
+        <div className="sy-orch-models-groups">
+          {[...groups.entries()].map(([pid, list]) => (
+            <fieldset key={pid} className="sy-orch-models-group">
+              <legend>
+                {list[0]?.provider_label || pid}
+                {list[0]?.local ? " · local" : list[0]?.category ? ` · ${list[0].category}` : ""}
+              </legend>
+              <div className="sy-orch-models-list">
+                {list.map((row) => (
+                  <label key={row.key} className="sy-orch-models-item">
+                    <input
+                      type="checkbox"
+                      checked={row.allowed}
+                      disabled={busy === row.key}
+                      onChange={(e) => void toggle(row.key, e.target.checked)}
+                    />
+                    <code>{row.model}</code>
+                    {row.local && <span className="sy-orch-models-local">local</span>}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

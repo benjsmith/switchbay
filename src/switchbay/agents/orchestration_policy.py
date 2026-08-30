@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import os
 import random
 import re
 import time
@@ -423,22 +424,73 @@ def _arm_within_candidates(arm_id: str, valid: set[str]) -> bool:
 # ── diversity ──────────────────────────────────────────────────────
 
 
-def list_keyed_providers() -> list[tuple[str, str]]:
+def list_keyed_providers(*, scan_local_disk: bool = True) -> list[tuple[str, str]]:
     """(provider_id, default_model) that currently have a key.
 
     Admin policy already filters ``list_providers()``, so enterprise
     installs only see Copilot + local.
+
+    ``scan_local_disk=False`` skips Hugging Face cache walks (MLX /
+    llama.cpp ``has_key``). Use that on the dashboard catalog path.
     """
-    from .. import llmgateway
+    from .. import admin_policy, llm_config, llmgateway
     out: list[tuple[str, str]] = []
-    for info in llmgateway.list_providers():
-        if not info.get("has_key"):
+    for pid, prov in llmgateway.PROVIDERS.items():
+        if not admin_policy.provider_allowed(pid):
             continue
-        pid = str(info.get("id") or "")
-        model = str(info.get("chosen_model") or info.get("default_model") or "")
-        if pid:
-            out.append((pid, model))
+        if scan_local_disk:
+            try:
+                keyed = bool(prov.has_key())
+            except Exception:  # noqa: BLE001
+                keyed = False
+        else:
+            keyed = _provider_is_keyed_cheap(pid)
+        if not keyed:
+            continue
+        model = str(
+            llm_config.get_model(pid)
+            or prov.PROVIDER.get("chosen_model")
+            or prov.PROVIDER.get("default_model")
+            or "",
+        )
+        out.append((pid, model))
     return out
+
+
+def _provider_is_keyed_cheap(pid: str) -> bool:
+    """has_key without walking the Hugging Face cache.
+
+    Local backends otherwise call ``list_installed()`` → ``iterdir`` on
+    every HF snapshot, which blocked the dashboard catalog for a minute.
+    """
+    from .. import localllm, llmgateway, model_cache
+    try:
+        prov = llmgateway.get(pid)
+    except Exception:  # noqa: BLE001
+        return False
+    if pid not in LOCAL_PROVIDER_IDS:
+        try:
+            return bool(prov.has_key())
+        except Exception:  # noqa: BLE001
+            return False
+    cfg = localllm.load_config() or {}
+    if str(cfg.get("backend") or "") == pid:
+        return True
+    cached, _fresh = model_cache.get_cached(pid)
+    if cached:
+        return True
+    if pid == "mlx":
+        fn = getattr(prov, "supported", None)
+        try:
+            return bool(fn()) if callable(fn) else False
+        except Exception:  # noqa: BLE001
+            return False
+    if pid == "ollama":
+        try:
+            return bool(prov.has_key())
+        except Exception:  # noqa: BLE001
+            return False
+    return False
 
 
 def provider_category(provider_id: str) -> str:
@@ -571,6 +623,246 @@ def _diverse_catalog(pid: str, *, prefer: str | None = None) -> list[str]:
     return chosen
 
 
+def pair_key(provider_id: str, model: str | None) -> str:
+    return f"{provider_id}/{model or 'default'}"
+
+
+def model_strength(model: str | None) -> float:
+    """0..1 flagship heuristic for the effort slider's strength band.
+
+    Cheap/small ids score low; opus / gpt-5.x / grok-4 score high.
+    Not billed cost — Copilot is still one subscription. Local 7B-class
+    names score like mini so Maximum does not treat them as flagship.
+    """
+    m = (model or "").strip().lower()
+    if not m:
+        return 0.35
+    token = m.partition("/")[2] or m
+    score = 0.48
+    cheap = any(
+        s in token
+        for s in ("mini", "nano", "haiku", "flash", "small", "tiny", "lite")
+    )
+    size = re.search(r"(\d+)\s*b\b", token)
+    if size:
+        n = int(size.group(1))
+        if n <= 8:
+            cheap = True
+            score -= 0.08
+        elif n >= 27:
+            score += 0.12
+    if cheap:
+        score -= 0.22
+    else:
+        if any(
+            s in token
+            for s in ("opus", "o3", "o1", "gpt-5.5", "gpt-5.4", "gpt-5", "grok-4", "ultra")
+        ):
+            score += 0.28
+        elif (
+            "sonnet" in token
+            or token.endswith("-pro")
+            or "-pro-" in token
+            or "pro-preview" in token
+        ):
+            score += 0.18
+        elif "gemini" in token:
+            score += 0.12
+    return max(0.05, min(1.0, score))
+
+
+def get_denied_models() -> list[str]:
+    """``provider/model`` keys the chief of staff may not use.
+
+    Empty = every keyed catalog row is allowed. New catalog entries are
+    allowed until the user unchecks them on the Agent Dashboard.
+    """
+    from .. import app_settings
+    raw = app_settings.load().get("orchestration_denied_models")
+    if not isinstance(raw, list):
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        key = str(item or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(key)
+    return out
+
+
+def set_denied_models(keys: list[str] | tuple[str, ...] | None) -> list[str]:
+    from .. import app_settings
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in keys or []:
+        key = str(item or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            cleaned.append(key)
+    data = app_settings.load()
+    if cleaned:
+        data["orchestration_denied_models"] = cleaned
+    else:
+        data.pop("orchestration_denied_models", None)
+    app_settings.save(data)
+    return cleaned
+
+
+def model_allowed(
+    provider_id: str,
+    model: str | None,
+    denied: list[str] | tuple[str, ...] | set[str] | None = None,
+) -> bool:
+    if not provider_id:
+        return False
+    blocked = set(denied if denied is not None else get_denied_models())
+    if not blocked:
+        return True
+    if provider_id in blocked or f"{provider_id}/*" in blocked:
+        return False
+    return pair_key(provider_id, model) not in blocked
+
+
+def set_model_allowed(key: str, allowed: bool) -> list[str]:
+    """Toggle one catalog key. Refuses to deny the last remaining model."""
+    key = str(key or "").strip()
+    denied = set(get_denied_models())
+    if not key:
+        return sorted(denied)
+    if allowed:
+        denied.discard(key)
+        return set_denied_models(sorted(denied))
+    catalog = list_orchestrator_catalog()
+    currently = [row for row in catalog if row.get("allowed")]
+    if len(currently) <= 1 and currently and currently[0].get("key") == key:
+        return sorted(denied)
+    denied.add(key)
+    return set_denied_models(sorted(denied))
+
+
+def list_orchestrator_catalog(
+    *,
+    available: list[tuple[str, str]] | None = None,
+    denied: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Keyed (provider, model) rows the dashboard can check or uncheck."""
+    from .. import admin_policy, llmgateway
+    blocked = denied if denied is not None else get_denied_models()
+    keyed = (
+        available if available is not None
+        else list_keyed_providers(scan_local_disk=False)
+    )
+    rows: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pid, default_m in keyed:
+        if not pid or not admin_policy.provider_allowed(pid):
+            continue
+        models = models_for_provider(pid)
+        if default_m and default_m not in models:
+            models = [default_m, *models]
+        if not models:
+            models = [default_m or "default"]
+        try:
+            label = str(llmgateway.get(pid).LABEL)
+        except Exception:  # noqa: BLE001
+            label = pid
+        cat = provider_category(pid)
+        local = pid in LOCAL_PROVIDER_IDS or cat == "local"
+        for model in models:
+            key = pair_key(pid, model)
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append({
+                "key": key,
+                "provider": pid,
+                "provider_label": label,
+                "model": model,
+                "category": cat or ("local" if local else ""),
+                "local": local,
+                "allowed": model_allowed(pid, model, blocked),
+                "strength": round(model_strength(model), 3),
+            })
+    return rows
+
+
+def _catalog_pairs(
+    pid: str,
+    *,
+    prefer: str | None,
+    denied: list[str] | tuple[str, ...] | set[str],
+) -> list[tuple[str, str | None]]:
+    from .. import admin_policy
+    if not pid or not admin_policy.provider_allowed(pid):
+        return []
+    out: list[tuple[str, str | None]] = []
+    seen: set[tuple[str, str | None]] = set()
+    for model in _diverse_catalog(pid, prefer=prefer):
+        if not model_allowed(pid, model, denied):
+            continue
+        pair = (pid, model)
+        if pair not in seen:
+            seen.add(pair)
+            out.append(pair)
+    if prefer and model_allowed(pid, prefer, denied):
+        pair = (pid, prefer)
+        if pair not in seen:
+            out.insert(0, pair)
+    return out
+
+
+def _rank_pairs(
+    pairs: list[tuple[str, str | None]],
+    *,
+    preference: float,
+    roster: list[tuple[str, str | None]] | None = None,
+) -> list[tuple[str, str | None]]:
+    """Non-local first, then closest to the slider's strength target."""
+    s = clamp_preference(preference)
+    target = 0.22 + 0.70 * s
+    roster_set = set(roster or [])
+    def _key(pair: tuple[str, str | None]) -> tuple[Any, ...]:
+        pid, model = pair
+        local = 1 if pid in LOCAL_PROVIDER_IDS or provider_category(pid) == "local" else 0
+        st = model_strength(model)
+        dist = abs(st - target)
+        in_roster = 0 if pair in roster_set else 1
+        # Tie-break: Maximum prefers the stronger of two equally close
+        # models; Economy prefers the cheaper.
+        pull = -st if s >= 0.5 else st
+        return (local, dist, in_roster, pull)
+    return sorted(pairs, key=_key)
+
+
+def _diverse_assign(
+    ranked: list[tuple[str, str | None]],
+    n: int,
+) -> list[tuple[str, str | None]]:
+    """Fill n slots with unused (provider, family) pairs, then leftovers."""
+    if not ranked:
+        return []
+    n = max(1, n)
+    out: list[tuple[str, str | None]] = []
+    used_fam: set[tuple[str, str]] = set()
+    used_pair: set[tuple[str, str | None]] = set()
+    for pair in ranked:
+        fam = (pair[0], model_family(pair[1]))
+        if fam in used_fam:
+            continue
+        out.append(pair)
+        used_fam.add(fam)
+        used_pair.add(pair)
+        if len(out) >= n:
+            return out
+    rest = [p for p in ranked if p not in used_pair] or ranked
+    i = 0
+    while len(out) < n:
+        out.append(rest[i % len(rest)])
+        i += 1
+    return out
+
+
 def allocate_models(
     n: int,
     *,
@@ -582,15 +874,23 @@ def allocate_models(
     available: list[tuple[str, str]] | None = None,
     playbook_roster: list[tuple[str, str | None]] | None = None,
     bucket: str = "",
+    denied_models: list[str] | None = None,
 ) -> list[tuple[str, str | None]]:
     """Diversity-aware (provider, model) assignment.
 
     Channel layer (who can talk) is separate from policy (what to buy):
 
-    * rail picker is always first and is never blocked by cooldowns;
-    * last-good desk roster is a sort hint, not a lock-in;
-    * other keyed providers fill remaining independent slots;
+    * keyed non-local catalogs (Copilot, subscriptions, BYOK) outrank
+      local MLX/Ollama whenever the user has made them available;
+    * the rail picker is a hint, not a lock — Auto will not stay on
+      MLX just because the picker is local;
+    * dashboard denylist (``orchestration_denied_models``) is the
+      user-facing allowlist for the chief of staff;
+    * last-good desk roster is a sort hint among allowed remotes;
     * cooled-down probes (weekly limit, dead local server) are skipped;
+    * the effort slider picks a strength band (Economy = cheaper /
+      smaller, Maximum = flagship) and how much independent fan-out
+      to buy;
     * the CE model ladder is not consulted — Auto owns this roster.
 
     Intra-provider catalogs (Copilot GPT vs Claude vs Gemini) still
@@ -601,26 +901,28 @@ def allocate_models(
     from . import orchestration_health as health
     n = max(1, n)
     default = (default_provider, default_model)
-    if n == 1 or independence == "low":
-        return [default] * n
+    denied = denied_models if denied_models is not None else get_denied_models()
 
-    pairs: list[tuple[str, str | None]] = []
-    seen: set[tuple[str, str | None]] = set()
+    keyed = available
+    if keyed is None:
+        if os.environ.get("PYTEST_CURRENT_TEST"):
+            keyed = [(default_provider, default_model or "")] if default_provider else []
+        else:
+            keyed = list_keyed_providers()
 
-    def _add(pid: str | None, model: str | None, *, force: bool = False) -> None:
+    pids: list[str] = []
+    hint_by_pid: dict[str, str | None] = {}
+    for pid, model in keyed:
         if not pid:
-            return
-        if not admin_policy.provider_allowed(pid):
-            return
-        if not force and pid != default_provider and not health.is_available(pid):
-            return
-        key = (pid, model)
-        if key in seen:
-            return
-        seen.add(key)
-        pairs.append(key)
-
-    _add(default_provider, default_model, force=True)
+            continue
+        if pid not in pids:
+            pids.append(pid)
+        hint_by_pid.setdefault(pid, model)
+    if default_provider and default_provider not in pids:
+        pids.insert(0, default_provider)
+        hint_by_pid[default_provider] = default_model
+    elif default_provider and default_model and not hint_by_pid.get(default_provider):
+        hint_by_pid[default_provider] = default_model
 
     roster = playbook_roster
     if roster is None:
@@ -628,41 +930,78 @@ def allocate_models(
             roster = orchestrator_fs.preferred_roster(workspace, bucket=bucket)
         except Exception:  # noqa: BLE001
             roster = []
-    for pid, model in roster or []:
-        _add(pid, model)
 
-    keyed = available if available is not None else list_keyed_providers()
-    if independence == "high" and preference >= 0.45:
-        for pid, model in keyed:
-            _add(pid, model)
+    remote_pids = [
+        pid for pid in pids
+        if provider_category(pid) != "local" and pid not in LOCAL_PROVIDER_IDS
+    ]
+    local_pids = [
+        pid for pid in pids
+        if pid not in remote_pids
+    ]
 
-    # Intra-provider expansion when we still lack independent families.
-    if independence != "low" and (
-        len({p for p, _ in pairs}) <= 1 or len(pairs) < n
-    ):
-        pids: list[str] = []
-        for pid, _m in pairs:
-            if pid not in pids:
-                pids.append(pid)
-        for pid, _m in keyed:
-            if pid not in pids:
-                pids.append(pid)
-        if default_provider and default_provider not in pids:
-            pids.append(default_provider)
-        for pid in pids:
-            if pid != default_provider and not health.is_available(pid):
-                continue
-            prefer = default_model if pid == default_provider else None
-            for model in _diverse_catalog(pid, prefer=prefer):
-                _add(pid, model)
+    pool: list[tuple[str, str | None]] = []
+    seen: set[tuple[str, str | None]] = set()
 
-    if not pairs:
-        pairs = [default]
+    def _extend(pid: str, *, require_health: bool) -> None:
+        if not pid or not admin_policy.provider_allowed(pid):
+            return
+        if require_health and not health.is_available(pid):
+            return
+        prefer = hint_by_pid.get(pid)
+        if pid == default_provider and default_model:
+            prefer = default_model
+        for pair in _catalog_pairs(pid, prefer=prefer, denied=denied):
+            if pair not in seen:
+                seen.add(pair)
+                pool.append(pair)
 
-    out: list[tuple[str, str | None]] = []
-    for i in range(n):
-        out.append(pairs[i % len(pairs)])
-    return out
+    for pid in remote_pids:
+        _extend(pid, require_health=True)
+    if not pool:
+        for pid in local_pids:
+            _extend(pid, require_health=True)
+    if not pool:
+        for pid in remote_pids + local_pids:
+            _extend(pid, require_health=False)
+    if not pool:
+        if admin_policy.provider_allowed(default_provider) and model_allowed(
+            default_provider, default_model, denied,
+        ):
+            pool = [default]
+        else:
+            pool = [default]
+
+    ranked = _rank_pairs(pool, preference=preference, roster=list(roster or []))
+    if not ranked:
+        ranked = [default]
+
+    if n == 1 or independence == "low":
+        return [ranked[0]] * n
+    return _diverse_assign(ranked, n)
+
+
+def pick_chief_pair(
+    *,
+    default_provider: str,
+    default_model: str | None,
+    preference: float,
+    workspace: Path,
+    available: list[tuple[str, str]] | None = None,
+    denied_models: list[str] | None = None,
+) -> tuple[str, str | None]:
+    """Single model for the chief / a one-node Auto or CE curator run."""
+    alloc = allocate_models(
+        1,
+        independence="low",
+        preference=preference,
+        default_provider=default_provider,
+        default_model=default_model,
+        workspace=workspace,
+        available=available,
+        denied_models=denied_models,
+    )
+    return alloc[0]
 
 
 def format_allocation_notice(

@@ -166,6 +166,91 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
       }),
     });
   });
+  await page.route("**/api/orchestration/models", async (route) => {
+    if (route.request().method() === "POST") {
+      const posted = route.request().postDataJSON() as { key?: string; allowed?: boolean };
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          denied: posted.allowed === false ? [posted.key] : [],
+          models: [
+            {
+              key: "github_copilot/gpt-5.4",
+              provider: "github_copilot",
+              provider_label: "GitHub Copilot",
+              model: "gpt-5.4",
+              category: "subscription",
+              local: false,
+              allowed: posted.key === "github_copilot/gpt-5.4" ? Boolean(posted.allowed) : true,
+              strength: 0.76,
+            },
+            {
+              key: "github_copilot/claude-sonnet-4.6",
+              provider: "github_copilot",
+              provider_label: "GitHub Copilot",
+              model: "claude-sonnet-4.6",
+              category: "subscription",
+              local: false,
+              allowed: true,
+              strength: 0.66,
+            },
+            {
+              key: "mlx/qwen2.5-7b-instruct",
+              provider: "mlx",
+              provider_label: "MLX (Apple silicon)",
+              model: "qwen2.5-7b-instruct",
+              category: "local",
+              local: true,
+              allowed: true,
+              strength: 0.26,
+            },
+          ],
+        }),
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        denied: [],
+        models: [
+          {
+            key: "github_copilot/gpt-5.4",
+            provider: "github_copilot",
+            provider_label: "GitHub Copilot",
+            model: "gpt-5.4",
+            category: "subscription",
+            local: false,
+            allowed: true,
+            strength: 0.76,
+          },
+          {
+            key: "github_copilot/claude-sonnet-4.6",
+            provider: "github_copilot",
+            provider_label: "GitHub Copilot",
+            model: "claude-sonnet-4.6",
+            category: "subscription",
+            local: false,
+            allowed: true,
+            strength: 0.66,
+          },
+          {
+            key: "mlx/qwen2.5-7b-instruct",
+            provider: "mlx",
+            provider_label: "MLX (Apple silicon)",
+            model: "qwen2.5-7b-instruct",
+            category: "local",
+            local: true,
+            allowed: true,
+            strength: 0.26,
+          },
+        ],
+      }),
+    });
+  });
   await page.route("**/api/rail/events**", async (route) => {
     await route.fulfill({
       status: 200,
@@ -208,6 +293,13 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
   await expect(space.getByRole("heading", { name: "Blackboard" })).toBeVisible();
 
   await expect(page.getByRole("heading", { name: "Recently finished" })).toHaveCount(0);
+  const models = page.locator(".sy-orch-models");
+  await expect(models.getByRole("heading", { name: "Chief of staff models" })).toBeVisible();
+  await expect(models.getByText("GitHub Copilot")).toBeVisible();
+  const gpt = models.getByRole("checkbox", { name: "gpt-5.4" });
+  await expect(gpt).toBeChecked();
+  await gpt.uncheck();
+  await expect(gpt).not.toBeChecked();
   await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
   await expect(page.getByRole("button", { name: "+ schedule" })).toBeVisible();
 

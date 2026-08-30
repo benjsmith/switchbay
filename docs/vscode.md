@@ -23,7 +23,7 @@ product — see the root README.
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.3.10.vsix
+   code --install-extension dist/switchbay-vs-0.3.11.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).
@@ -40,7 +40,7 @@ Sideload installs do **not** auto-update. Same id
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.3.10.vsix
+code --install-extension dist/switchbay-vs-0.3.11.vsix
 ```
 
 Then **Developer: Reload Window**. Or Command Palette → **Switch Bay VS:
@@ -87,9 +87,10 @@ Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (cheap pyp
 - **Orchestrator** — Economy → Maximum. Agent count is an outcome of this
   slider, not a second control. Workspace setting
   `switchbay.orchestrationPreference`. Economy is CE’s single-session
-  fallback (the Curator *is* the worker). Balanced/Maximum may spawn at
-  most two CE worker agents (NumericReviewer, TableExtractor, …) in one
-  turn. Auto desks still use two Investigators.
+  fallback on a **local** model (the Curator *is* the worker). On a
+  provider, Balanced/Maximum dispatch CE workers (NumericReviewer,
+  TableExtractor, page workers, then BatchReviewer) as the skill’s
+  planner → workers → reviewer wave. Auto desks still use Investigators.
 - **Custom agents** — Chat personas (`.agent.md`). `/create-agent` writes
   `.github/agents/`. Not the same as Skills.
 - **Skills** — `SKILL.md` toolkits (`curiosity-engine`, …).

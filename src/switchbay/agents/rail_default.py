@@ -148,8 +148,9 @@ Curation (when the user says curate / improve the wiki / /curate):
   · Writes: ce_score_diff(new_text) → ce_scrub_check → ce_wiki_commit.
     propose_wiki_page is not the curator write path. Charter:
     propose_charter_edit (Reviews).
-  · Workers: ce_dispatch_worker or Copilot NumericReviewer /
-    TableExtractor / FigureExtractor / BatchReviewer / Link*.
+  · Workers: ce_dispatch_worker (fan-out in one turn, then
+    batch_reviewer) or Copilot NumericReviewer / TableExtractor /
+    FigureExtractor / BatchReviewer / Link*. Local: you are the worker.
   · load_skill('curiosity-engine', section='…') for the mode protocol
     if prime is not enough. Never detail=full first. Never delete pages.
 

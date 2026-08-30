@@ -236,62 +236,12 @@ def dispatch_worker(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
             "MCP has no model; do not expect this tool to complete the worker."
         )
         return result
-    completed = _try_complete_worker(workspace, filled, role)
-    if completed is not None:
-        result["text"] = completed
-        result["note"] = "fresh-context worker completion (no tools)"
-    else:
-        result["note"] = (
-            "No worker completion (no provider). Run this prompt in-session "
-            "(CE single-session fallback) or configure a CE worker model."
-        )
+    result["note"] = (
+        "PWA host completes this as a fresh-context child run when a "
+        "non-local provider is keyed. Local hosts run the prompt "
+        "in-session (CE single-session fallback)."
+    )
     return result
-
-
-def _try_complete_worker(workspace: Path, prompt: str, role: str) -> str | None:
-    """Best-effort one-shot. Failure returns None (orchestrator fallback)."""
-    try:
-        from . import llmgateway, modestore
-    except Exception:
-        return None
-    difficulty = "hard" if "review" in role or "classifier" in role else "normal"
-    try:
-        pid, model = modestore.resolve_for_difficulty(workspace, difficulty)
-    except Exception:
-        return None
-    if not pid:
-        return None
-    try:
-        provider = llmgateway.get(pid)
-    except llmgateway.ProviderError:
-        return None
-    if not provider.has_key():
-        return None
-    try:
-        import asyncio
-
-        async def _run() -> str:
-            req = llmgateway.ChatRequest(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                max_tokens=4096,
-                workspace=str(workspace),
-                reasoning=False,
-            )
-            chunks: list[str] = []
-            async for ev in provider.chat_stream(req):
-                text = getattr(ev, "text", None)
-                if text:
-                    chunks.append(text)
-            return "".join(chunks)
-
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return asyncio.run(_run())
-        return None
-    except Exception:
-        return None
 
 
 def write_temp(workspace: Path, name: str, text: str) -> Path:

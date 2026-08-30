@@ -4,8 +4,9 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
  * Cost/performance preference for Auto orchestration.
  * Economy ← Balanced → Maximum.
  *
- * This control sets utility weights (how much extra quality is worth
- * buying). Agent count is an *output* of the policy, not this slider.
+ * This control sets how much independent fan-out Auto may buy and how
+ * readily it recruits the strongest/most expensive allowed models.
+ * Agent count is still an *output* of the policy, not a direct N.
  * Explicit N still exists as `/route` / `n≥2` on the wire.
  */
 
@@ -63,7 +64,7 @@ export function useOrchestrationControl(): { node: ReactNode; opts: OrchOpts } {
   const node = (
     <div
       className="sy-orch"
-      title="How much extra quality Auto may buy. Agent count is an outcome, not this control."
+      title="How much fan-out Auto may buy, and how easily it recruits the strongest allowed models."
     >
       <span className="sy-orch-end">Economy</span>
       <input

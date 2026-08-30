@@ -83,7 +83,7 @@ Custom agents: Auto, Curator, Reviewer. Investigator is subagent-only.
 
 ```
 make vsix
-code --install-extension dist/switchbay-vs-0.3.10.vsix
+code --install-extension dist/switchbay-vs-0.3.11.vsix
 ```
 
 That same command **updates** an older sideload (same `publisher` + `name`). Then **Developer: Reload Window**. Command Palette → **Switch Bay VS: Update extension…** walks the same path if `dist/*.vsix` is already built.

@@ -713,7 +713,8 @@ register(Tool(
         "numeric_transcription_review, batch_reviewer, link_proposer, "
         "link_classifier, worker, notes_curator, summary_table_builder. "
         "VS Code: spawn the named Copilot agent with the returned prompt. "
-        "PWA: completes one fresh-context worker when a provider is keyed."
+        "PWA: the host runs a fresh-context child run (read tools) when a "
+        "non-local provider is keyed; local stays in-session."
     ),
     input_schema={
         "type": "object",

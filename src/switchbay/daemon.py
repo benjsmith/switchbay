@@ -898,6 +898,7 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "embedding_vendors_keyed": vendor_keyed,
         "media": media,
         "orchestration_preference": orchestration_policy.get_preference(),
+        "orchestration_denied_models": orchestration_policy.get_denied_models(),
     })
 
 
@@ -924,6 +925,17 @@ async def handle_settings_post(request: web.Request) -> web.Response:
                 log.exception("rail-history relocation failed for %s", workspace)
     if "orchestration_preference" in body:
         orchestration_policy.set_preference(body["orchestration_preference"])
+    if "orchestration_denied_models" in body:
+        raw = body["orchestration_denied_models"]
+        if raw is None:
+            orchestration_policy.set_denied_models([])
+        elif isinstance(raw, list):
+            orchestration_policy.set_denied_models([str(x) for x in raw])
+        else:
+            return web.json_response(
+                {"error": "orchestration_denied_models must be a list"},
+                status=400,
+            )
     if "embedding_backend" in body:
         try:
             app_settings.set_embedding_backend(str(body["embedding_backend"]))
@@ -975,6 +987,68 @@ async def handle_orchestration_policy_get(request: web.Request) -> web.Response:
     """
     workspace: Path = request.app["workspace"]
     return web.json_response(orchestration_policy.inspect_state(workspace))
+
+
+async def handle_orchestration_models_get(request: web.Request) -> web.Response:
+    """Catalog the chief of staff may draw from, plus the denylist.
+
+    Runs off the event loop: listing keyed providers can walk a large
+    Hugging Face cache (MLX/llama.cpp ``has_key``).
+    """
+    def _payload() -> dict:
+        return {
+            "models": orchestration_policy.list_orchestrator_catalog(),
+            "denied": orchestration_policy.get_denied_models(),
+            "preference": orchestration_policy.get_preference(),
+        }
+
+    return web.json_response(await asyncio.to_thread(_payload))
+
+
+async def handle_orchestration_models_post(request: web.Request) -> web.Response:
+    """Update the chief-of-staff model allowlist.
+
+    Body: ``{key, allowed}`` toggles one catalog row, or
+    ``{denied: ["provider/model", ...]}`` replaces the denylist.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    if "denied" in body:
+        raw = body.get("denied")
+        if raw is None:
+            pass
+        elif not isinstance(raw, list):
+            return web.json_response({"error": "denied must be a list"}, status=400)
+    elif "key" in body:
+        key = str(body.get("key") or "").strip()
+        if not key:
+            return web.json_response({"error": "key required"}, status=400)
+    else:
+        return web.json_response(
+            {"error": "expected {key, allowed} or {denied}"}, status=400,
+        )
+
+    def _apply() -> dict:
+        if "denied" in body:
+            raw = body.get("denied")
+            orchestration_policy.set_denied_models(
+                [] if raw is None else [str(x) for x in raw],
+            )
+        else:
+            orchestration_policy.set_model_allowed(
+                str(body.get("key") or "").strip(),
+                bool(body.get("allowed")),
+            )
+        return {
+            "ok": True,
+            "models": orchestration_policy.list_orchestrator_catalog(),
+            "denied": orchestration_policy.get_denied_models(),
+            "preference": orchestration_policy.get_preference(),
+        }
+
+    return web.json_response(await asyncio.to_thread(_apply))
 
 
 def _schedule_registry_paths(app: web.Application) -> list[str]:
@@ -3511,6 +3585,7 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
             command="curate",
             task_kind="curation",
             constrained=constrained,
+            lock_provider=bool(provider),
         ))
     else:
         task = asyncio.create_task(_dispatch_chat(
@@ -7720,6 +7795,40 @@ def _review_feedback_system(workspace: Path) -> str:
     )
 
 
+def _auto_roster_pair(
+    workspace: Path,
+    *,
+    hint_pid: str | None = None,
+    hint_model: str | None = None,
+    preference: float | None = None,
+) -> tuple[str, str | None]:
+    """Chief-of-staff (provider, model) given the picker as a hint.
+
+    Non-local keyed catalogs (Copilot, …) outrank a local rail picker.
+    Dashboard denylist still wins.
+    """
+    pid = hint_pid or _resolve_default_provider()
+    model = hint_model or _effective_model(pid) or None
+    pref = (
+        orchestration_policy.clamp_preference(preference)
+        if preference is not None
+        else orchestration_policy.get_preference()
+    )
+    try:
+        chosen_pid, chosen_model = orchestration_policy.pick_chief_pair(
+            default_provider=pid,
+            default_model=model,
+            preference=pref,
+            workspace=workspace,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("auto roster pick failed; using %s/%s", pid, model)
+        return pid, model
+    if chosen_pid:
+        return chosen_pid, chosen_model
+    return pid, model
+
+
 def _ce_action_provider(workspace: Path) -> tuple[str | None, str | None]:
     """Which provider runs the ORCHESTRATOR of a CE action (curate /
     ingest / add-source).
@@ -7730,35 +7839,34 @@ def _ce_action_provider(workspace: Path) -> tuple[str | None, str | None]:
     is the top-level agent this function routes; workers/sub-calls are
     resolved per-difficulty inside the fan-out path.
 
-    The `hard` rung **defaults to the picker selection**: when it is
-    unset, this returns `(None, None)` and the caller runs the CE
-    action on the workspace default provider (the model in the rail
-    picker). So `/curate` with Opus selected starts the orchestrator on
-    Opus. The user opts into a *different* orchestrator by pinning the
-    `hard` rung (Settings → CE curation → Override, or a per-run
-    override), which is the only case this returns a concrete provider.
+    A pinned `hard` rung (Settings → CE curation → Override, or a
+    per-run override) still wins. When that rung is unset, Auto's
+    roster picks the model: Copilot/other non-local catalogs outrank
+    a local rail picker, and the Agent Dashboard denylist applies.
+    ``/curate`` stays one CE curator — this only chooses which model
+    drives it.
 
-    Returns `(None, None)` (→ picker/default) when the `hard` rung is:
-      · unset (the default — follow the picker);
+    Returns the Auto roster pair when the `hard` rung is:
+      · unset (the default);
       · unknown / keyless / unavailable; or
-      · not execute-capable (`llmgateway.can_execute`) — a propose-only
-        provider cannot curate, so we fall back rather than silently
-        degrade to proposals (the 2026-07-24 curator bug).
+      · not curate-capable — a propose-only provider cannot curate, so
+        we fall back rather than silently degrade to proposals (the
+        2026-07-24 curator bug).
     """
     rung_pid, rung_model = modestore.resolve_for_difficulty(workspace, "hard")
     if not rung_pid:
-        return None, None
+        return _auto_roster_pair(workspace)
     try:
         p = llmgateway.get(rung_pid)
     except llmgateway.ProviderError:
-        return None, None
+        return _auto_roster_pair(workspace)
     if not p.has_key():
-        return None, None
+        return _auto_roster_pair(workspace)
     if not llmgateway.can_curate(rung_pid):
         log.info(
             "CE action: hard rung %s cannot curate; "
-            "falling back to the picker/default provider", rung_pid)
-        return None, None
+            "falling back to the Auto roster", rung_pid)
+        return _auto_roster_pair(workspace)
     return rung_pid, rung_model
 
 
@@ -7789,7 +7897,10 @@ _CURATE_TOOLS = (
     "create → wire → repair. Use ce_sweep / ce_run for queue verbs. "
     "Writes: ce_score_diff(new_text) → "
     "ce_scrub_check → ce_wiki_commit. Workers: ce_dispatch_worker "
-    "(roles in .curator/prompts.md). load_skill('curiosity-engine', "
+    "(roles in .curator/prompts.md) — dispatch the wave's workers in "
+    "ONE turn, then one batch_reviewer. The host runs each worker as "
+    "a fresh-context child run when a non-local provider is keyed. "
+    "load_skill('curiosity-engine', "
     "section='…') only for the mode protocol — never detail=full first. "
     "Never delete pages. Never invent numbers."
 )
@@ -9004,6 +9115,7 @@ async def _dispatch_auto(
     command: str | None = None,
     task_kind: str | None = None,
     constrained: bool = False,
+    lock_provider: bool = False,
 ) -> str | None:
     """Default chat path: Auto orchestration.
 
@@ -9036,13 +9148,32 @@ async def _dispatch_auto(
     decision = orchestration_policy.decide(features, state=state)
     if task_kind:
         decision.reason = f"{task_kind}: {decision.reason}"
+    if lock_provider and provider_override:
+        pid = provider_override
+        model = model_override or _effective_model(pid)
+    else:
+        pid, model = _auto_roster_pair(
+            workspace,
+            hint_pid=provider_override or _resolve_default_provider(),
+            hint_model=model_override,
+            preference=pref,
+        )
+    local_pid = (
+        pid in orchestration_policy.LOCAL_PROVIDER_IDS
+        or orchestration_policy.provider_category(pid) == "local"
+    )
+    # Provider-backed /curate is always the CE curator node so it can
+    # dispatch Phase 2 workers. Local stays the single-session fallback.
+    ce_provider_wave = (
+        task_kind == "curation" and not constrained and not local_pid
+    )
     plain_single = (
         decision.strategy == "single"
         and not decision.include_verify
         and not decision.include_execute
         and decision.n_investigators <= 1
     )
-    if plain_single:
+    if plain_single and not ce_provider_wave:
         await _chat_notice(
             app, ws,
             f"Auto: single run — {decision.reason}.",
@@ -9052,8 +9183,8 @@ async def _dispatch_auto(
         run_id = await _dispatch_chat(
             app, ws, text, workspace_override=workspace_override,
             thread_id_override=thread_id_override,
-            provider_override=provider_override,
-            model_override=model_override,
+            provider_override=pid,
+            model_override=model,
             input_excerpt=input_excerpt,
             extra_system=extra_system,
             command=command,
@@ -9083,7 +9214,6 @@ async def _dispatch_auto(
             }, workspace)
         return run_id
 
-    pid = provider_override or _resolve_default_provider()
     try:
         provider = llmgateway.get(pid)
     except llmgateway.ProviderError as e:
@@ -9098,10 +9228,7 @@ async def _dispatch_auto(
         return None
 
     parent_run_id = f"run-{uuid.uuid4().hex[:8]}"
-    model = (
-        model_override or _effective_model(pid)
-        or provider.PROVIDER.get("default_model")
-    )
+    model = model or provider.PROVIDER.get("default_model")
     n = decision.n_investigators
     runs: dict[str, dict[str, Any]] = app.setdefault("runs", {})
     runs[parent_run_id] = {
@@ -15349,6 +15476,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/settings", handle_settings_post)
     app.router.add_get("/api/orchestration/policy", handle_orchestration_policy_get)
     app.router.add_post("/api/orchestration/policy/reset", handle_orchestration_policy_reset)
+    app.router.add_get("/api/orchestration/models", handle_orchestration_models_get)
+    app.router.add_post("/api/orchestration/models", handle_orchestration_models_post)
     app.router.add_get("/api/schedules", handle_schedules_list)
     app.router.add_post("/api/schedules", handle_schedules_create)
     app.router.add_patch("/api/schedules/{sid}", handle_schedules_update)
