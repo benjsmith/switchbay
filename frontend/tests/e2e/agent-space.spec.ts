@@ -208,6 +208,8 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
   await expect(space.getByRole("heading", { name: "Blackboard" })).toBeVisible();
 
   await expect(page.getByRole("heading", { name: "Recently finished" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "+ schedule" })).toBeVisible();
 
   const runBoxes = await page.locator(".sy-agents-run").evaluateAll((els) =>
     els.map((el) => {

@@ -57,3 +57,25 @@ def test_update_and_delete(tmp_path):
     assert not schedules.is_due(updated)
     assert schedules.delete(tmp_path, sid)
     assert schedules.get(tmp_path, sid) is None
+
+
+def test_global_store_and_list_all(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    ws = tmp_path / "wiki-a"
+    ws.mkdir()
+    local = schedules.create(ws, title="desk", prompt="/curate this wiki", frequency="hourly")
+    glob = schedules.create(None, title="all-curate", prompt="/curate", frequency="daily")
+    rows = schedules.list_all([str(ws)])
+    assert [r["title"] for r in rows] == ["all-curate", "desk"]
+    assert rows[0]["scope"] == "global"
+    assert rows[0]["workspace"] is None
+    assert rows[1]["scope"] == "workspace"
+    assert rows[1]["workspace"] == str(ws)
+    found = schedules.locate(glob["id"], [str(ws)])
+    assert found is not None
+    store, item = found
+    assert store is None
+    assert item["title"] == "all-curate"
+    found_ws = schedules.locate(local["id"], [str(ws)])
+    assert found_ws is not None
+    assert found_ws[0] == ws

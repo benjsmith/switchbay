@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ReasoningRow } from "../../rail/Rail";
 import SkillsPanel from "./SkillsPanel";
+import SchedulesPanel from "../schedules/SchedulesPanel";
 import AgentSpace, {
   CHIEF_ID,
   isOrchestrationRun,
@@ -594,6 +595,14 @@ export default function AgentDashboardTab() {
         </Section>
       )}
 
+      <Section
+        title="Schedules"
+        count={undefined}
+        subtitle="start / pause / stop · this workspace or all wikis"
+      >
+        <SchedulesPanel compact />
+      </Section>
+
       <Section title="Tools" count={tools?.length}>
         {tools === null ? <Loading /> : tools.length === 0 ? (
           <Empty>No tools registered.</Empty>
@@ -1166,8 +1175,9 @@ function RunRow(props: {
           data-finished={finished ? "true" : undefined}
           title={finished ? "finished" : stale ? "no recent activity" : "active"}
         />
-        <code className="sy-agents-name">{run.run_id}</code>
         <div className="sy-agents-run-main">
+        <div className="sy-agents-run-idline">
+        <code className="sy-agents-name">{run.run_id}</code>
         <span className="sy-agents-run-meta">
           <code>{run.provider}</code>
           <span className="sy-agents-arrow">·</span>
@@ -1215,6 +1225,7 @@ function RunRow(props: {
             </>
           )}
         </span>
+        </div>
         <span className="sy-agents-run-input" title={run.input_excerpt}>
           “{run.input_excerpt}”
         </span>
@@ -1242,8 +1253,6 @@ function RunRow(props: {
             {run.tokens} tok
           </span>
         )}
-        </div>
-        </div>
         {typeof workerCount === "number" && workerCount > 0 && (
           <button
             type="button"
@@ -1270,6 +1279,8 @@ function RunRow(props: {
               : `· ${workerCount}`}
           </button>
         )}
+        </div>
+        </div>
         <span className="sy-agents-run-actions">
           {!finished && !run.is_background && (
             <button

@@ -435,7 +435,7 @@ export default function AgentSpace({
       // so siblings don't sit on top of each other.
       const tx = (n.kind === "chief" || n.kind === "blackboard")
         ? 0
-        : (0.62 * proj.x + 0.38 * spread * 1.6);
+        : (0.22 * proj.x + 0.78 * spread * 2.35);
       const ty = n.kind === "chief" ? -0.82 : (-0.72 + (1.55 * n.depth) / maxD);
       const prev = map.get(n.id);
       map.set(n.id, {

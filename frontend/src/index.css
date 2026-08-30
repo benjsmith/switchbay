@@ -3723,6 +3723,7 @@ a.sy-source-cite { color: var(--accent); }
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   background: transparent;
   border: 0;
   color: var(--text-muted);
@@ -3732,6 +3733,12 @@ a.sy-source-cite { color: var(--accent); }
   text-align: left;
 }
 .sy-agent-space-roster-btn:hover { color: var(--text); }
+.sy-agent-space-roster-btn code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sy-agent-space-swatch {
   width: 8px;
   height: 8px;
@@ -3755,18 +3762,25 @@ a.sy-source-cite { color: var(--accent); }
 }
 .sy-agent-space-msg-route {
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 6px;
   font-size: 11px;
   color: var(--text-muted);
+  min-width: 0;
 }
 .sy-agent-space-msg-route span:first-child,
 .sy-agent-space-msg-route span:nth-child(3) {
   font-family: var(--font-mono);
   color: var(--text);
   font-size: 11px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .sy-agent-space-msg-kind {
+  flex: 0 0 auto;
   margin-left: auto;
   font-size: 10px;
   letter-spacing: 0.04em;
@@ -3778,6 +3792,7 @@ a.sy-source-cite { color: var(--accent); }
   color: var(--text);
   line-height: 1.35;
   padding-left: 2px;
+  overflow-wrap: anywhere;
 }
 
 /* ── Schedules tab ─────────────────────────────────────────────── */
@@ -3853,7 +3868,19 @@ a.sy-source-cite { color: var(--accent); }
   border-radius: 999px;
   padding: 1px 7px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
+.sy-schedules-chip--global {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+.sy-schedules-chip--live {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.sy-schedules-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sy-schedules-toolbar { display: flex; gap: 8px; }
+.sy-schedules-freq-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .sy-schedules-btn {
   font-size: 11px;
   border: 1px solid var(--line);
@@ -3886,7 +3913,7 @@ a.sy-source-cite { color: var(--accent); }
   padding: 6px 8px;
 }
 .sy-schedules-textarea { font-family: var(--font-mono, ui-monospace, monospace); }
-.sy-schedules-freq-row { display: flex; gap: 8px; align-items: center; }
+.sy-schedules-freq-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .sy-schedules-input--n { width: 5em; }
 .sy-schedules-check { font-size: 12px; display: flex; gap: 6px; align-items: center; }
 .sy-schedules-editor-actions { display: flex; gap: 8px; }
@@ -4462,16 +4489,25 @@ a.sy-source-cite { color: var(--accent); }
 }
 .sy-agents-run {
   display: grid;
-  grid-template-columns: 12px 12px minmax(64px, 120px) minmax(0, 1fr) auto auto;
+  grid-template-columns: 12px 12px minmax(0, 1fr) auto;
   gap: 8px 10px;
   align-items: start;
   min-width: 0;
+  overflow: hidden;
 }
 .sy-agents-run-main {
   min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
+  overflow: hidden;
+}
+.sy-agents-run-idline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px 10px;
+  min-width: 0;
 }
 .sy-agents-run-extras {
   display: flex;
@@ -4499,10 +4535,12 @@ a.sy-source-cite { color: var(--accent); }
 }
 .sy-agents-run-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   font-size: 11px;
   color: var(--text-muted);
+  min-width: 0;
 }
 .sy-agents-run-meta code {
   font-size: 11px;
@@ -4676,6 +4714,9 @@ a.sy-source-cite { color: var(--accent); }
   color: var(--text-muted);
   cursor: pointer;
   white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .sy-agents-run-workerchip:hover {
   color: var(--text);

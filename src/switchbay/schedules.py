@@ -1,8 +1,10 @@
-"""Workspace Auto schedules — overnight desks and other recurring prompts.
+"""Auto schedules — overnight desks and other recurring prompts.
 
-Stored in ``<workspace>/.workbench/state/schedules.json`` so they roam
-with the vault. The daemon ticks every ~20s and fires due items via
-Auto in that workspace (not necessarily the focused one).
+Workspace-scoped items live in
+``<workspace>/.workbench/state/schedules.json`` so they roam with the
+vault. Global items (run the prompt in every registered workspace)
+live in ``$XDG_CONFIG_HOME/switchbay/schedules.json``. The daemon ticks
+every ~20s and fires due items via Auto.
 """
 
 from __future__ import annotations
@@ -19,17 +21,23 @@ from . import atomicio
 VERSION = 1
 FREQUENCIES = ("hourly", "daily", "weekly", "every_n_hours")
 
+# ``None`` as a store means the machine-level global schedule file.
+Store = Path | None
 
-def _path(workspace: Path) -> Path:
-    return Path(workspace) / ".workbench" / "state" / "schedules.json"
+
+def _file(store: Store) -> Path:
+    if store is None:
+        from . import workspaces
+        return workspaces.config_dir() / "schedules.json"
+    return Path(store) / ".workbench" / "state" / "schedules.json"
 
 
 def empty() -> dict[str, Any]:
     return {"version": VERSION, "items": []}
 
 
-def load(workspace: Path) -> dict[str, Any]:
-    p = _path(workspace)
+def load(store: Store) -> dict[str, Any]:
+    p = _file(store)
     if not p.is_file():
         return empty()
     try:
@@ -45,22 +53,71 @@ def load(workspace: Path) -> dict[str, Any]:
     return data
 
 
-def save(workspace: Path, data: dict[str, Any]) -> None:
-    p = _path(workspace)
+def save(store: Store, data: dict[str, Any]) -> None:
+    p = _file(store)
     p.parent.mkdir(parents=True, exist_ok=True)
     data = dict(data)
     data["version"] = VERSION
     atomicio.write_json_atomic(p, data)
 
 
-def list_items(workspace: Path) -> list[dict[str, Any]]:
-    return list(load(workspace).get("items") or [])
+def list_items(store: Store) -> list[dict[str, Any]]:
+    return list(load(store).get("items") or [])
 
 
-def get(workspace: Path, sid: str) -> dict[str, Any] | None:
-    for it in list_items(workspace):
+def get(store: Store, sid: str) -> dict[str, Any] | None:
+    for it in list_items(store):
         if str(it.get("id") or "") == sid:
             return it
+    return None
+
+
+def annotate(
+    item: dict[str, Any],
+    *,
+    scope: str,
+    workspace: Path | None,
+    name: str,
+) -> dict[str, Any]:
+    out = dict(item)
+    out["scope"] = scope
+    out["workspace"] = str(workspace) if workspace is not None else None
+    out["workspace_name"] = name
+    return out
+
+
+def list_all(paths: list[str]) -> list[dict[str, Any]]:
+    """Global items first, then each registered workspace."""
+    out: list[dict[str, Any]] = []
+    for it in list_items(None):
+        out.append(annotate(it, scope="global", workspace=None, name="all workspaces"))
+    seen: set[str] = set()
+    for raw in paths:
+        p = Path(str(raw))
+        key = str(p)
+        if key in seen or not p.is_dir():
+            continue
+        seen.add(key)
+        for it in list_items(p):
+            out.append(annotate(it, scope="workspace", workspace=p, name=p.name))
+    return out
+
+
+def locate(sid: str, paths: list[str]) -> tuple[Store, dict[str, Any]] | None:
+    """Find a schedule by id in the global store or any workspace."""
+    hit = get(None, sid)
+    if hit is not None:
+        return None, hit
+    seen: set[str] = set()
+    for raw in paths:
+        p = Path(str(raw))
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        hit = get(p, sid)
+        if hit is not None:
+            return p, hit
     return None
 
 
@@ -103,7 +160,7 @@ def is_due(item: dict[str, Any], *, now: float | None = None) -> bool:
 
 
 def create(
-    workspace: Path,
+    store: Store,
     *,
     title: str,
     prompt: str,
@@ -130,14 +187,14 @@ def create(
         "run_count": 0,
         "running_run_id": None,
     }
-    data = load(workspace)
+    data = load(store)
     data.setdefault("items", []).append(item)
-    save(workspace, data)
+    save(store, data)
     return item
 
 
-def update(workspace: Path, sid: str, patch: dict[str, Any]) -> dict[str, Any] | None:
-    data = load(workspace)
+def update(store: Store, sid: str, patch: dict[str, Any]) -> dict[str, Any] | None:
+    data = load(store)
     found = None
     for it in data.get("items") or []:
         if str(it.get("id") or "") != sid:
@@ -173,23 +230,23 @@ def update(workspace: Path, sid: str, patch: dict[str, Any]) -> dict[str, Any] |
         break
     if found is None:
         return None
-    save(workspace, data)
+    save(store, data)
     return found
 
 
-def delete(workspace: Path, sid: str) -> bool:
-    data = load(workspace)
+def delete(store: Store, sid: str) -> bool:
+    data = load(store)
     items = data.get("items") or []
     nxt = [i for i in items if str(i.get("id") or "") != sid]
     if len(nxt) == len(items):
         return False
     data["items"] = nxt
-    save(workspace, data)
+    save(store, data)
     return True
 
 
-def mark_started(workspace: Path, sid: str, run_id: str) -> dict[str, Any] | None:
-    data = load(workspace)
+def mark_started(store: Store, sid: str, run_id: str) -> dict[str, Any] | None:
+    data = load(store)
     found = None
     now = time.time()
     for it in data.get("items") or []:
@@ -202,24 +259,24 @@ def mark_started(workspace: Path, sid: str, run_id: str) -> dict[str, Any] | Non
         break
     if found is None:
         return None
-    save(workspace, data)
+    save(store, data)
     return found
 
 
-def set_running(workspace: Path, sid: str, run_id: str | None) -> None:
+def set_running(store: Store, sid: str, run_id: str | None) -> None:
     """Update the live run id without bumping run_count."""
-    data = load(workspace)
+    data = load(store)
     for it in data.get("items") or []:
         if str(it.get("id") or "") == sid:
             it["running_run_id"] = run_id
-            save(workspace, data)
+            save(store, data)
             return
 
 
-def clear_stale_running(workspace: Path, live_ids: set[str] | None = None) -> None:
+def clear_stale_running(store: Store, live_ids: set[str] | None = None) -> None:
     """Drop running_run_id when the daemon died mid-fire ('pending') or
     the run is no longer live and has no resumable checkpoint."""
-    data = load(workspace)
+    data = load(store)
     changed = False
     live_ids = live_ids or set()
     for it in data.get("items") or []:
@@ -230,11 +287,11 @@ def clear_stale_running(workspace: Path, live_ids: set[str] | None = None) -> No
             it["running_run_id"] = None
             changed = True
     if changed:
-        save(workspace, data)
+        save(store, data)
 
 
-def mark_finished(workspace: Path, sid: str) -> None:
-    data = load(workspace)
+def mark_finished(store: Store, sid: str) -> None:
+    data = load(store)
     changed = False
     for it in data.get("items") or []:
         if str(it.get("id") or "") == sid:
@@ -242,4 +299,4 @@ def mark_finished(workspace: Path, sid: str) -> None:
             changed = True
             break
     if changed:
-        save(workspace, data)
+        save(store, data)
