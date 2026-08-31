@@ -149,7 +149,7 @@ Python HTTP server. Closing VS Code stops work.
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.3.11.vsix
+code --install-extension dist/switchbay-vs-0.3.12.vsix
 ```
 
 Open a curiosity-engine folder, then **Switch Bay VS: Configure Python…**

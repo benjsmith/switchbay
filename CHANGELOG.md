@@ -3,6 +3,32 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-31 — v0.12.5 — Switch Bay VS 0.3.12
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` so the Agents tab and graph-search fix load.
+
+### Changed
+
+- **Agents** is a core tab (last before custom tabs). The collapsible
+  bottom panel is gone. ⌘J and rail ↗ open that tab.
+- The Agent Dashboard shows the **active workspace** only. A small
+  Workspaces expander at the top lists running-agent counts; clicking
+  a row **switches workspace** and opens that desk's dashboard.
+- Chief-of-staff model checkboxes are **per workspace**. Each provider
+  row has **Deselect all** on the right of the name, for catalogs full
+  of older customer-compat models.
+- The **Schedules** tab is removed from the strip; start/pause/stop
+  stays on the Agents dashboard (can return to a tab if that feels
+  crowded).
+
+### Fixed
+
+- Graph search highlighted files but not canvas nodes when Atlas (or a
+  stuck page selection) had focused a single node. Search now highlights
+  matching nodes and closes the dimming doc modal while the query is
+  active.
+
 ## 2026-08-31 — v0.12.4 — Switch Bay VS 0.3.11
 
 **Migration:** none. **Breaking:** none. After pull, run
