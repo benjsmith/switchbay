@@ -1182,6 +1182,8 @@ window.Graph = (function () {
     } else {
       searchHits = new Set(ids);
     }
+    const host = document.getElementById('graph');
+    if (host) host.dataset.searchHits = String(ids ? ids.length : 0);
     applyVisibility();
     if (searchHits && searchHits.size > 0) fitSearchHits();
   }

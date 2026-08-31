@@ -9,7 +9,7 @@
  *    switcher, `K then G` = cycle tab). While armed, a matching
  *    follow-up key is swallowed even when an input has focus, so the
  *    letter never types into the composer.
- *  · COMBO — direct modifier+key bindings (⌘J dashboard panel,
+ *  · COMBO — direct modifier+key bindings (⌘J Agents tab,
  *    ⌘1..9 tabs). Per the charter: only letters, digits and named
  *    keys — never punctuation (relocates/vanishes on non-US layouts;
  *    the legacy Ctrl+]/[ run-lane cycler in Rail predates the rule

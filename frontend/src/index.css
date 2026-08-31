@@ -3580,6 +3580,67 @@ a.sy-source-cite { color: var(--accent); }
   background: var(--bg);
   color: var(--text);
 }
+.sy-agents-ws {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  margin-bottom: 10px;
+}
+.sy-agents-ws-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.sy-agents-ws-toggle:hover { color: var(--text); }
+.sy-agents-ws-total {
+  margin-left: auto;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+}
+.sy-agents-ws-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 6px 6px;
+}
+.sy-agents-ws-empty {
+  padding: 4px 6px 8px;
+  font-size: 11px;
+  color: var(--text-faint);
+  font-style: italic;
+}
+.sy-agents-ws-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+}
+.sy-agents-ws-row:hover { background: var(--bg-elev, var(--bg-soft)); }
+.sy-agents-ws-row--here { font-weight: 600; }
+.sy-agents-ws-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sy-agents-ws-n { flex-shrink: 0; color: var(--text-faint); font-variant-numeric: tabular-nums; }
 .sy-agents-header {
   display: flex;
   align-items: center;
@@ -3712,6 +3773,14 @@ a.sy-source-cite { color: var(--accent); }
   font-size: 11px;
   color: var(--text-muted);
   padding: 0;
+  width: 100%;
+}
+.sy-orch-models-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
 }
 .sy-orch-models-toggle {
   display: inline-flex;
@@ -3723,7 +3792,25 @@ a.sy-source-cite { color: var(--accent); }
   font: inherit;
   padding: 0;
   cursor: pointer;
+  min-width: 0;
 }
+.sy-orch-models-none {
+  flex-shrink: 0;
+  font-size: 10px;
+  line-height: 1.4;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  font-family: inherit;
+}
+.sy-orch-models-none:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+.sy-orch-models-none:disabled { opacity: 0.5; cursor: default; }
 .sy-orch-models-count {
   color: var(--text-faint);
   font-variant-numeric: tabular-nums;

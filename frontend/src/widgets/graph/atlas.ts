@@ -21,12 +21,19 @@ const TYPE_KEYS = [
 
 export type ViewerMode = "classic" | "atlas";
 
+type AtlasEngine = {
+  focus(id: string, origin?: string): void;
+  getState(): { focusId?: string; pinned?: string[] };
+  setViewScale?(scale: number): void;
+  select?(ids: string[], mode?: "replace" | "add"): void;
+  pin?(id: string): void;
+  unpin?(id: string): void;
+  requestScene?(): void;
+  trails?: { pinned: string[] };
+};
+
 type AtlasHandle = {
-  engine: {
-    focus(id: string, origin?: string): void;
-    getState(): { focusId?: string };
-    setViewScale?(scale: number): void;
-  };
+  engine: AtlasEngine;
   setLabels(mode: "auto" | "on" | "off", types?: readonly string[] | null): void;
   setPhysics(physics: Record<string, number>): void;
   destroy(): void;
@@ -63,6 +70,24 @@ type AtlasGlobal = {
 let atlasHandle: AtlasHandle | null = null;
 let classicGraph: Window["Graph"] | null = null;
 let atlasMinimapWheel: (() => void) | null = null;
+let atlasSearchPins: string[] = [];
+
+function atlasHighlightSearch(handle: AtlasHandle, ids: string[]): void {
+  const engine = handle.engine;
+  engine.select?.(ids, "replace");
+  const cap = Math.min(ids.length, 64);
+  const next = ids.slice(0, cap);
+  if (engine.trails && Array.isArray(engine.trails.pinned)) {
+    engine.trails.pinned = [...next];
+    engine.requestScene?.();
+  } else {
+    for (const id of atlasSearchPins) engine.unpin?.(id);
+    for (const id of next) engine.pin?.(id);
+  }
+  atlasSearchPins = next;
+  const host = document.getElementById("graph");
+  if (host) host.dataset.searchHits = String(ids.length);
+}
 
 export function pageCount(data: GraphData): number {
   if (data.pages && typeof data.pages === "object") {
@@ -273,7 +298,7 @@ function installGraphFacade(handle: AtlasHandle): void {
       // Host close must not leave engine focus so a later echo reopens.
     },
     highlightSearch: (ids: string[]) => {
-      if (ids.length) handle.engine.focus(ids[0]!, "system");
+      atlasHighlightSearch(handle, ids);
     },
     splitEnter: () => { /* Atlas has no rubber-band split surface */ },
     splitExit: () => {},
@@ -295,6 +320,7 @@ export function destroyAtlas(): void {
     atlasHandle = null;
   }
   if (classicGraph) window.Graph = classicGraph;
+  atlasSearchPins = [];
 }
 
 export function mountAtlas(

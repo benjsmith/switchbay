@@ -41,8 +41,8 @@ def _core_ids() -> set[str]:
 def classify_source(tab: dict[str, Any]) -> str:
     """Return 'core' | 'pack' | 'user' | 'system' for one tab dict.
     Honours an explicit `source` if set; otherwise falls back to
-    checking against DEFAULT_MODE's ids. `system` marks cross-workspace
-    surfaces (the Agents dashboard) the tab strip pins to the right."""
+    checking against DEFAULT_MODE's ids. `system` pins a tab to the
+    right of the strip, past core/pack/user groups."""
     src = str(tab.get("source") or "").strip()
     if src in ("core", "pack", "user", "system"):
         return src

@@ -73,8 +73,10 @@ export function registerBuiltinTabs(): void {
     bare: true,
   });
   registerTabKind("projects", ProjectsAdapter);
+  // Kept registered so a leftover mode.json schedules tab still renders;
+  // modestore.load() drops it from the strip. The panel lives on Agents.
   registerTabKind("schedules", (() => <SchedulesTab />) as TabComponent, { bare: true });
-  registerTabKind("agents", AgentsAdapter);
+  registerTabKind("agents", AgentsAdapter, { bare: true });
   // Rich HTML report (create_report) in a sandboxed iframe.
   registerTabKind("report", (() => <ReportTab />) as TabComponent, { bare: true });
   // Durable report package (reports/<slug>/).

@@ -325,6 +325,55 @@ def test_pick_chief_pair_ignores_local_picker(tmp_path, monkeypatch):
     assert model in ("gpt-5.4", "claude-sonnet-4.6")
 
 
+def test_denied_models_are_per_workspace(tmp_path, monkeypatch):
+    store: dict = {"orchestration_denied_models": ["global/old"]}
+    monkeypatch.setattr("switchbay.app_settings.load", lambda: dict(store))
+    monkeypatch.setattr(
+        "switchbay.app_settings.save",
+        lambda data: store.clear() or store.update(data),
+    )
+    a = tmp_path / "a"
+    b = tmp_path / "b"
+    assert policy.get_denied_models(a) == ["global/old"]
+    policy.set_denied_models(["github_copilot/gpt-4o"], workspace=a)
+    assert policy.get_denied_models(a) == ["github_copilot/gpt-4o"]
+    assert policy.get_denied_models(b) == ["global/old"]
+    policy.set_denied_models(["mlx/qwen"], workspace=b)
+    assert policy.get_denied_models(a) == ["github_copilot/gpt-4o"]
+    assert policy.get_denied_models(b) == ["mlx/qwen"]
+    orch = a / ".workbench" / "state" / "orchestration.json"
+    assert orch.is_file()
+
+
+def test_deny_provider_keeps_last(monkeypatch):
+    denied: list[str] = []
+    catalog = [
+        {"key": "github_copilot/gpt-5.4", "provider": "github_copilot", "allowed": True},
+        {"key": "github_copilot/gpt-4o", "provider": "github_copilot", "allowed": True},
+        {"key": "mlx/qwen", "provider": "mlx", "allowed": True},
+    ]
+    monkeypatch.setattr(policy, "get_denied_models", lambda workspace=None: list(denied))
+    monkeypatch.setattr(
+        policy, "set_denied_models",
+        lambda keys, workspace=None: denied.clear() or denied.extend(keys) or list(denied),
+    )
+
+    def _catalog(**k):
+        blocked = set(denied)
+        out = []
+        for row in catalog:
+            out.append({**row, "allowed": row["key"] not in blocked})
+        return out
+
+    monkeypatch.setattr(policy, "list_orchestrator_catalog", _catalog)
+    policy.deny_provider("github_copilot")
+    assert "github_copilot/gpt-5.4" in denied
+    assert "github_copilot/gpt-4o" in denied
+    assert "mlx/qwen" not in denied
+    policy.deny_provider("mlx")
+    assert "mlx/qwen" not in denied
+
+
 def test_set_model_allowed_keeps_last(monkeypatch):
     store: dict = {}
     monkeypatch.setattr(

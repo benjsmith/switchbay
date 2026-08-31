@@ -89,11 +89,11 @@ export default function RunningTasksButton() {
               onClick={() => {
                 setOpen(false);
                 window.dispatchEvent(
-                  new CustomEvent("sy:agents-panel", { detail: { state: "expanded" } }),
+                  new CustomEvent("sy:switch-tab-kind", { detail: { kind: "agents" } }),
                 );
               }}
             >
-              Open Agents panel →
+              Open Agents →
             </button>
             <button
               type="button"

@@ -12,7 +12,7 @@ Shape (all keys optional; absent → documented default):
     "rail_history_local": true,   # see below
     "workspaces_home": "~/Workspaces",   # see below
     "orchestration_preference": 0.5,  # 0 Economy … 1 Maximum
-    "orchestration_denied_models": []  # provider/model keys Auto may not use
+    "orchestration_denied_models": []  # seed until a workspace file exists
   }
 
 `rail_history_local` — where the per-workspace rail-history DB

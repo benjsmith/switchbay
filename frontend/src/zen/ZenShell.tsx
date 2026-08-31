@@ -1,10 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { registerCombo } from "../keys";
 import type { TabSpec, Workspaces } from "../ws";
 import type { GraphData } from "../widgets/graph/types";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 import type { RailEntry } from "../rail/Rail";
-import type { ActiveRun } from "../center/DashboardPanel";
+import type { ActiveRun } from "../center/activeRun";
 import GraphTab from "../widgets/graph/GraphTab";
 import ZenSurfaceHost, { type ZenArtifact } from "./ZenSurfaceHost";
 import ZenChatBox from "./ZenChatBox";
@@ -47,7 +46,7 @@ type Props = {
   /** Bumped on `files_changed` — reaches the Browser surface's tree. */
   filesVersion: number;
   /** Visible tabs for the right pane (App already excludes graph/
-   *  terminal/agents kinds). */
+   *  terminal kinds). */
   tabs: TabSpec[];
   surface: string | null;
   setSurface: (s: string) => void;
@@ -123,14 +122,7 @@ export default function ZenShell({
     if (focusedThreadKind !== "interactive-pty") setPtyPromoted(false);
   }, [focusedThreadKind, focusedThread]);
 
-  // ⌘J opens the Agents surface — the muscle-memory analogue of
-  // Power's bottom-panel toggle (that panel isn't mounted in Zen, so
-  // its combo is disposed while we're here; no conflict).
-  useEffect(() => registerCombo({
-    key: "j",
-    description: "Agents surface",
-    handler: () => setSurface("agents"),
-  }), [setSurface]);
+  // ⌘J is registered in App and lands on the Agents tab in both modes.
 
   const chatDocked = surface === "chat";
   const prevSurfaceRef = useRef<string | null>(null);

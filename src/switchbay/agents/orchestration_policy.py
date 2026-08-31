@@ -671,18 +671,11 @@ def model_strength(model: str | None) -> float:
     return max(0.05, min(1.0, score))
 
 
-def get_denied_models() -> list[str]:
-    """``provider/model`` keys the chief of staff may not use.
-
-    Empty = every keyed catalog row is allowed. New catalog entries are
-    allowed until the user unchecks them on the Agent Dashboard.
-    """
-    from .. import app_settings
-    raw = app_settings.load().get("orchestration_denied_models")
-    if not isinstance(raw, list):
-        return []
+def _clean_model_keys(raw: object) -> list[str]:
     out: list[str] = []
     seen: set[str] = set()
+    if not isinstance(raw, (list, tuple)):
+        return out
     for item in raw:
         key = str(item or "").strip()
         if key and key not in seen:
@@ -691,15 +684,67 @@ def get_denied_models() -> list[str]:
     return out
 
 
-def set_denied_models(keys: list[str] | tuple[str, ...] | None) -> list[str]:
+def _workspace_denied_path(workspace: Path) -> Path:
+    return Path(workspace) / ".workbench" / "state" / "orchestration.json"
+
+
+def _read_workspace_denied(workspace: Path) -> list[str] | None:
+    """None = this desk has no file yet (inherit the global seed)."""
+    path = _workspace_denied_path(workspace)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw = data.get("denied_models")
+    if not isinstance(raw, list):
+        return []
+    return _clean_model_keys(raw)
+
+
+def _write_workspace_denied(workspace: Path, keys: list[str]) -> None:
+    path = _workspace_denied_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing: dict[str, Any] = {}
+    if path.is_file():
+        try:
+            loaded = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                existing = loaded
+        except (OSError, json.JSONDecodeError):
+            existing = {}
+    existing["denied_models"] = keys
+    atomicio.write_json_atomic(path, existing)
+
+
+def get_denied_models(workspace: Path | None = None) -> list[str]:
+    """``provider/model`` keys the chief of staff may not use.
+
+    Per workspace (``.workbench/state/orchestration.json``). Empty = every
+    keyed catalog row is allowed. New catalog entries stay allowed until
+    the user unchecks them on that workspace's Agent Dashboard. Desks
+    without a file inherit the global ``settings.json`` seed.
+    """
+    if workspace is not None:
+        loaded = _read_workspace_denied(workspace)
+        if loaded is not None:
+            return loaded
     from .. import app_settings
-    cleaned: list[str] = []
-    seen: set[str] = set()
-    for item in keys or []:
-        key = str(item or "").strip()
-        if key and key not in seen:
-            seen.add(key)
-            cleaned.append(key)
+    return _clean_model_keys(app_settings.load().get("orchestration_denied_models"))
+
+
+def set_denied_models(
+    keys: list[str] | tuple[str, ...] | None,
+    workspace: Path | None = None,
+) -> list[str]:
+    cleaned = _clean_model_keys(keys)
+    if workspace is not None:
+        _write_workspace_denied(workspace, cleaned)
+        return cleaned
+    from .. import app_settings
     data = app_settings.load()
     if cleaned:
         data["orchestration_denied_models"] = cleaned
@@ -724,31 +769,63 @@ def model_allowed(
     return pair_key(provider_id, model) not in blocked
 
 
-def set_model_allowed(key: str, allowed: bool) -> list[str]:
+def set_model_allowed(
+    key: str,
+    allowed: bool,
+    workspace: Path | None = None,
+) -> list[str]:
     """Toggle one catalog key. Refuses to deny the last remaining model."""
     key = str(key or "").strip()
-    denied = set(get_denied_models())
+    denied = set(get_denied_models(workspace))
     if not key:
         return sorted(denied)
     if allowed:
         denied.discard(key)
-        return set_denied_models(sorted(denied))
-    catalog = list_orchestrator_catalog()
+        return set_denied_models(sorted(denied), workspace=workspace)
+    catalog = list_orchestrator_catalog(workspace=workspace)
     currently = [row for row in catalog if row.get("allowed")]
     if len(currently) <= 1 and currently and currently[0].get("key") == key:
         return sorted(denied)
     denied.add(key)
-    return set_denied_models(sorted(denied))
+    return set_denied_models(sorted(denied), workspace=workspace)
+
+
+def deny_provider(provider_id: str, workspace: Path | None = None) -> list[str]:
+    """Uncheck every catalog row for one provider.
+
+    Keeps the last remaining allowed model if this provider is the only
+    one still on — Auto must have somewhere to land.
+    """
+    pid = str(provider_id or "").strip()
+    catalog = list_orchestrator_catalog(workspace=workspace)
+    mine = [row for row in catalog if str(row.get("provider") or "") == pid]
+    others_on = [
+        row for row in catalog
+        if str(row.get("provider") or "") != pid and row.get("allowed")
+    ]
+    denied = set(get_denied_models(workspace))
+    if not pid or not mine:
+        return sorted(denied)
+    keep_key: str | None = None
+    if not others_on:
+        keep = next((row for row in mine if row.get("allowed")), None)
+        keep_key = str(keep.get("key") or "") if keep else None
+    for row in mine:
+        key = str(row.get("key") or "")
+        if key and key != keep_key:
+            denied.add(key)
+    return set_denied_models(sorted(denied), workspace=workspace)
 
 
 def list_orchestrator_catalog(
     *,
     available: list[tuple[str, str]] | None = None,
     denied: list[str] | None = None,
+    workspace: Path | None = None,
 ) -> list[dict[str, Any]]:
     """Keyed (provider, model) rows the dashboard can check or uncheck."""
     from .. import admin_policy, llmgateway
-    blocked = denied if denied is not None else get_denied_models()
+    blocked = denied if denied is not None else get_denied_models(workspace)
     keyed = (
         available if available is not None
         else list_keyed_providers(scan_local_disk=False)
@@ -884,8 +961,8 @@ def allocate_models(
       local MLX/Ollama whenever the user has made them available;
     * the rail picker is a hint, not a lock — Auto will not stay on
       MLX just because the picker is local;
-    * dashboard denylist (``orchestration_denied_models``) is the
-      user-facing allowlist for the chief of staff;
+    * per-workspace dashboard denylist is the user-facing allowlist
+      for the chief of staff;
     * last-good desk roster is a sort hint among allowed remotes;
     * cooled-down probes (weekly limit, dead local server) are skipped;
     * the effort slider picks a strength band (Economy = cheaper /
@@ -901,7 +978,10 @@ def allocate_models(
     from . import orchestration_health as health
     n = max(1, n)
     default = (default_provider, default_model)
-    denied = denied_models if denied_models is not None else get_denied_models()
+    denied = (
+        denied_models if denied_models is not None
+        else get_denied_models(workspace)
+    )
 
     keyed = available
     if keyed is None:

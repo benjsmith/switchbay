@@ -15,7 +15,6 @@ const FAKE_RUNS = {
       status: "running",
       activity: "verify ×1",
       step: "verify ×1",
-      workspace: "/tmp/ws",
       workspace_name: "ws",
       orchestration_id: "run-space",
       orchestration_strategy: "investigate_verify_synthesize",
@@ -104,6 +103,18 @@ const FAKE_RUNS = {
       status: "running",
       activity: "classifying claims",
     },
+    {
+      run_id: "run-other-ws",
+      provider: "openai",
+      model: "gpt-5.4",
+      input_excerpt: "foreign desk",
+      started_at: NOW - 5,
+      last_chunk_at: NOW,
+      tool_count: 0,
+      status: "running",
+      workspace: "/tmp/other-wiki",
+      workspace_name: "other-wiki",
+    },
   ],
 };
 
@@ -168,13 +179,19 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
   });
   await page.route("**/api/orchestration/models", async (route) => {
     if (route.request().method() === "POST") {
-      const posted = route.request().postDataJSON() as { key?: string; allowed?: boolean };
+      const posted = route.request().postDataJSON() as {
+        key?: string; allowed?: boolean; provider?: string;
+      };
+      const copilotOff = posted.provider === "github_copilot" && posted.allowed === false;
+      const gptOff = posted.key === "github_copilot/gpt-5.4" && posted.allowed === false;
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
           ok: true,
-          denied: posted.allowed === false ? [posted.key] : [],
+          denied: copilotOff
+            ? ["github_copilot/gpt-5.4", "github_copilot/claude-sonnet-4.6"]
+            : gptOff ? [posted.key] : [],
           models: [
             {
               key: "github_copilot/gpt-5.4",
@@ -183,7 +200,7 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
               model: "gpt-5.4",
               category: "subscription",
               local: false,
-              allowed: posted.key === "github_copilot/gpt-5.4" ? Boolean(posted.allowed) : true,
+              allowed: !(copilotOff || gptOff),
               strength: 0.76,
             },
             {
@@ -193,7 +210,7 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
               model: "claude-sonnet-4.6",
               category: "subscription",
               local: false,
-              allowed: true,
+              allowed: !copilotOff,
               strength: 0.66,
             },
             {
@@ -259,15 +276,9 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
     });
   });
 
-  await page.addInitScript(() => {
-    localStorage.setItem("sy:dash-panel", JSON.stringify({ state: "expanded", heightPx: 220 }));
-  });
-
   await page.goto("/");
-  await expect(page.locator(".sy-dash--expanded")).toBeVisible({ timeout: 15_000 });
-  await page.evaluate(() => {
-    window.dispatchEvent(new CustomEvent("sy:agents-panel", { detail: { state: "expanded" } }));
-  });
+  await page.locator(".sy-tabstrip, .sy-zen").first().waitFor({ timeout: 20_000 });
+  await page.getByRole("tab", { name: "Agents" }).click({ timeout: 15_000 });
 
   const space = page.locator(".sy-agent-space");
   await expect(space).toBeVisible({ timeout: 10_000 });
@@ -300,6 +311,13 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
   await expect(gpt).toBeChecked();
   await gpt.uncheck();
   await expect(gpt).not.toBeChecked();
+  await models.getByRole("button", { name: "Deselect all" }).first().click();
+  await expect(gpt).not.toBeChecked();
+  await expect(models.getByRole("checkbox", { name: "claude-sonnet-4.6" })).not.toBeChecked();
+  await expect(models.getByRole("checkbox", { name: "qwen2.5-7b-instruct" })).toBeChecked();
+  await page.getByRole("button", { name: /Workspaces/ }).click();
+  await expect(page.getByRole("button", { name: /other-wiki/ })).toBeVisible();
+  await expect(page.getByText("foreign desk")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Schedules" })).toBeVisible();
   await expect(page.getByRole("button", { name: "+ schedule" })).toBeVisible();
 

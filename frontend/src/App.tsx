@@ -23,7 +23,7 @@ import { readUiMode, type UiMode } from "./layout/ModeToggle";
 import type { ZenArtifact } from "./zen/ZenSurfaceHost";
 import { ZEN_SYNTHETIC, isZenSynthetic } from "./zen/surfaces";
 import type { TerminalWsApi } from "./rail/PtyThreadSurface";
-import type { ActiveRun } from "./center/DashboardPanel";
+import type { ActiveRun } from "./center/activeRun";
 import { installKeyRegistry, registerChord, registerCombo } from "./keys";
 import { RailSocket, type Mode, type Selection, type ServerMessage, type TabSpec, type Workspaces } from "./ws";
 import { SelectionProvider } from "./selection/SelectionContext";
@@ -160,9 +160,9 @@ export default function App() {
   // Currently-executing run ids (polled), so the rail can mark run
   // blocks live vs done and drive the focus-switcher.
   const [activeRunIds, setActiveRunIds] = useState<Set<string>>(() => new Set());
-  // Full run records from the same poll — feeds the bottom
-  // DashboardPanel (Foundation C). Ref mirror so callbacks (switch-
-  // away toast) can read the latest without re-subscribing.
+  // Full run records from the same poll — rail toasts, Zen count,
+  // workspace-switch jump. Ref so callbacks can read the latest
+  // without re-subscribing.
   const [activeRuns, setActiveRuns] = useState<ActiveRun[]>([]);
   const activeRunsRef = useRef<ActiveRun[]>([]);
   // Bumped whenever the daemon broadcasts `files_changed` (page save,
@@ -361,12 +361,10 @@ export default function App() {
   }), []);
   // Tab scoping (control surface v1): thread-scoped tabs render only
   // while their thread is focused. Filtered client-side so a thread
-  // switch shows/hides them instantly, no round-trip. `agents`-kind
-  // tabs are excluded everywhere (strip, ⌘K→G, ⌘1..9) — the agents
-  // surface is the bottom DashboardPanel now, not a tab.
+  // switch shows/hides them instantly, no round-trip.
   const visibleTabs = useMemo(
     () => mode.tabs.filter(
-      (t) => t.kind !== "agents" && (!t.thread || t.thread === focusedThread),
+      (t) => !t.thread || t.thread === focusedThread,
     ),
     [mode, focusedThread],
   );
@@ -387,7 +385,7 @@ export default function App() {
     [visibleTabs],
   );
   // Drop a stale surface id (workspace switch replaced the tab set).
-  // Synthetic surfaces (Agents, Browser) aren't tabs and always survive.
+  // Synthetic surfaces (Browser, Chat) aren't tabs and always survive.
   useEffect(() => {
     if (zenSurface && !isZenSynthetic(zenSurface)
         && !zenTabs.some((t) => t.id === zenSurface)) {
@@ -1768,32 +1766,17 @@ export default function App() {
     return () => window.removeEventListener("sy:switch-tab-kind", onSwitchTab);
   }, []);
 
-  /** Rail-row `↗` jump button → expand the agents panel + tell the
-   *  dashboard which run to auto-expand. Two-step so the dashboard
-   *  has time to mount before its expand handler fires. */
+  /** Rail-row `↗` jump button → Agents tab + auto-expand that run. */
   useEffect(() => {
     const onJump = (ev: Event) => {
       const detail = (ev as CustomEvent<{ run_id: string }>).detail;
       if (!detail?.run_id) return;
-      if (uiModeRef.current === "zen") {
-        // No bottom panel in Zen — the Agents dashboard is a right-
-        // pane surface. Give it a beat to mount before expanding.
-        setZenSurface("agents");
-        window.setTimeout(() => {
-          window.dispatchEvent(new CustomEvent("sy:expand-run", {
-            detail: { run_id: detail.run_id },
-          }));
-        }, 200);
-        return;
-      }
-      window.dispatchEvent(new CustomEvent("sy:agents-panel", {
-        detail: { state: "expanded" },
-      }));
+      switchToKindRef.current?.("agents");
       window.setTimeout(() => {
         window.dispatchEvent(new CustomEvent("sy:expand-run", {
           detail: { run_id: detail.run_id },
         }));
-      }, 0);
+      }, 200);
     };
     window.addEventListener("sy:open-agents-run", onJump);
     return () => window.removeEventListener("sy:open-agents-run", onJump);
@@ -2044,34 +2027,35 @@ export default function App() {
     onSwitchThread(tid, kind ?? "structured-agent");
   }, [onSwitchThread]);
 
-  const onJumpToRun = useCallback((run: ActiveRun) => {
-    if (!run.thread_id) return;
-    void jumpToThread(
-      run.workspace, run.thread_id,
-      run.provider === "pty" ? "interactive-pty" : "structured-agent",
-    );
-  }, [jumpToThread]);
-
-  /** Agent Dashboard workspace pill → jump to that run's workspace
-   *  (+ its thread when known). The dashboard is a bare tab with no
-   *  props, so it asks via a window event; App owns the switch. */
+  /** Agent Dashboard workspace row / run pill → switch workspace
+   *  (and thread when known), then open that workspace's Agents tab. */
   useEffect(() => {
     const onJumpWs = (ev: Event) => {
       const d = (ev as CustomEvent<{
         workspace?: string; thread_id?: string | null; provider?: string;
+        openAgents?: boolean;
       }>).detail;
       if (!d?.workspace) return;
       const kind = d.provider === "pty" ? "interactive-pty" : "structured-agent";
-      if (d.thread_id) {
-        void jumpToThread(d.workspace, d.thread_id, kind);
-      } else if (d.workspace !== focusedWsRef.current) {
-        // No thread to focus — just switch the workspace.
-        void fetch("/api/workspaces/switch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path: d.workspace }),
-        }).catch(() => { /* daemon down */ });
-      }
+      const openAgents = d.openAgents !== false;
+      const go = async () => {
+        if (d.thread_id) {
+          await jumpToThread(d.workspace, d.thread_id, kind);
+        } else if (d.workspace !== focusedWsRef.current) {
+          try {
+            await fetch("/api/workspaces/switch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ path: d.workspace }),
+            });
+          } catch { /* daemon down */ }
+        }
+        if (openAgents) {
+          switchToKindRef.current?.("agents");
+          window.setTimeout(() => switchToKindRef.current?.("agents"), 250);
+        }
+      };
+      void go();
     };
     window.addEventListener("sy:jump-workspace-run", onJumpWs);
     return () => window.removeEventListener("sy:jump-workspace-run", onJumpWs);
@@ -2263,6 +2247,12 @@ export default function App() {
     switchToKindRef.current = switchToKind;
   }, [switchToKind]);
 
+  useEffect(() => registerCombo({
+    key: "j",
+    description: "Agents tab",
+    handler: () => { switchToKindRef.current?.("agents"); },
+  }), []);
+
   const tabsValue = useMemo(
     () => ({ tabs: mode.tabs, activeId: activeTab, setActive: setActiveTab, switchToKind }),
     [mode, activeTab, switchToKind],
@@ -2365,9 +2355,6 @@ export default function App() {
               onSelect={setActiveTab}
               graphData={graphData}
               graphError={graphError}
-              activeRuns={activeRuns}
-              workspace={workspace}
-              onJumpToRun={onJumpToRun}
               onToggleTabScope={onToggleTabScope}
               hasFocusedThread={focusedThread !== null}
               termWs={termWsApi}

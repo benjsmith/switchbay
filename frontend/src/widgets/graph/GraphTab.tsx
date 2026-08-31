@@ -5,6 +5,7 @@ import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
 import { ingestFile } from "../../lib/ingest";
 import CurationReplay from "./CurationReplay";
+import { peekPersistedQuery } from "./graphSearch";
 
 type Props = {
   data: GraphData | null;
@@ -174,18 +175,27 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     return () => window.removeEventListener("sy:graph-viewer-change", onViewer);
   }, []);
 
-  // After search is cleared, restore the page-selection focus ring.
+  // Search owns the canvas: close a stuck page modal so highlights
+  // aren't painted on a dimmed graph. Restore focus when cleared.
   useEffect(() => {
     const onSearch = (ev: Event) => {
       const q = String((ev as CustomEvent<{ query?: string }>).detail?.query || "");
-      if (q) return;
+      if (q) {
+        if (!suppressDocModal) {
+          try { window.Modal.close(); } catch { /* ignore */ }
+        }
+        return;
+      }
       if (selection?.kind === "page") {
         try { window.Graph.focus(selection.id); } catch { /* ignore */ }
+        if (!suppressDocModal) {
+          try { window.Modal.open(selection.id); } catch { /* ignore */ }
+        }
       }
     };
     window.addEventListener("sy:graph-search", onSearch);
     return () => window.removeEventListener("sy:graph-search", onSearch);
-  }, [selection]);
+  }, [selection, suppressDocModal]);
 
   // Mount / re-mount CE viewer when data arrives or changes
   // (e.g. workspace switch). Modal-close → clear selection
@@ -220,17 +230,22 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   // refresh does not drop the user's highlight.
   useEffect(() => {
     if (!mounted || !data) return;
+    const searching = !!peekPersistedQuery(data.workspace || "").trim();
     if (!selection || selection.kind !== "page") {
       if (!suppressDocModal) {
         try { window.Modal.close(); } catch { /* ignore */ }
       }
-      try { window.Graph.clearFocus(); } catch { /* ignore */ }
+      if (!searching) {
+        try { window.Graph.clearFocus(); } catch { /* ignore */ }
+      }
       return;
     }
-    if (!suppressDocModal) {
+    if (!searching && !suppressDocModal) {
       try { window.Modal.open(selection.id); } catch { /* ignore */ }
     }
-    try { window.Graph.focus(selection.id); } catch { /* ignore */ }
+    if (!searching) {
+      try { window.Graph.focus(selection.id); } catch { /* ignore */ }
+    }
     try { window.Sidebar.setActive(selection.id); } catch { /* ignore */ }
   }, [selection, mounted, suppressDocModal, data, viewerGen]);
 

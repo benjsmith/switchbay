@@ -57,11 +57,7 @@ const NEW_TAB_TIP = [
   "once the new kind exists, you can pin it in `.workbench/mode.json`.",
 ].join("\n");
 
-// System tabs are cross-workspace surfaces that belong to the right of
-// the strip, past every other tab. The Agents dashboard used to live
-// here; it moved into the bottom DashboardPanel's expanded state, so
-// `agents`-kind tabs (still present in older mode.json files) are
-// filtered out of the strip entirely.
+// System tabs belong to the right of the strip, past every other tab.
 function isSystemTab(t: TabSpec): boolean {
   return t.source === "system";
 }
@@ -91,9 +87,8 @@ export default function TabStrip({
   // source-based dividers; system tabs are hoisted to a trailing group
   // after a separator, just before "+ New…" — regardless of where they
   // sit in mode.json.
-  const shown = tabs.filter((t) => t.kind !== "agents");
-  const normalTabs = shown.filter((t) => !isSystemTab(t));
-  const systemTabs = shown.filter(isSystemTab);
+  const normalTabs = tabs.filter((t) => !isSystemTab(t));
+  const systemTabs = tabs.filter(isSystemTab);
 
   const renderTabButton = (t: TabSpec, cur: string) => (
     <button

@@ -110,7 +110,7 @@ function buildSteps(): Step[] {
       title: "Terminal",
       body:
         "Need a shell? Click >_ for a new terminal thread, or prefix a "
-        + "line with ! to run a command. The dashboard (⌘J) shows every "
+        + "line with ! to run a command. The Agents tab (⌘J) shows every "
         + "running agent and shell.",
       target: "[data-tour='terminal']",
       requireMode: "power",

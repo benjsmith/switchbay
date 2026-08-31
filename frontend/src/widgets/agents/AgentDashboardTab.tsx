@@ -11,11 +11,12 @@ import AgentSpace, {
 } from "./AgentSpace";
 
 /**
- * Agent Dashboard — primary purpose: live monitoring of running
- * agents in this workspace. Foreground + background runs in one
- * view; per-run status, last-activity, tool-call count, and a kill
- * button. Polls `/api/runs/active` every couple of seconds; the
- * registry is in process memory on the daemon so the read is cheap.
+ * Agent Dashboard — live monitoring of running agents in the
+ * active workspace. An expander at the top lists running counts
+ * per workspace; clicking a row switches to that workspace and
+ * opens its dashboard. Polls `/api/runs/active` every couple of
+ * seconds; the registry is in process memory on the daemon so
+ * the read is cheap.
  *
  * Each running row is expandable — click the row, the activity
  * strip, or the caret to inline a live per-step transcript. A
@@ -97,9 +98,8 @@ type Run = {
   activity?: string;
   current_tool?: string;
   /** Absolute path + folder name of the workspace this run belongs
-   *  to. The dashboard is cross-workspace, so it labels/groups runs
-   *  by workspace and resolves each transcript against the run's own
-   *  workspace DB. */
+   *  to. The dashboard filters to the focused workspace; other desks
+   *  appear only in the running-counts expander. */
   workspace?: string;
   workspace_name?: string;
   /** Thread that owns this run (rail thread id, or the pty thread for
@@ -157,17 +157,48 @@ type Run = {
   step?: string | null;
 };
 
-// The currently-focused workspace, read from the snapshot App.tsx
-// persists on every workspace transition. The dashboard is
-// cross-workspace, so it uses this only to flag runs that live in
-// ANOTHER workspace ("steerable from here") — never to filter them out.
-function readFocusedWorkspace(): string {
+function workspaceKey(p?: string | null): string {
+  return (p || "").replace(/\/+$/, "");
+}
+
+function sameWorkspace(a?: string | null, b?: string | null): boolean {
+  const ka = workspaceKey(a);
+  const kb = workspaceKey(b);
+  return ka.length > 0 && ka === kb;
+}
+
+function basename(p: string): string {
+  return p.split("/").filter(Boolean).pop() ?? p;
+}
+
+function readWorkspaceSnapshot(): { workspace: string; paths: string[] } {
   try {
     const raw = window.localStorage.getItem("sy.workspaces.snapshot");
-    if (!raw) return "";
-    const parsed = JSON.parse(raw) as { workspace?: string };
-    return typeof parsed.workspace === "string" ? parsed.workspace : "";
-  } catch { return ""; }
+    if (!raw) return { workspace: "", paths: [] };
+    const parsed = JSON.parse(raw) as {
+      workspace?: string;
+      workspaces?: { paths?: unknown };
+    };
+    const paths = Array.isArray(parsed.workspaces?.paths)
+      ? parsed.workspaces.paths.filter((p): p is string => typeof p === "string")
+      : [];
+    return {
+      workspace: typeof parsed.workspace === "string" ? parsed.workspace : "",
+      paths,
+    };
+  } catch {
+    return { workspace: "", paths: [] };
+  }
+}
+
+function readFocusedWorkspace(): string {
+  return readWorkspaceSnapshot().workspace;
+}
+
+function runInFocusedWorkspace(r: { workspace?: string }, focused: string): boolean {
+  if (!focused) return true;
+  if (!r.workspace) return true;
+  return sameWorkspace(r.workspace, focused);
 }
 
 function isLiveRun(r: Run): boolean {
@@ -343,13 +374,22 @@ export default function AgentDashboardTab() {
     return () => { cancelled = true; window.clearInterval(id); };
   }, [focusedWs]);
 
+  const focusedRuns = useMemo(
+    () => (runs ?? []).filter((r) => runInFocusedWorkspace(r, focusedWs)),
+    [runs, focusedWs],
+  );
+  const focusedRecent = useMemo(
+    () => recentFinished.filter((r) => runInFocusedWorkspace(r, focusedWs)),
+    [recentFinished, focusedWs],
+  );
+
   const runSpaces = useMemo(() => {
     // Keep each root DAG independent. Active and recently-finished rows share
     // a pool solely so children remain attached while they retire at slightly
     // different poll ticks; groupRuns never mixes children across roots.
     const seen = new Set<string>();
     const pool: Run[] = [];
-    for (const r of [...(runs ?? []), ...recentFinished]) {
+    for (const r of [...focusedRuns, ...focusedRecent]) {
       if (seen.has(r.run_id)) continue;
       seen.add(r.run_id);
       pool.push(r);
@@ -373,7 +413,7 @@ export default function AgentDashboardTab() {
       })
       .sort((a, b) => Number(b.live) - Number(a.live)
         || (b.chief.started_at ?? 0) - (a.chief.started_at ?? 0));
-  }, [runs, recentFinished]);
+  }, [focusedRuns, focusedRecent]);
 
   const standing = useMemo(() => {
     const org = deskOrg?.org;
@@ -462,6 +502,7 @@ export default function AgentDashboardTab() {
 
   return (
     <div className="sy-agents">
+      <WorkspaceRunsNav runs={runs} focusedWs={focusedWs} />
       <div className="sy-agents-header">
         <h2>Agent Dashboard</h2>
         <button
@@ -531,18 +572,18 @@ export default function AgentDashboardTab() {
         title="Running"
         // Dormant shells (status "idle" — a pty at its prompt / a TUI
         // waiting for input) stay listed but don't count as running.
-        count={runs?.filter((r) => isLiveRun(r)).length}
+        count={focusedRuns.filter((r) => isLiveRun(r)).length}
         primary
-        subtitle="live · refreshes every 2s · click activity or ▸ for transcript"
+        subtitle="this workspace · live · refreshes every 2s · click activity or ▸ for transcript"
       >
-        {runs === null ? <Loading /> : runs.length === 0 ? (
+        {runs === null ? <Loading /> : focusedRuns.length === 0 ? (
           <Empty>
-            No active runs. Type something in the rail to kick one off,
-            or watch this panel while a long-running agent works.
+            No active runs in this workspace. Type something in the rail
+            to kick one off, or open another desk from the list above.
           </Empty>
         ) : (
           <ul className="sy-agents-list">
-            {groupRuns(runs).map((g) => (
+            {groupRuns(focusedRuns).map((g) => (
               <RunGroup
                 key={g.parent.run_id}
                 parent={g.parent}
@@ -551,7 +592,7 @@ export default function AgentDashboardTab() {
                 onBackground={onBackgroundRun}
                 forceOpenId={pendingExpand}
                 onForceOpenAck={() => setPendingExpand(null)}
-                autoExpandId={soloAutoExpandId(runs)}
+                autoExpandId={soloAutoExpandId(focusedRuns)}
                 focusedWs={focusedWs}
                 onInspect={(run) => {
                   setSpaceRootId(run.parent_run_id || run.run_id);
@@ -933,6 +974,93 @@ type OrchModelRow = {
   strength: number;
 };
 
+function WorkspaceRunsNav({
+  runs, focusedWs,
+}: {
+  runs: Run[] | null;
+  focusedWs: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const snap = readWorkspaceSnapshot();
+  const rows = useMemo(() => {
+    const map = new Map<string, { path: string; name: string; n: number }>();
+    for (const p of snap.paths) {
+      const k = workspaceKey(p);
+      if (!k) continue;
+      map.set(k, { path: p, name: basename(p), n: 0 });
+    }
+    for (const r of runs ?? []) {
+      if (!isLiveRun(r)) continue;
+      const path = r.workspace || focusedWs || "";
+      const k = workspaceKey(path);
+      if (!k) continue;
+      const cur = map.get(k) ?? { path, name: r.workspace_name || basename(path), n: 0 };
+      cur.n += 1;
+      if (r.workspace_name) cur.name = r.workspace_name;
+      map.set(k, cur);
+    }
+    if (focusedWs) {
+      const k = workspaceKey(focusedWs);
+      if (k && !map.has(k)) {
+        map.set(k, { path: focusedWs, name: basename(focusedWs), n: 0 });
+      }
+    }
+    return [...map.values()].sort((a, b) =>
+      b.n - a.n || a.name.localeCompare(b.name),
+    );
+  }, [runs, focusedWs, snap.paths]);
+  const total = rows.reduce((n, r) => n + r.n, 0);
+
+  const openWorkspace = (path: string) => {
+    window.dispatchEvent(new CustomEvent("sy:jump-workspace-run", {
+      detail: { workspace: path, openAgents: true },
+    }));
+  };
+
+  return (
+    <div className="sy-agents-ws">
+      <button
+        type="button"
+        className="sy-agents-ws-toggle"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {open ? "▾" : "▸"} Workspaces
+        <span className="sy-agents-ws-total">{total} running</span>
+      </button>
+      {open && (
+        <ul className="sy-agents-ws-list">
+          {rows.length === 0 && (
+            <li className="sy-agents-ws-empty">No registered workspaces.</li>
+          )}
+          {rows.map((row) => {
+            const here = sameWorkspace(row.path, focusedWs);
+            return (
+              <li key={row.path}>
+                <button
+                  type="button"
+                  className={"sy-agents-ws-row" + (here ? " sy-agents-ws-row--here" : "")}
+                  onClick={() => openWorkspace(row.path)}
+                  title={here
+                    ? "This workspace's dashboard"
+                    : `Switch to ${row.name} and open its Agents dashboard`}
+                >
+                  <span className="sy-agents-ws-name">
+                    {row.name}
+                    {here ? " · this" : ""}
+                  </span>
+                  <span className="sy-agents-ws-n">{row.n}</span>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+
 function groupRank(pid: string, rows: OrchModelRow[]): number {
   if (pid === "github_copilot") return 0;
   const cat = rows[0]?.category || "";
@@ -974,6 +1102,37 @@ function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
   }, []);
 
   useEffect(() => { void load(); }, [load, refreshTick]);
+
+  const deselectProvider = useCallback(async (pid: string) => {
+    setBusy(pid);
+    setRows((cur) => {
+      const list = cur ?? [];
+      const othersOn = list.filter((r) => r.provider !== pid && r.allowed);
+      const keep = othersOn.length === 0
+        ? list.find((r) => r.provider === pid && r.allowed)
+        : undefined;
+      return list.map((row) => (
+        row.provider !== pid || row.key === keep?.key
+          ? row
+          : { ...row, allowed: false }
+      ));
+    });
+    try {
+      const r = await fetch("/api/orchestration/models", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider: pid, allowed: false }),
+      });
+      if (!r.ok) {
+        await load();
+        return;
+      }
+      const body = await r.json() as { models?: OrchModelRow[] };
+      if (Array.isArray(body.models)) setRows(body.models);
+    } catch {
+      await load();
+    } finally { setBusy(null); }
+  }, [load]);
 
   const toggle = useCallback(async (key: string, allowed: boolean) => {
     setBusy(key);
@@ -1018,9 +1177,9 @@ function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
     <div className="sy-orch-models">
       <h4>Chief of staff models</h4>
       <p className="sy-orch-models-hint">
-        Auto may use checked models. Non-local catalogs are preferred
-        when available; the effort slider buys fan-out and stronger
-        models. Local stays a fallback.
+        Auto may use checked models in this workspace. Non-local
+        catalogs are preferred when available; the effort slider buys
+        fan-out and stronger models. Local stays a fallback.
       </p>
       {hint && <p className="sy-orch-models-hint">{hint}</p>}
       {rows === null && (
@@ -1042,18 +1201,31 @@ function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
               return (
                 <fieldset key={pid} className="sy-orch-models-group">
                   <legend>
-                    <button
-                      type="button"
-                      className="sy-orch-models-toggle"
-                      aria-expanded={expanded}
-                      onClick={() => setOpen((s) => ({ ...s, [pid]: !expanded }))}
-                    >
-                      {expanded ? "▾" : "▸"} {list[0]?.provider_label || pid}
-                      {list[0]?.local ? " · local" : list[0]?.category ? ` · ${list[0].category}` : ""}
-                      <span className="sy-orch-models-count">
-                        {nOn}/{list.length}
-                      </span>
-                    </button>
+                    <span className="sy-orch-models-legend">
+                      <button
+                        type="button"
+                        className="sy-orch-models-toggle"
+                        aria-expanded={expanded}
+                        onClick={() => setOpen((s) => ({ ...s, [pid]: !expanded }))}
+                      >
+                        {expanded ? "▾" : "▸"} {list[0]?.provider_label || pid}
+                        {list[0]?.local ? " · local" : list[0]?.category ? ` · ${list[0].category}` : ""}
+                        <span className="sy-orch-models-count">
+                          {nOn}/{list.length}
+                        </span>
+                      </button>
+                      {nOn > 0 && (
+                        <button
+                          type="button"
+                          className="sy-orch-models-none"
+                          disabled={busy === pid}
+                          onClick={() => void deselectProvider(pid)}
+                          title={`Uncheck every ${list[0]?.provider_label || pid} model`}
+                        >
+                          Deselect all
+                        </button>
+                      )}
+                    </span>
                   </legend>
                   {expanded && (
                     <div className="sy-orch-models-list">
@@ -1525,8 +1697,7 @@ function RunRow(props: {
 /** Per-step transcript for one run. Polls /api/rail/events?run_id=
  *  while `live` is true (i.e. the run is still in the active list).
  *  When the run completes the parent unmounts this whole row, so we
- *  don't need to detect transition-to-done ourselves. Exported —
- *  the bottom DashboardPanel's expandable rows reuse it. */
+ *  don't need to detect transition-to-done ourselves. */
 export type TranscriptSnapshot = {
   toolCount?: number;
   activity?: string;

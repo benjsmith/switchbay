@@ -24,6 +24,8 @@ def test_seed_pinned_first_on_fresh_workspace(tmp_path: Path) -> None:
     assert kinds[0] == "intro", kinds
     # The default surfaces still follow it.
     assert "graph" in kinds and "agents" in kinds
+    assert "schedules" not in kinds
+    assert kinds.index("agents") > kinds.index("projects")
 
 
 def test_add_is_idempotent(tmp_path: Path) -> None:

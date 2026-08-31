@@ -3,7 +3,6 @@ import type { Selection, TabSpec } from "../ws";
 import type { GraphData } from "../widgets/graph/types";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 import PtyThreadSurface from "../rail/PtyThreadSurface";
-import AgentDashboardTab from "../widgets/agents/AgentDashboardTab";
 import PlaceholderTab from "../center/PlaceholderTab";
 import { lookupTabKind, onRegistryChange } from "../center/tabRegistry";
 import TabErrorBoundary from "../center/TabErrorBoundary";
@@ -13,9 +12,10 @@ import { ZEN_SYNTHETIC, isZenSynthetic } from "./surfaces";
 /**
  * Zen right pane: every non-graph tab kind, one at a time — no tab
  * strip. A dropdown switcher at the top (provider-picker style)
- * chooses the surface; "Agents" and "Browser" are first-class entries
- * rendering surfaces that aren't workspace tabs at all (the dashboard,
- * and the files/wiki/sources browsers Power keeps in its sidebar).
+ * chooses the surface; "Browser" and "Chat" are first-class entries
+ * rendering surfaces that aren't workspace tabs (the files/wiki/sources
+ * browsers Power keeps in its sidebar, and the docked chat). Agents is
+ * a real core tab.
  * Artifacts NEVER auto-switch the pane — the dropdown carries a pulse
  * badge that JUMPS straight to the latest artifact surface on click
  * (charter Zen rulings, 2026-07-05).
@@ -109,7 +109,6 @@ export default function ZenSurfaceHost({
         />
       );
     }
-    if (activeSynthetic === "agents") return <AgentDashboardTab />;
     if (activeSynthetic === "chat") return <>{chatSurface}</>;
     if (activeSynthetic === "browser") {
       return (

@@ -412,8 +412,6 @@ def _compose_mode(workspace: Path) -> dict[str, Any]:
                     break
             if anchor is not None:
                 break
-        # Preserve the default tab's declared source (e.g. the Agents
-        # tab is "system") rather than forcing "core".
         injected = {**dt, "source": dt.get("source") or "core"}
         if anchor is None:
             tabs.append(injected)
@@ -898,7 +896,7 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "embedding_vendors_keyed": vendor_keyed,
         "media": media,
         "orchestration_preference": orchestration_policy.get_preference(),
-        "orchestration_denied_models": orchestration_policy.get_denied_models(),
+        "orchestration_denied_models": orchestration_policy.get_denied_models(workspace),
     })
 
 
@@ -928,9 +926,11 @@ async def handle_settings_post(request: web.Request) -> web.Response:
     if "orchestration_denied_models" in body:
         raw = body["orchestration_denied_models"]
         if raw is None:
-            orchestration_policy.set_denied_models([])
+            orchestration_policy.set_denied_models([], workspace=workspace)
         elif isinstance(raw, list):
-            orchestration_policy.set_denied_models([str(x) for x in raw])
+            orchestration_policy.set_denied_models(
+                [str(x) for x in raw], workspace=workspace,
+            )
         else:
             return web.json_response(
                 {"error": "orchestration_denied_models must be a list"},
@@ -995,39 +995,51 @@ async def handle_orchestration_models_get(request: web.Request) -> web.Response:
     Runs off the event loop: listing keyed providers can walk a large
     Hugging Face cache (MLX/llama.cpp ``has_key``).
     """
+    workspace: Path = request.app["workspace"]
+
     def _payload() -> dict:
         return {
-            "models": orchestration_policy.list_orchestrator_catalog(),
-            "denied": orchestration_policy.get_denied_models(),
+            "models": orchestration_policy.list_orchestrator_catalog(
+                workspace=workspace,
+            ),
+            "denied": orchestration_policy.get_denied_models(workspace),
             "preference": orchestration_policy.get_preference(),
+            "workspace": str(workspace),
         }
 
     return web.json_response(await asyncio.to_thread(_payload))
 
 
 async def handle_orchestration_models_post(request: web.Request) -> web.Response:
-    """Update the chief-of-staff model allowlist.
+    """Update the chief-of-staff model allowlist for the active workspace.
 
-    Body: ``{key, allowed}`` toggles one catalog row, or
-    ``{denied: ["provider/model", ...]}`` replaces the denylist.
+    Body: ``{key, allowed}`` toggles one catalog row,
+    ``{provider, allowed: false}`` unchecks that provider,
+    or ``{denied: ["provider/model", ...]}`` replaces the denylist.
     """
     try:
         body = await request.json()
     except json.JSONDecodeError:
         return web.json_response({"error": "invalid json"}, status=400)
+    workspace: Path = request.app["workspace"]
     if "denied" in body:
         raw = body.get("denied")
         if raw is None:
             pass
         elif not isinstance(raw, list):
             return web.json_response({"error": "denied must be a list"}, status=400)
+    elif "provider" in body:
+        pid = str(body.get("provider") or "").strip()
+        if not pid:
+            return web.json_response({"error": "provider required"}, status=400)
     elif "key" in body:
         key = str(body.get("key") or "").strip()
         if not key:
             return web.json_response({"error": "key required"}, status=400)
     else:
         return web.json_response(
-            {"error": "expected {key, allowed} or {denied}"}, status=400,
+            {"error": "expected {key, allowed}, {provider, allowed}, or {denied}"},
+            status=400,
         )
 
     def _apply() -> dict:
@@ -1035,17 +1047,38 @@ async def handle_orchestration_models_post(request: web.Request) -> web.Response
             raw = body.get("denied")
             orchestration_policy.set_denied_models(
                 [] if raw is None else [str(x) for x in raw],
+                workspace=workspace,
             )
+        elif "provider" in body:
+            pid = str(body.get("provider") or "").strip()
+            if body.get("allowed"):
+                catalog = orchestration_policy.list_orchestrator_catalog(
+                    workspace=workspace,
+                )
+                denied = [
+                    str(row.get("key") or "")
+                    for row in catalog
+                    if str(row.get("provider") or "") != pid
+                    and not row.get("allowed")
+                    and row.get("key")
+                ]
+                orchestration_policy.set_denied_models(denied, workspace=workspace)
+            else:
+                orchestration_policy.deny_provider(pid, workspace=workspace)
         else:
             orchestration_policy.set_model_allowed(
                 str(body.get("key") or "").strip(),
                 bool(body.get("allowed")),
+                workspace=workspace,
             )
         return {
             "ok": True,
-            "models": orchestration_policy.list_orchestrator_catalog(),
-            "denied": orchestration_policy.get_denied_models(),
+            "models": orchestration_policy.list_orchestrator_catalog(
+                workspace=workspace,
+            ),
+            "denied": orchestration_policy.get_denied_models(workspace),
             "preference": orchestration_policy.get_preference(),
+            "workspace": str(workspace),
         }
 
     return web.json_response(await asyncio.to_thread(_apply))

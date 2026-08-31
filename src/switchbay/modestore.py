@@ -71,13 +71,9 @@ DEFAULT_MODE: dict[str, Any] = {
         {"id": "sketch", "title": "Sketch", "kind": "sketch"},
         {"id": "library", "title": "Library", "kind": "library"},
         {"id": "projects", "title": "Projects", "kind": "projects"},
-        {"id": "schedules", "title": "Schedules", "kind": "schedules"},
-        # The Agents dashboard is cross-workspace (it sees + steers runs in
-        # every workspace), so it's a `system` tab — the strip pins it to
-        # the right, after a separator past all other tabs and before
-        # "+ New…". (The frontend also treats kind=="agents" as system, so
-        # older mode.json files without this `source` get the same place.)
-        {"id": "agents", "title": "Agents", "kind": "agents", "source": "system"},
+        # Last core tab, before pack/user tabs. Schedules live on this
+        # dashboard rather than as their own strip entry.
+        {"id": "agents", "title": "Agents", "kind": "agents"},
     ],
     # No default ladder — without one, all difficulties resolve to the
     # active provider's effective model and the user-visible behaviour
@@ -105,31 +101,55 @@ def load(workspace: Path) -> dict[str, Any]:
     # tab so existing workspaces don't render a now-unregistered kind.
     tabs = data.get("tabs")
     if isinstance(tabs, list):
-        filtered = [
-            t for t in tabs
-            if not (isinstance(t, dict) and t.get("kind") == "slides")
-        ]
-        if not any(isinstance(t, dict) and t.get("kind") == "schedules" for t in filtered):
-            inserted: list[Any] = []
-            done = False
-            for t in filtered:
-                if (
-                    not done and isinstance(t, dict)
-                    and (t.get("kind") == "agents" or t.get("source") == "system")
-                ):
-                    inserted.append({
-                        "id": "schedules", "title": "Schedules", "kind": "schedules",
-                    })
-                    done = True
-                inserted.append(t)
-            if not done:
-                inserted.append({
-                    "id": "schedules", "title": "Schedules", "kind": "schedules",
-                })
-            filtered = inserted
-        if filtered != tabs:
-            data["tabs"] = filtered
+        data["tabs"] = _normalize_tabs(tabs)
     return data
+
+
+_DROPPED_TAB_KINDS = frozenset({"slides", "schedules"})
+
+
+def _core_tab_ids() -> set[str]:
+    return {
+        str(t.get("id"))
+        for t in DEFAULT_MODE.get("tabs", [])
+        if isinstance(t, dict) and t.get("id")
+    }
+
+
+def _normalize_tabs(tabs: list[Any]) -> list[Any]:
+    """Drop retired kinds, promote Agents to last core tab.
+
+    Older mode.json files had Agents as ``source: system`` (trailing
+    strip group) and a standalone Schedules tab. Both are folded into
+    the Agents dashboard now.
+    """
+    core_ids = _core_tab_ids()
+    kept: list[Any] = []
+    agents: dict[str, Any] | None = None
+    for t in tabs:
+        if not isinstance(t, dict):
+            continue
+        kind = str(t.get("kind") or "")
+        if kind in _DROPPED_TAB_KINDS:
+            continue
+        if kind == "agents" or str(t.get("id") or "") == "agents":
+            row = dict(t)
+            row["id"] = str(row.get("id") or "agents")
+            row["title"] = str(row.get("title") or "Agents")
+            row["kind"] = "agents"
+            row.pop("source", None)
+            agents = row
+            continue
+        kept.append(t)
+    if agents is None:
+        agents = {"id": "agents", "title": "Agents", "kind": "agents"}
+    last_core = -1
+    for i, t in enumerate(kept):
+        if str(t.get("id") or "") in core_ids:
+            last_core = i
+    insert_at = last_core + 1 if last_core >= 0 else len(kept)
+    kept.insert(insert_at, agents)
+    return kept
 
 
 def sanitize_ladder(raw) -> dict[str, dict[str, str]]:
