@@ -3698,7 +3698,9 @@ a.sy-source-cite { color: var(--accent); }
 .sy-orch-models-groups {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
 }
 .sy-orch-models-group {
   border: 0;
@@ -3710,6 +3712,21 @@ a.sy-source-cite { color: var(--accent); }
   font-size: 11px;
   color: var(--text-muted);
   padding: 0;
+}
+.sy-orch-models-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  padding: 0;
+  cursor: pointer;
+}
+.sy-orch-models-count {
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
 }
 .sy-orch-models-list {
   display: flex;

@@ -933,82 +933,42 @@ type OrchModelRow = {
   strength: number;
 };
 
-function rowsFromProviders(body: {
-  providers?: Array<{
-    id: string;
-    label?: string;
-    category?: string;
-    default_model?: string;
-    chosen_model?: string | null;
-    has_key?: boolean;
-    models?: string[];
-  }>;
-}): OrchModelRow[] {
-  const out: OrchModelRow[] = [];
-  const seen = new Set<string>();
-  for (const p of body.providers ?? []) {
-    if (!p.has_key || !p.id) continue;
-    const models = (p.models && p.models.length > 0)
-      ? p.models
-      : [p.chosen_model || p.default_model || "default"];
-    const local = p.category === "local" || p.id === "mlx"
-      || p.id === "llamacpp" || p.id === "ollama";
-    for (const model of models) {
-      if (!model) continue;
-      const key = `${p.id}/${model}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({
-        key,
-        provider: p.id,
-        provider_label: p.label || p.id,
-        model,
-        category: p.category || (local ? "local" : ""),
-        local,
-        allowed: true,
-        strength: 0.5,
-      });
-    }
-  }
-  return out;
+function groupRank(pid: string, rows: OrchModelRow[]): number {
+  if (pid === "github_copilot") return 0;
+  const cat = rows[0]?.category || "";
+  if (cat === "subscription") return 1;
+  if (rows[0]?.local) return 3;
+  return 2;
 }
 
 function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
   const [rows, setRows] = useState<OrchModelRow[] | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
+  const [open, setOpen] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     try {
       const r = await fetch("/api/orchestration/models");
       if (r.ok) {
         const body = await r.json() as { models?: OrchModelRow[] };
-        const list = Array.isArray(body.models) ? body.models : [];
-        if (list.length > 0) {
-          setRows(list);
-          setHint(null);
-          return;
-        }
-      } else if (r.status !== 404) {
-        setHint("Could not load chief-of-staff models.");
-      } else {
-        setHint(
-          "This UI needs a daemon that serves /api/orchestration/models. "
-          + "Run make refresh BUILD=1 (restart alone is not enough).",
-        );
-      }
-      const p = await fetch("/api/llm/providers");
-      if (!p.ok) {
-        setRows([]);
+        setRows(Array.isArray(body.models) ? body.models : []);
+        setHint(null);
         return;
       }
-      const pb = await p.json() as Parameters<typeof rowsFromProviders>[0];
-      setRows(rowsFromProviders(pb));
+      if (r.status === 404) {
+        setHint(
+          "This UI needs a current daemon. Run make refresh BUILD=1 "
+          + "(restart alone does not rebuild the dashboard).",
+        );
+      } else {
+        setHint("Could not load chief-of-staff models.");
+      }
+      setRows([]);
     } catch {
       setRows([]);
       setHint(
-        "Could not reach the daemon. After this update, run "
-        + "make refresh BUILD=1 so both the API and the dashboard JS load.",
+        "Could not reach the daemon. Run make refresh BUILD=1.",
       );
     }
   }, []);
@@ -1074,28 +1034,46 @@ function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
       )}
       {groups.size > 0 && (
         <div className="sy-orch-models-groups">
-          {[...groups.entries()].map(([pid, list]) => (
-            <fieldset key={pid} className="sy-orch-models-group">
-              <legend>
-                {list[0]?.provider_label || pid}
-                {list[0]?.local ? " · local" : list[0]?.category ? ` · ${list[0].category}` : ""}
-              </legend>
-              <div className="sy-orch-models-list">
-                {list.map((row) => (
-                  <label key={row.key} className="sy-orch-models-item">
-                    <input
-                      type="checkbox"
-                      checked={row.allowed}
-                      disabled={busy === row.key}
-                      onChange={(e) => void toggle(row.key, e.target.checked)}
-                    />
-                    <code>{row.model}</code>
-                    {row.local && <span className="sy-orch-models-local">local</span>}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-          ))}
+          {[...groups.entries()]
+            .sort((a, b) => groupRank(a[0], a[1]) - groupRank(b[0], b[1]))
+            .map(([pid, list], i) => {
+              const expanded = open[pid] ?? (i < 2 || pid === "github_copilot");
+              const nOn = list.filter((r) => r.allowed).length;
+              return (
+                <fieldset key={pid} className="sy-orch-models-group">
+                  <legend>
+                    <button
+                      type="button"
+                      className="sy-orch-models-toggle"
+                      aria-expanded={expanded}
+                      onClick={() => setOpen((s) => ({ ...s, [pid]: !expanded }))}
+                    >
+                      {expanded ? "▾" : "▸"} {list[0]?.provider_label || pid}
+                      {list[0]?.local ? " · local" : list[0]?.category ? ` · ${list[0].category}` : ""}
+                      <span className="sy-orch-models-count">
+                        {nOn}/{list.length}
+                      </span>
+                    </button>
+                  </legend>
+                  {expanded && (
+                    <div className="sy-orch-models-list">
+                      {list.map((row) => (
+                        <label key={row.key} className="sy-orch-models-item">
+                          <input
+                            type="checkbox"
+                            checked={row.allowed}
+                            disabled={busy === row.key}
+                            onChange={(e) => void toggle(row.key, e.target.checked)}
+                          />
+                          <code>{row.model}</code>
+                          {row.local && <span className="sy-orch-models-local">local</span>}
+                        </label>
+                      ))}
+                    </div>
+                  )}
+                </fieldset>
+              );
+            })}
         </div>
       )}
     </div>

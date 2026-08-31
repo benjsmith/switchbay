@@ -5704,7 +5704,9 @@ async def _oneshot_json(
 
 
 async def handle_llm_providers(request: web.Request) -> web.Response:
-    providers = llmgateway.list_providers()
+    # has_key() for local backends can walk a large HF cache — keep it
+    # off the event loop so the Agent Dashboard does not freeze.
+    providers = await asyncio.to_thread(llmgateway.list_providers)
     # Available providers must show a live model list (Settings and
     # the rail picker share this payload). Await a refresh when the
     # cache is stale so the first open after a new-Mac install isn't
