@@ -1,5 +1,9 @@
 import { test, expect } from "@playwright/test";
 
+test.use({
+  baseURL: process.env.PLAYWRIGHT_BASE_URL || "http://localhost:5173",
+});
+
 const NOW = Date.now() / 1000;
 
 const FAKE_RUNS = {
@@ -28,6 +32,21 @@ const FAKE_RUNS = {
       blackboard_n: 3,
       candidate_findings_n: 2,
       unique_sources: 2,
+      blackboard_rows: [
+        {
+          id: "f-1", node_id: "inv-0", kind: "finding", verdict: "candidate",
+          claim: "T is supported by the 2024 review", sources: 1, ts: NOW - 3,
+        },
+        {
+          id: "f-2", node_id: "inv-1", kind: "finding", verdict: "supported",
+          claim: "Neighbours of T agree on the mechanism", sources: 2, ts: NOW - 2,
+        },
+        {
+          id: "ce-w0-dispatch", node_id: "ce-w0", kind: "dispatch", verdict: "",
+          claim: "worker dispatched in-session by the CE orchestrator",
+          sources: 0, ts: NOW - 1,
+        },
+      ],
       objective: "Research conflicting wiki evidence on T.",
       plan_nodes: [
         {
@@ -302,6 +321,15 @@ test("agent space renders chief, pulses board, and drill-in", async ({ page }) =
 
   await space.locator(".sy-agent-space-roster-btn").filter({ hasText: "blackboard" }).click();
   await expect(space.getByRole("heading", { name: "Blackboard" })).toBeVisible();
+  // The board's live contents, newest first, in their own scroll box —
+  // counters alone read as broken when they sit at zero.
+  const rows = space.locator(".sy-agent-space-bb-rows > li");
+  await expect(rows).toHaveCount(3);
+  await expect(rows.first()).toContainText("dispatched in-session");
+  await expect(rows.last()).toContainText("T is supported");
+  await expect(space.locator(".sy-agent-space-bb-rows")).toHaveCSS(
+    "overflow-y", "auto",
+  );
 
   await expect(page.getByRole("heading", { name: "Recently finished" })).toHaveCount(0);
   const models = page.locator(".sy-orch-models");

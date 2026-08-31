@@ -25,6 +25,19 @@ export function wikiFilePath(raw: string | undefined): string {
   return `wiki/${p}`;
 }
 
+/**
+ * A page's `sources:` entries are vault-relative: mostly bare ingest
+ * filenames (`20260417-…-resnet.md.extracted.md`), occasionally a
+ * rooted path (`vault/raw/x.pdf`, `wiki/projects/y.md`). Bare names used
+ * to get the `wiki/` prefix, so every source file a hit came from
+ * silently failed to match the file tree.
+ */
+function sourceFilePath(raw: string): string {
+  const p = raw.replace(/^\.\//, "").replace(/^\/+/, "");
+  if (!p) return "";
+  return p.includes("/") ? wikiFilePath(p) : `vault/${p}`;
+}
+
 function extraSourcePaths(props: Record<string, unknown> | undefined): string[] {
   if (!props) return [];
   const out: string[] = [];
@@ -35,7 +48,8 @@ function extraSourcePaths(props: Record<string, unknown> | undefined): string[] 
       const s = String(item);
       if (!s || s.startsWith("http://") || s.startsWith("https://")) continue;
       if (s.includes("/") || s.endsWith(".md") || s.endsWith(".pdf")) {
-        out.push(wikiFilePath(s));
+        const path = sourceFilePath(s);
+        if (path) out.push(path);
       }
     }
   }
@@ -76,12 +90,22 @@ export function matchGraphNodes(data: GraphData, query: string): GraphSearchHit[
   return hits;
 }
 
-export function hitFilePaths(data: GraphData, hits: GraphSearchHit[]): string[] {
+/** The matched pages themselves. */
+export function hitPagePaths(hits: GraphSearchHit[]): string[] {
   const paths = new Set<string>();
+  for (const h of hits) if (h.path) paths.add(h.path);
+  return [...paths];
+}
+
+/** The vault files the matched pages were extracted from. */
+export function hitSourcePaths(data: GraphData, hits: GraphSearchHit[]): string[] {
+  const paths = new Set<string>();
+  const pages = new Set(hitPagePaths(hits));
   for (const h of hits) {
-    if (h.path) paths.add(h.path);
     const page = data.pages?.[h.id];
-    for (const p of extraSourcePaths(page?.properties)) paths.add(p);
+    for (const p of extraSourcePaths(page?.properties)) {
+      if (!pages.has(p)) paths.add(p);
+    }
   }
   return [...paths];
 }
@@ -89,7 +113,12 @@ export function hitFilePaths(data: GraphData, hits: GraphSearchHit[]): string[] 
 export type GraphSearchDetail = {
   query: string;
   ids: string[];
+  /** Matched wiki pages. Browsers reveal (expand + scroll to) these. */
   paths: string[];
+  /** Provenance behind the matches — highlighted where the tree already
+   *  shows them, never auto-revealed: one broad query pulls in half the
+   *  vault, and expanding it buries the pages that actually matched. */
+  sourcePaths: string[];
 };
 
 /** Lives outside GraphTab so leaving for Editor doesn't wipe the query. */
@@ -118,10 +147,16 @@ function paint(
   persistGraphQuery(data.workspace || "", q);
   const hits = matchGraphNodes(data, q);
   const ids = hits.map((h) => h.id);
-  const paths = hitFilePaths(data, hits);
+  const paths = hitPagePaths(hits);
+  const sourcePaths = hitSourcePaths(data, hits);
   try {
     window.Graph.highlightSearch?.(ids);
   } catch { /* classic or atlas facade not ready */ }
+  // The wiki page list rings the same hits as the canvas. Always call —
+  // an empty list is how a cancelled search clears the browser.
+  try {
+    window.Sidebar.setSearchHits?.(ids);
+  } catch { /* sidebar not mounted (webview / no wiki) */ }
   clearBtn.hidden = !q;
   if (countEl) {
     if (!q) {
@@ -132,7 +167,7 @@ function paint(
       countEl.textContent = String(hits.length);
     }
   }
-  const detail: GraphSearchDetail = { query: q, ids, paths };
+  const detail: GraphSearchDetail = { query: q, ids, paths, sourcePaths };
   window.dispatchEvent(new CustomEvent("sy:graph-search", { detail }));
   return detail;
 }
@@ -191,8 +226,9 @@ export function installGraphSearch(data: GraphData): void {
   }, { signal });
 
   const saved = peekPersistedQuery(data.workspace || "");
-  if (saved) {
-    input.value = saved;
-    applyNow(saved);
-  }
+  input.value = saved;
+  // Paint unconditionally, including the empty case: a workspace switch
+  // gives this mount a blank box, and the browsers would otherwise keep
+  // highlighting the previous workspace's hits forever.
+  applyNow(saved);
 }

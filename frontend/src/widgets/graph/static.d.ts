@@ -26,6 +26,8 @@ declare global {
     Sidebar: {
       init(data: unknown): void;
       setActive(pageId: string): void;
+      /** Mark page ids hit by the graph search. Empty clears. */
+      setSearchHits?(ids: string[]): void;
     };
     Modal: {
       init(data: unknown, root?: HTMLElement): void;

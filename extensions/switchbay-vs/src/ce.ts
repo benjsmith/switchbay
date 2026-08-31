@@ -244,9 +244,16 @@ function applyDegrees(data: GraphData): void {
   }
 }
 
+/** Workspace roots that are already rooted — everything else is a
+ *  wiki-relative page path (`entities/resnet.md`). Graph search reports
+ *  the vault files a hit came from, and those must not be rewritten to
+ *  `wiki/vault/…` or the Explorer badge lands on nothing. */
+const ROOTED_PREFIXES = ["wiki/", "vault/", "slideshows/", "reports/", "sketches/"];
+
 export function wikiPageUri(folder: vscode.Uri, nodePath: string): vscode.Uri {
-  const trimmed = nodePath.replace(/^\.\//, "");
-  const rel = trimmed.startsWith("wiki/") ? trimmed : path.posix.join("wiki", trimmed);
+  const trimmed = nodePath.replace(/^\.\//, "").replace(/^\/+/, "");
+  const rooted = ROOTED_PREFIXES.some((p) => trimmed.startsWith(p));
+  const rel = rooted ? trimmed : path.posix.join("wiki", trimmed);
   return vscode.Uri.joinPath(folder, rel);
 }
 

@@ -21,15 +21,28 @@ const TYPE_KEYS = [
 
 export type ViewerMode = "classic" | "atlas";
 
+/** The resident scene, as the renderer reads it each frame. */
+type AtlasScene = {
+  nodes: Array<{ id: string; role: string }>;
+  edges: Array<{ priority?: number }>;
+};
+
 type AtlasEngine = {
   focus(id: string, origin?: string): void;
   getState(): { focusId?: string; pinned?: string[] };
   setViewScale?(scale: number): void;
   select?(ids: string[], mode?: "replace" | "add"): void;
-  pin?(id: string): void;
-  unpin?(id: string): void;
   requestScene?(): void;
+  snapshot?(): { scene?: AtlasScene | null };
+  /** Internal. `pinned` is what the renderer draws the dashed halo
+   *  from; assigning it avoids pin()'s scene rebuild (see
+   *  atlasHighlightSearch). */
   trails?: { pinned: string[] };
+  /** Scene-space (canvas-centre origin) hit test, same one the vendored
+   *  engine uses for its own clicks. */
+  hitTester?: {
+    pointAt(x: number, y: number, slack?: number): { id: string; kind: string } | null;
+  };
 };
 
 type AtlasHandle = {
@@ -70,23 +83,64 @@ type AtlasGlobal = {
 let atlasHandle: AtlasHandle | null = null;
 let classicGraph: Window["Graph"] | null = null;
 let atlasMinimapWheel: (() => void) | null = null;
-let atlasSearchPins: string[] = [];
+/** Repaints the current scene without rebuilding it (see wireAtlasControls). */
+let atlasRepaint: (() => void) | null = null;
 
+/**
+ * A search hit wears the dashed halo — the renderer's "pinned" mark,
+ * read straight off engine state at draw time.
+ *
+ * What it must NOT do is call pin()/unpin(): those ask for a scene
+ * rebuild each, so a 40-hit query fired dozens of async rebuilds per
+ * keystroke, and a rebuild landing after the search was cleared
+ * repainted the stale halos — that is how hits got stuck highlighted.
+ * Writing the array and asking for one repaint touches no scene at
+ * all. Selection is cleared alongside: its solid accent ring is a
+ * second, competing highlight on the same nodes.
+ */
 function atlasHighlightSearch(handle: AtlasHandle, ids: string[]): void {
   const engine = handle.engine;
-  engine.select?.(ids, "replace");
-  const cap = Math.min(ids.length, 64);
-  const next = ids.slice(0, cap);
   if (engine.trails && Array.isArray(engine.trails.pinned)) {
-    engine.trails.pinned = [...next];
-    engine.requestScene?.();
-  } else {
-    for (const id of atlasSearchPins) engine.unpin?.(id);
-    for (const id of next) engine.pin?.(id);
+    engine.trails.pinned = [...ids];
   }
-  atlasSearchPins = next;
+  engine.select?.([], "replace");
+  atlasRepaint?.();
   const host = document.getElementById("graph");
   if (host) host.dataset.searchHits = String(ids.length);
+}
+
+/**
+ * Drop Atlas's "current focus" mark from the resident scene.
+ *
+ * The scene builder always designates one node as the focus — accent
+ * ring, its edges lit at `priority: 1` — and when the host has no focus
+ * it picks a deterministic entry node instead. In Switch Bay the whole
+ * wiki stays resident as a single full-graph scene, so the engine skips
+ * rebuilds on focus changes and that mark is stuck on a page the user
+ * never chose, ringed and trailing blue edges for the whole session.
+ *
+ * Roles are read by the renderer per frame and by the layout only while
+ * solving, which has already happened by scene-ready — so demoting them
+ * afterwards changes the picture and nothing else. Returns whether a
+ * repaint is warranted.
+ */
+function stripAtlasFocusMark(engine: AtlasEngine): boolean {
+  const scene = engine.snapshot?.().scene;
+  if (!scene) return false;
+  let changed = false;
+  for (const node of scene.nodes) {
+    if (node.role === "focus") {
+      node.role = "neighbour";
+      changed = true;
+    }
+  }
+  for (const edge of scene.edges) {
+    if (edge.priority === 1) {
+      edge.priority = 5;
+      changed = true;
+    }
+  }
+  return changed;
 }
 
 export function pageCount(data: GraphData): number {
@@ -153,6 +207,9 @@ function wireAtlasControls(handle: AtlasHandle): void {
     if (typeState) typeState.textContent = `${types.size}/12`;
     handle.setLabels(mode, Array.from(types));
   };
+  // setLabels re-renders the resident scene (no rebuild, no layout
+  // churn) — the cheapest repaint the vendored API exposes.
+  atlasRepaint = paintLabels;
   const setMode = (next: "auto" | "on" | "off") => {
     mode = next;
     document.documentElement.dataset.labels = mode;
@@ -249,13 +306,32 @@ function openAtlasPage(id: string): void {
   atlasOnSelect?.(id);
 }
 
-/** Snapshot hover id on pointerdown (Atlas clears it before click) and
- *  open that page on a non-drag pointerup. Covers clicks that do not
- *  change Atlas focus (already-focused node, full-graph hybrid). */
-function bindAtlasNodeClick(container: HTMLElement): () => void {
-  let press: { x: number; y: number; id: string | null } | null = null;
+/** Open the page under a non-drag pointerup, and treat a click on empty
+ *  canvas as "drop the selection".
+ *
+ *  This used to open whatever `canvas.dataset.hoverId` held at
+ *  pointerdown. Hover only updates on pointermove, so any click that
+ *  followed a scene change — a node that drifted out from under the
+ *  cursor, a click after a wheel-zoom — opened a document the user
+ *  never pointed at. The engine's own hit tester answers the actual
+ *  question: is there a node under this pixel? */
+function bindAtlasNodeClick(container: HTMLElement, engine: AtlasEngine): () => void {
+  let press: { x: number; y: number; hoverId: string | null } | null = null;
   const mainCanvas = () =>
     container.querySelector<HTMLCanvasElement>("canvas:not(.atlas-minimap)");
+  /** id | null (empty space) | undefined (no hit tester — can't tell). */
+  const nodeAt = (ev: PointerEvent): string | null | undefined => {
+    const canvas = mainCanvas();
+    const tester = engine.hitTester;
+    if (!canvas || !tester?.pointAt) return undefined;
+    const rect = canvas.getBoundingClientRect();
+    const hit = tester.pointAt(
+      ev.clientX - rect.left - rect.width / 2,
+      ev.clientY - rect.top - rect.height / 2,
+      6,
+    );
+    return hit && hit.kind === "node" ? hit.id : null;
+  };
   const onDown = (ev: PointerEvent) => {
     const t = ev.target;
     if (!(t instanceof Element) || t.closest(".atlas-minimap")) {
@@ -265,16 +341,22 @@ function bindAtlasNodeClick(container: HTMLElement): () => void {
     press = {
       x: ev.clientX,
       y: ev.clientY,
-      id: mainCanvas()?.dataset.hoverId || null,
+      hoverId: mainCanvas()?.dataset.hoverId || null,
     };
   };
   const onUp = (ev: PointerEvent) => {
     if (!press) return;
     const dragged = Math.hypot(ev.clientX - press.x, ev.clientY - press.y) > 6;
-    const id = press.id;
+    const hovered = press.hoverId;
     press = null;
-    if (dragged || !id) return;
-    openAtlasPage(id);
+    if (dragged) return;
+    const hit = nodeAt(ev);
+    const id = hit === undefined ? hovered : hit;
+    if (id) {
+      openAtlasPage(id);
+    } else {
+      window.dispatchEvent(new CustomEvent("sy:graph-blank-click"));
+    }
   };
   container.addEventListener("pointerdown", onDown, true);
   container.addEventListener("pointerup", onUp, true);
@@ -295,7 +377,10 @@ function installGraphFacade(handle: AtlasHandle): void {
       handle.engine.focus(pageId, "system");
     },
     clearFocus: () => {
-      // Host close must not leave engine focus so a later echo reopens.
+      // Nothing to undo: the accent focus mark is stripped from every
+      // scene as it lands (stripAtlasFocusMark), so there is no ring to
+      // chase here. Forcing a rebuild to unset the engine's focusId
+      // would only make the builder pick a fresh entry node.
     },
     highlightSearch: (ids: string[]) => {
       atlasHighlightSearch(handle, ids);
@@ -315,12 +400,12 @@ export function destroyAtlas(): void {
     atlasClickUnbind = null;
   }
   atlasOnSelect = null;
+  atlasRepaint = null;
   if (atlasHandle) {
     try { atlasHandle.destroy(); } catch { /* already torn down */ }
     atlasHandle = null;
   }
   if (classicGraph) window.Graph = classicGraph;
-  atlasSearchPins = [];
 }
 
 export function mountAtlas(
@@ -373,13 +458,22 @@ export function mountAtlas(
       if (event.kind === "item-open-requested" && event.id) {
         openAtlasPage(event.id);
       }
+      // Every scene arrives carrying a focus mark. Take it off before
+      // the user sees it; the engine's own scene-ready paint runs after
+      // this callback, so no extra repaint is needed here.
+      if (event.kind === "scene-ready" && atlasHandle) {
+        stripAtlasFocusMark(atlasHandle.engine);
+      }
     },
   });
   atlasHandle = handle;
   atlasMinimapWheel = bindAtlasMinimapWheel(container);
-  atlasClickUnbind = bindAtlasNodeClick(container);
+  atlasClickUnbind = bindAtlasNodeClick(container, handle.engine);
   wireAtlasControls(handle);
   installGraphFacade(handle);
+  // Covers a scene that landed before atlasHandle was assigned (the
+  // onEvent hook above skips those).
+  if (stripAtlasFocusMark(handle.engine)) atlasRepaint?.();
   return true;
 }
 

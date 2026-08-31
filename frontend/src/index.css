@@ -3872,6 +3872,56 @@ a.sy-source-cite { color: var(--accent); }
   font-size: 11px;
   color: var(--text-faint);
 }
+/* Live board contents. Capped height with its own scroll so a busy
+ * board never pushes the message board off the dashboard. */
+.sy-agent-space-bb-rows {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0 6px 0 0;
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.sy-agent-space-bb-rows > li {
+  border-left: 2px solid var(--line-strong);
+  padding-left: 8px;
+}
+.sy-agent-space-bb-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.sy-agent-space-bb-node {
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+.sy-agent-space-bb-verdict,
+.sy-agent-space-bb-kind {
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 9.5px;
+}
+.sy-agent-space-bb-verdict { color: var(--accent); }
+.sy-agent-space-bb-claim {
+  margin: 2px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sy-agent-space-bb-empty {
+  margin: 8px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-muted);
+}
 .sy-agent-space-roster {
   list-style: none;
   margin: 0;

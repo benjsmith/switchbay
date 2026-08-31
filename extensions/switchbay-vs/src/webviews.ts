@@ -56,7 +56,7 @@ function graphWebviewHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): strin
 
 export function openGraph(
   context: vscode.ExtensionContext,
-  opts?: { onSearch?: (paths: string[]) => void },
+  opts?: { onSearch?: (paths: string[], sourcePaths?: string[]) => void },
 ): void {
   const folder = wikiFolderUri() || workspaceFolder();
   if (!folder) {
@@ -111,6 +111,7 @@ export function openGraph(
     type?: string;
     node?: GraphNode;
     paths?: string[];
+    sourcePaths?: string[];
   }) => {
     if (msg.type === "ready") {
       await sendGraph();
@@ -122,7 +123,7 @@ export function openGraph(
       return;
     }
     if (msg.type === "search") {
-      opts?.onSearch?.(msg.paths ?? []);
+      opts?.onSearch?.(msg.paths ?? [], msg.sourcePaths ?? []);
       return;
     }
     const node = msg.node;

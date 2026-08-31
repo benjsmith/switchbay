@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  hitFilePaths,
+  hitPagePaths,
+  hitSourcePaths,
   matchGraphNodes,
   peekPersistedQuery,
   persistGraphQuery,
@@ -26,7 +27,13 @@ const data: GraphData = {
       title: "Alpha particle",
       type: "concept",
       path: "concepts/alpha.md",
-      properties: { sources: ["vault/raw/helium.pdf"] },
+      properties: {
+        sources: [
+          "vault/raw/helium.pdf",
+          "20260417-101643-local-helium.md.extracted.md",
+          "https://example.com/helium",
+        ],
+      },
       body_html: "",
     },
     beta: {
@@ -65,11 +72,19 @@ test("matchGraphNodes is substring over title/id/type", () => {
   assert.ok(matchGraphNodes(data, "entity").some((h) => h.id === "beta"));
 });
 
-test("hitFilePaths includes associated vault sources", () => {
+test("hits split into matched pages and their vault provenance", () => {
   const hits: GraphSearchHit[] = matchGraphNodes(data, "alpha");
-  const paths = hitFilePaths(data, hits);
-  assert.ok(paths.includes("wiki/concepts/alpha.md"));
-  assert.ok(paths.includes("vault/raw/helium.pdf"));
+  assert.deepEqual(hitPagePaths(hits), ["wiki/concepts/alpha.md"]);
+
+  const sources = hitSourcePaths(data, hits);
+  assert.ok(sources.includes("vault/raw/helium.pdf"));
+  // A bare `sources:` entry is an ingest filename in the vault, not a
+  // wiki page — prefixing it with wiki/ pointed at a file that has
+  // never existed, so source files never lit up in the browsers.
+  assert.ok(sources.includes("vault/20260417-101643-local-helium.md.extracted.md"));
+  assert.ok(!sources.some((p) => p.startsWith("http")));
+  // The page itself is not repeated as its own provenance.
+  assert.ok(!sources.includes("wiki/concepts/alpha.md"));
 });
 
 test("persisted query survives until cleared and ignores other workspaces", () => {

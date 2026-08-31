@@ -259,6 +259,9 @@ export default function FileBrowser({
   const [query, setQuery] = useState("");
   /** Wiki/vault paths highlighted by the graph-view search overlay. */
   const [searchHits, setSearchHits] = useState<Set<string> | null>(null);
+  /** The subset that is a matched page — those get revealed (expanded +
+   *  scrolled to); provenance files are only tinted where already open. */
+  const [searchPages, setSearchPages] = useState<Set<string> | null>(null);
   const [sort, setSort] = useState<SortMode>("asc");
   const [extFilter, setExtFilter] = useState<Set<string>>(() => new Set());
   const [filterOpen, setFilterOpen] = useState(false);
@@ -341,19 +344,20 @@ export default function FileBrowser({
   // When a filter is active, show every ancestor of a match — otherwise
   // matches deep in the tree are hidden inside collapsed dirs. Also
   // auto-inspect slideshow packages that contain a match so sealed
-  // media files can surface under search. Graph-search hits expand
-  // the same way so highlighted files are visible.
+  // media files can surface under search. Graph-search expands for the
+  // matched PAGES only — expanding for their provenance too would open
+  // most of vault/ on any broad query.
   const effectiveExpanded = useMemo(() => {
     if (!filterActive && !searchActive) return expanded;
     const set = new Set(expanded);
     if (filterActive) {
       for (const f of filtered) for (const dir of ancestorDirs(f)) set.add(dir);
     }
-    if (searchHits) {
-      for (const f of searchHits) for (const dir of ancestorDirs(f)) set.add(dir);
+    if (searchPages) {
+      for (const f of searchPages) for (const dir of ancestorDirs(f)) set.add(dir);
     }
     return set;
-  }, [expanded, filtered, filterActive, searchActive, searchHits]);
+  }, [expanded, filtered, filterActive, searchActive, searchPages]);
 
   const effectiveInspected = useMemo(() => {
     if (!filterActive) return inspectedPackages;
@@ -398,20 +402,24 @@ export default function FileBrowser({
 
   useEffect(() => {
     const onSearch = (ev: Event) => {
-      const paths = (ev as CustomEvent<{ paths?: string[] }>).detail?.paths;
-      if (!paths?.length) {
+      const detail = (ev as CustomEvent<{ paths?: string[]; sourcePaths?: string[] }>).detail;
+      const paths = detail?.paths ?? [];
+      const sources = detail?.sourcePaths ?? [];
+      if (!paths.length && !sources.length) {
         setSearchHits(null);
+        setSearchPages(null);
         return;
       }
-      setSearchHits(new Set(paths));
+      setSearchHits(new Set([...paths, ...sources]));
+      setSearchPages(paths.length ? new Set(paths) : null);
     };
     window.addEventListener("sy:graph-search", onSearch);
     return () => window.removeEventListener("sy:graph-search", onSearch);
   }, []);
 
   useEffect(() => {
-    if (!searchHits || searchHits.size === 0) return;
-    const first = [...searchHits][0];
+    if (!searchPages || searchPages.size === 0) return;
+    const first = [...searchPages][0];
     if (!first) return;
     const tid = window.setTimeout(() => {
       const row = document.querySelector<HTMLElement>(
@@ -420,7 +428,7 @@ export default function FileBrowser({
       row?.scrollIntoView({ behavior: "smooth", block: "nearest" });
     }, 80);
     return () => window.clearTimeout(tid);
-  }, [searchHits]);
+  }, [searchPages]);
 
   // When the active selection points at a page path (likely from
   // a wiki-sidebar click), expand the file-browser tree to reveal

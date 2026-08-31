@@ -248,6 +248,7 @@ async def run_from_tool(
         filled["ok"] = bool(rec.get("ok", True))
         if rec.get("error"):
             filled["error"] = rec.get("error")
+        _publish_handback(parent, node_id=node_id, role=role, rec=rec)
         filled["note"] = (
             f"fresh-context {role} on {filled['provider']}/"
             f"{filled.get('model') or 'default'}"
@@ -270,6 +271,137 @@ async def run_from_tool(
                 failed=failed or set(),
                 running=running or set(),
             )
+
+
+def is_cli_dispatch(tool_name: str) -> bool:
+    """A ce_dispatch_worker the CLI ran itself, over MCP.
+
+    Providers with `tools: False` (claude-code, codex) drive their own
+    agent loop: our tool specs are never sent, the call arrives as
+    `mcp__switchbay__ce_dispatch_worker`, and the host's interception —
+    which spawns child runs — never fires. We still see the call go by,
+    which is enough to put the worker on the DAG.
+    """
+    name = (tool_name or "").strip()
+    return name.endswith("ce_dispatch_worker") and name != "ce_dispatch_worker"
+
+
+def register_cli_dispatch(
+    plan: Any,
+    parent: dict[str, Any] | None,
+    payload: dict[str, Any] | None,
+    *,
+    from_node: Any = None,
+    running: set[str] | None = None,
+) -> str | None:
+    """Put a CLI-side CE worker on the plan so the DAG shows the fan-out.
+
+    These nodes are a record of dispatch, not a host-run child: the CLI
+    owns their execution and never reports per-worker completion, so
+    they stay running until the node that dispatched them finishes.
+    """
+    from . import orchestration
+
+    if plan is None or not hasattr(plan, "nodes"):
+        return None
+    data = payload if isinstance(payload, dict) else {}
+    role = str(data.get("role") or "worker").strip() or "worker"
+    brief = str(data.get("brief") or "").strip()
+    node_id = _next_node_id(plan, parent, role)
+    node = orchestration.PlanNode(
+        node_id=node_id,
+        kind=_kind_for_role(role),
+        objective=(brief or f"CE {role}")[:2000],
+        role=role,
+        tools=list(orchestration.READ_ONLY_TOOLS),
+        graph_access="read",
+        independence="high",
+        output_contract="verification" if role in REVIEW_ROLES else "findings",
+        method_hint=f"ce:{role} (cli)",
+        provider=getattr(from_node, "provider", None),
+        model=getattr(from_node, "model", None),
+    )
+    plan.nodes.append(node)
+    if running is not None:
+        running.add(node_id)
+    orchestration.publish_blackboard_row(parent, orchestration.blackboard_row(
+        row_id=f"{node_id}-dispatch",
+        node_id=node_id,
+        kind="dispatch",
+        claim=f"{role} dispatched in-session by the CE orchestrator"
+              + (f": {brief}" if brief else ""),
+    ))
+    return node_id
+
+
+def finish_cli_dispatches(
+    node_ids: list[str],
+    *,
+    running: set[str] | None,
+    terminal: set[str] | None,
+) -> None:
+    """Retire dispatch records when their dispatcher's turn is over.
+
+    `terminal` is the caller's completed OR failed set: if the CE
+    orchestrator itself failed, the fate of the workers it dispatched
+    in-session is unknown, and the dashboard drops failed nodes — which
+    beats claiming a success nobody reported.
+    """
+    for nid in node_ids:
+        if running is not None:
+            running.discard(nid)
+        if terminal is not None:
+            terminal.add(nid)
+
+
+def _publish_handback(
+    parent: dict[str, Any] | None,
+    *,
+    node_id: str,
+    role: str,
+    rec: dict[str, Any],
+) -> None:
+    """Put what a CE worker handed back on the shared blackboard.
+
+    Each worker runs against its own throwaway Blackboard (fresh context
+    is the point), so nothing used to reach the parent and the dashboard
+    counters sat at zero for the life of the run. Structured findings are
+    posted as findings; anything else lands as one row naming the role
+    and an excerpt, which is what the curator actually received.
+    """
+    if parent is None:
+        return
+    from . import evidence, orchestration
+
+    text = str(rec.get("output") or "")
+    if not rec.get("ok"):
+        orchestration.publish_blackboard_row(parent, orchestration.blackboard_row(
+            row_id=f"{node_id}-err",
+            node_id=node_id,
+            kind="error",
+            claim=f"{role} failed: {rec.get('error') or 'no output'}",
+        ))
+        return
+    parsed = evidence.parse_json_object(text)
+    items = parsed.get("findings") if isinstance(parsed, dict) else None
+    if isinstance(items, list) and items:
+        for f in evidence.parse_findings(text, node_id=node_id):
+            orchestration.publish_blackboard_row(parent, orchestration.blackboard_row(
+                row_id=f.finding_id,
+                node_id=node_id,
+                kind="finding",
+                claim=f.claim,
+                verdict=f.verdict,
+                sources=len(f.evidence),
+            ))
+        return
+    orchestration.publish_blackboard_row(parent, orchestration.blackboard_row(
+        row_id=f"{node_id}-handback",
+        node_id=node_id,
+        kind="handback",
+        claim=text or f"{role} returned no text",
+        verdict="candidate",
+    ))
 
 
 def _next_node_id(plan: Any, parent: dict[str, Any] | None, role: str) -> str:

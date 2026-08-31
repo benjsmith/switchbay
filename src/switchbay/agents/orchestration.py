@@ -1398,6 +1398,78 @@ def load_plan(workspace: Path, orchestration_id: str) -> OrchestrationPlan | Non
 _MAX_HANDOFFS = 80
 CHIEF_ID = "chief"
 BLACKBOARD_ID = "blackboard"
+# Rows carried on the parent record so the dashboard can show what is
+# actually on the board. The counters alone read as broken when they sit
+# at zero — the content says whether that means "empty" or "not wired".
+# Kept small: this rides on /api/runs/active, which the dashboard polls
+# every couple of seconds. Full text stays in the run artifacts.
+_MAX_BLACKBOARD_ROWS = 60
+_BB_CLAIM_CHARS = 400
+
+
+def blackboard_row(
+    *,
+    row_id: str,
+    node_id: str,
+    kind: str,
+    claim: str,
+    verdict: str = "",
+    sources: int = 0,
+    ts: float | None = None,
+) -> dict[str, Any]:
+    """One JSON-safe line of the board, as the dashboard renders it."""
+    text = (claim or "").strip()
+    if len(text) > _BB_CLAIM_CHARS:
+        text = text[:_BB_CLAIM_CHARS].rstrip() + "…"
+    return {
+        "id": row_id,
+        "node_id": node_id,
+        "kind": kind,
+        "verdict": verdict,
+        "claim": text,
+        "sources": int(sources or 0),
+        "ts": float(ts if ts is not None else time.time()),
+    }
+
+
+def blackboard_rows(bb: evidence.Blackboard) -> list[dict[str, Any]]:
+    """Project a live board into dashboard rows (newest last, capped)."""
+    rows = [
+        blackboard_row(
+            row_id=f.finding_id,
+            node_id=f.node_id,
+            kind="finding",
+            claim=f.claim,
+            verdict=f.verdict,
+            sources=len(f.evidence),
+        )
+        for f in bb.findings
+    ]
+    return rows[-_MAX_BLACKBOARD_ROWS:]
+
+
+def publish_blackboard_row(
+    parent: dict[str, Any] | None,
+    row: dict[str, Any],
+) -> None:
+    """Append a row to the parent record and re-derive its counters.
+
+    The CE-curate path has no shared Blackboard object — each worker is
+    run with a throwaway one — so its counters could only ever report
+    zero. Workers publish here instead, and the counts follow the rows.
+    """
+    if parent is None:
+        return
+    rows = parent.get("blackboard_rows")
+    if not isinstance(rows, list):
+        rows = []
+    rows.append(row)
+    parent["blackboard_rows"] = rows[-_MAX_BLACKBOARD_ROWS:]
+    parent["blackboard_n"] = len(rows)
+    parent["candidate_findings_n"] = sum(
+        1 for r in rows if str(r.get("verdict") or "") == "candidate"
+    )
+    parent["unique_sources"] = sum(int(r.get("sources") or 0) for r in rows)
 
 
 def _plan_nodes_view(
@@ -1563,6 +1635,7 @@ def _sync_parent_graph(
         parent["blackboard_n"] = len(blackboard.findings)
         parent["candidate_findings_n"] = len(blackboard.candidates())
         parent["unique_sources"] = blackboard.unique_source_count()
+        parent["blackboard_rows"] = blackboard_rows(blackboard)
         v = blackboard.latest_verification()
         if v is not None:
             parent["verification_conflicts"] = v.conflicts
@@ -2060,6 +2133,31 @@ async def _run_agent_node(
         max_turns = 1
     recent_tools: list[str] = list((live or {}).get("recent_tools") or [])[-20:]
     cli_session = resume_session
+    # CE workers this node dispatched inside its own CLI loop. They are
+    # on the DAG as dispatch records; nobody reports their completion,
+    # so they retire with this node.
+    cli_dispatched: list[str] = []
+
+    def _note_cli_dispatch(tool_name: str, tool_input: Any) -> None:
+        from .ce_workers import is_cli_dispatch, register_cli_dispatch
+
+        if plan is None or not is_cli_dispatch(tool_name):
+            return
+        nid = register_cli_dispatch(
+            plan, graph_parent,
+            tool_input if isinstance(tool_input, dict) else {},
+            from_node=node,
+            running=graph_running,
+        )
+        if not nid:
+            return
+        cli_dispatched.append(nid)
+        _sync_parent_graph(
+            graph_parent, plan,
+            completed=graph_completed or set(),
+            failed=graph_failed or set(),
+            running=graph_running or {nid},
+        )
 
     def _flush_live(**extra: Any) -> None:
         runs_now = app.setdefault("runs", {}) if app is not None else {}
@@ -2174,6 +2272,7 @@ async def _run_agent_node(
                     payload={"id": ev.id, "name": ev.name, "input": ev.input},
                     ref_id=ev.id, run_id=run_id,
                 )
+                _note_cli_dispatch(ev.name, ev.input)
                 runs_now: dict[str, dict[str, Any]] = app.setdefault("runs", {})
                 n_tools = int((runs_now.get(run_id) or {}).get("tool_count") or 0) + 1
                 _touch_child(
@@ -2381,6 +2480,21 @@ async def _run_agent_node(
             _persist_event(
                 app, workspace, thread_id, "system", error[:400],
                 source="orchestration", actor=str(pid), run_id=run_id,
+            )
+    if cli_dispatched:
+        from .ce_workers import finish_cli_dispatches
+
+        finish_cli_dispatches(
+            cli_dispatched,
+            running=graph_running,
+            terminal=graph_failed if error else graph_completed,
+        )
+        if plan is not None:
+            _sync_parent_graph(
+                graph_parent, plan,
+                completed=graph_completed or set(),
+                failed=graph_failed or set(),
+                running=graph_running or set(),
             )
     _retire_child(app, run_id, parent_run_id, error)
     if not error:

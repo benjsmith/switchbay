@@ -39,14 +39,18 @@ export function activate(context: vscode.ExtensionContext): void {
   const wiki = new WikiTreeProvider();
   const wikiDecor = new WikiSearchDecorations();
   const projects = new ProjectsTreeProvider();
-  const applyGraphSearch = (paths: string[]) => {
+  // Wiki tree marks the matched pages; the Explorer badges every file
+  // behind the search, the vault sources of those pages included.
+  const applyGraphSearch = (paths: string[], sourcePaths: string[] = []) => {
     wiki.setSearchPaths(paths);
     const folder = wikiFolderUri();
     if (!folder) {
       wikiDecor.setHits([]);
       return;
     }
-    wikiDecor.setHits(paths.map((p) => wikiPageUri(folder, p).fsPath));
+    wikiDecor.setHits(
+      [...paths, ...sourcePaths].map((p) => wikiPageUri(folder, p).fsPath),
+    );
   };
   // Views first — MCP/chat failures must not leave "no data provider".
   context.subscriptions.push(

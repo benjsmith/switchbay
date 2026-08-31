@@ -389,6 +389,12 @@ body[data-sidebar="collapsed"] #sidebar > * { display: none; }
   background: var(--bg-elev);
   color: var(--accent);
 }
+/* Graph-view search hit — same tint the Files browser uses, so a search
+ * reads identically across the canvas and both browsers. */
+.sidebar-row[data-search-hit="true"] {
+  background: color-mix(in oklab, var(--accent), transparent 82%);
+}
+.sidebar-row[data-search-hit="true"] .row-title { color: var(--accent); }
 .row-title {
   white-space: nowrap;
   overflow: hidden;
@@ -527,8 +533,23 @@ body[data-sidebar="collapsed"] .sidebar-restore { display: inline-flex; }
 .node[data-vis="hidden"]     { opacity: 0; pointer-events: none; }
 .node[data-vis="dim"]        { opacity: 0.18; }
 .node[data-vis="neighbour"]  { opacity: 0.85; }
-.node[data-vis="focus"] circle,
-.node.search-hit circle { stroke: var(--accent); stroke-width: 2px; }
+.node[data-vis="focus"] > circle.node-body { stroke: var(--accent); stroke-width: 2px; }
+
+/* Search hits wear the Atlas halo and nothing else: a dashed ring
+ * standing off the node, same dash/colour/standoff the Atlas renderer
+ * uses for its pinned marks. The node keeps its own fill and stroke —
+ * an extra accent outline read as a second, competing highlight.
+ * `r` is refreshed on zoom (graph.js) so the standoff holds in
+ * screen px. */
+.node > circle.search-ring { display: none; fill: none; pointer-events: none; }
+.node.search-hit > circle.search-ring {
+  display: inline;
+  stroke: var(--text);
+  stroke-width: 1.2px;
+  stroke-dasharray: 2 2;
+  opacity: 0.95;
+  vector-effect: non-scaling-stroke;
+}
 
 /* Host-level chrome (sibling of the canvas), not inside #graph-pane —
  * the SVG/canvas stack was painting over an in-pane overlay. */
@@ -1293,11 +1314,11 @@ body[data-modal="open"]:has(#modal:not([aria-hidden="true"])) #sidebar * {
 /* ── Split mode (D4): review-before-split styling ─────────────── */
 svg.split-mode .node { cursor: pointer; }
 svg.split-mode .node:not(.split-move):not(.split-copy) { opacity: 0.45; }
-.node.split-move circle {
+.node.split-move > circle.node-body {
   stroke: #d29922 !important;
   stroke-width: 3px !important;
 }
-.node.split-copy circle {
+.node.split-copy > circle.node-body {
   stroke: #3fb950 !important;
   stroke-width: 3px !important;
   stroke-dasharray: 4 3;

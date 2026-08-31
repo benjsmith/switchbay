@@ -3,6 +3,54 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-08-31 — v0.12.6 — Switch Bay VS 0.3.13
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` so the graph-search and dashboard changes load.
+
+### Changed
+
+- **Graph search marks hits and nothing else.** Both viewers now use the
+  same dashed halo; Classic no longer recolours every edge that touches
+  a hit (a 40-hit query drew the whole canvas in accent), and no longer
+  forces a label onto each hit. Labels stay on the user's `labels`
+  setting and type filter; hovering names the node under the cursor.
+- **Search no longer auto-zooms** to the hits. The camera stays where
+  you put it.
+- The wiki page list marks search hits the same way the Files browser
+  does, and opens the type groups that contain them for the search.
+- **Atlas** drops the accent "current focus" mark. With the wiki
+  resident as one scene the engine never rebuilds on focus, so that
+  ring sat on an entry node nobody picked for the whole session.
+
+### Fixed
+
+- Graph search reported a page's `sources:` entries as `wiki/<name>`.
+  They are vault files, so every source behind a hit silently matched
+  nothing in the browsers (10 of 15 paths on one query here). The
+  Explorer decoration in Switch Bay VS was wrong the same way, and now
+  propagates to enclosing folders.
+- Atlas search hits got stuck highlighted: each keystroke pinned them,
+  and pinning asks for a scene rebuild, so a rebuild landing after the
+  search was cleared repainted stale halos.
+- Clicking empty Atlas canvas opened whatever page was last hovered —
+  hover only updates on pointer *move*, so the id was routinely stale.
+  Empty clicks now hit-test, and clear the selection.
+- Mounting the graph with no query now clears the browsers, so a
+  workspace switch cannot strand the previous workspace's highlights.
+- **Agent Dashboard:** the chief of staff had no edge to the blackboard,
+  leaving it floating above its own DAG when the only worker was fed by
+  the board.
+- **Blackboard counters were structurally zero** on the CE-curate path:
+  each worker ran against a throwaway board, so nothing reached the
+  parent. Workers now publish what they hand back, and clicking the
+  blackboard shows the live rows in a scrollable panel.
+- **CE fan-out workers appear in the DAG.** Providers that drive their
+  own agent loop (claude-code) call `ce_dispatch_worker` over MCP, where
+  the host's spawn interception never fires. Those dispatches are now
+  recorded as DAG nodes and board rows, labelled `ce:<role> (cli)`, and
+  retire with the node that dispatched them.
+
 ## 2026-08-31 — v0.12.5 — Switch Bay VS 0.3.12
 
 **Migration:** none. **Breaking:** none. After pull, run

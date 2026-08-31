@@ -5,6 +5,7 @@ import SchedulesPanel from "../schedules/SchedulesPanel";
 import AgentSpace, {
   CHIEF_ID,
   isOrchestrationRun,
+  type BlackboardRow,
   type OrchHandoff,
   type PlanNodeView,
   type SpaceRun,
@@ -152,6 +153,7 @@ type Run = {
   blackboard_n?: number | null;
   candidate_findings_n?: number | null;
   unique_sources?: number | null;
+  blackboard_rows?: BlackboardRow[] | null;
   objective?: string | null;
   orchestration_stage?: string | null;
   step?: string | null;

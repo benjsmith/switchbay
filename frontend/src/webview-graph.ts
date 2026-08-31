@@ -139,12 +139,18 @@ async function bind(data: GraphData): Promise<void> {
     bind(data);
   }, { signal });
   window.addEventListener("sy:graph-search", (ev) => {
-    const detail = (ev as CustomEvent<{ query?: string; ids?: string[]; paths?: string[] }>).detail || {};
+    const detail = (ev as CustomEvent<{
+      query?: string; ids?: string[]; paths?: string[]; sourcePaths?: string[];
+    }>).detail || {};
     vscode.postMessage({
       type: "search",
       query: detail.query || "",
       ids: detail.ids || [],
+      // The tree marks pages; Explorer decorations badge every hit file,
+      // provenance included — nothing there force-expands, so the vault
+      // files are a bonus rather than a wall.
       paths: detail.paths || [],
+      sourcePaths: detail.sourcePaths || [],
     });
   }, { signal });
   mount.addEventListener("contextmenu", (ev) => {

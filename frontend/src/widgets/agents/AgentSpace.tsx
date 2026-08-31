@@ -17,6 +17,18 @@ export type OrchHandoff = {
   text: string;
 };
 
+/** One line of the shared evidence board, as the daemon publishes it. */
+export type BlackboardRow = {
+  id: string;
+  node_id: string;
+  /** finding | handback | error — what put this row on the board. */
+  kind: string;
+  verdict?: string;
+  claim: string;
+  sources?: number;
+  ts?: number;
+};
+
 export type PlanNodeView = {
   node_id: string;
   kind: string;
@@ -67,6 +79,7 @@ export type SpaceRun = {
   blackboard_n?: number | null;
   candidate_findings_n?: number | null;
   unique_sources?: number | null;
+  blackboard_rows?: BlackboardRow[] | null;
   objective?: string | null;
   orchestration_stage?: string | null;
   step?: string | null;
@@ -376,7 +389,11 @@ export default function AgentSpace({
         label: "blackboard",
         kind: "blackboard",
         status: idle ? "ready" : (chief.status || "running"),
-        activity: `${chief.candidate_findings_n ?? 0} candidates · ${chief.blackboard_n ?? 0} rows`,
+        // "0 candidates · 0 rows" reads as a broken counter. Say empty
+        // when it is empty; count only once there is something to count.
+        activity: (chief.blackboard_n ?? 0) > 0
+          ? `${chief.blackboard_n} rows · ${chief.candidate_findings_n ?? 0} candidates`
+          : "empty — click to open",
         model: "",
         provider: "",
         lastChunkAt: chief.last_chunk_at ?? 0,
@@ -384,6 +401,11 @@ export default function AgentSpace({
       }));
       byId.add(BLACKBOARD_ID);
     }
+    // The chief owns the board: it posts the objective and reads what
+    // comes back. Without this edge a DAG whose only worker is fed BY
+    // the blackboard (a lone synthesizer) drew the chief unconnected,
+    // floating above a graph it is the root of.
+    if (byId.has(BLACKBOARD_ID)) edges.push({ from: CHIEF_ID, to: BLACKBOARD_ID });
     for (const n of nodes) {
       if (n.kind === "chief" || n.kind === "blackboard") continue;
       if (n.kind === "investigate" || n.kind === "execute") {
@@ -406,6 +428,13 @@ export default function AgentSpace({
           edges.push({ from: CHIEF_ID, to: n.id });
         }
       }
+    }
+    // Anything still unreachable from the chief hangs off it directly —
+    // a node with no lineage on screen reads as a rendering bug.
+    const hasIncoming = new Set(edges.map((e) => e.to));
+    for (const n of nodes) {
+      if (n.kind === "chief" || hasIncoming.has(n.id)) continue;
+      edges.push({ from: CHIEF_ID, to: n.id });
     }
     const pruned = edges.filter((e) => byId.has(e.from) && byId.has(e.to));
     return { nodes, edges: pruned };
@@ -826,6 +855,7 @@ export default function AgentSpace({
   void nowTick;
 
   const board = [...messages].slice(-40).reverse();
+  const bbRows = chief.blackboard_rows ?? [];
 
   return (
     <div className="sy-agent-space">
@@ -883,10 +913,40 @@ export default function AgentSpace({
                 Not a group chat — typed claims with provenance.
               </p>
               <p className="sy-agent-space-bb">
-                {chief.candidate_findings_n ?? 0} candidates
-                {typeof chief.blackboard_n === "number" ? ` · ${chief.blackboard_n} rows` : ""}
-                {typeof chief.unique_sources === "number" ? ` · ${chief.unique_sources} sources` : ""}
+                {bbRows.length > 0
+                  ? `${chief.blackboard_n ?? bbRows.length} rows`
+                    + ` · ${chief.candidate_findings_n ?? 0} candidates`
+                    + (typeof chief.unique_sources === "number"
+                      ? ` · ${chief.unique_sources} sources` : "")
+                  : "nothing posted yet"}
               </p>
+              {bbRows.length > 0 ? (
+                <ol className="sy-agent-space-bb-rows">
+                  {[...bbRows].reverse().map((r, i) => (
+                    <li key={r.id || `${r.node_id}-${i}`}>
+                      <div className="sy-agent-space-bb-meta">
+                        <span className="sy-agent-space-bb-node">{r.node_id || "—"}</span>
+                        {r.verdict && (
+                          <span className="sy-agent-space-bb-verdict">{r.verdict}</span>
+                        )}
+                        {r.kind && r.kind !== "finding" && (
+                          <span className="sy-agent-space-bb-kind">{r.kind}</span>
+                        )}
+                        {typeof r.sources === "number" && r.sources > 0 && (
+                          <span>{r.sources} source{r.sources === 1 ? "" : "s"}</span>
+                        )}
+                      </div>
+                      <p className="sy-agent-space-bb-claim">{r.claim}</p>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="sy-agent-space-bb-empty">
+                  Workers post here as they hand back. A run whose only
+                  worker is a synthesizer never writes findings, so an
+                  empty board here is the truth, not a stalled counter.
+                </p>
+              )}
               <button
                 type="button"
                 className="sy-agents-row-btn"

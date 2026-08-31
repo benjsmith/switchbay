@@ -103,3 +103,86 @@ def test_configured_parallel_workers(tmp_path: Path):
     )
     assert ce_workers.configured_parallel_workers(tmp_path) == 6
     assert ce_workers.configured_parallel_workers(tmp_path / "missing") == 10
+
+
+def _curate_plan() -> orchestration.OrchestrationPlan:
+    return orchestration.OrchestrationPlan(
+        orchestration_id="o1",
+        strategy="curation",
+        objective="curate this workspace",
+        nodes=[orchestration.PlanNode(
+            node_id="curate", kind="synthesize", objective="run CE CURATE",
+        )],
+    )
+
+
+def test_cli_dispatch_is_only_the_mcp_shaped_name():
+    # The host executes the bare name itself (and spawns a child run);
+    # only the CLI-side MCP call needs a dispatch record.
+    assert ce_workers.is_cli_dispatch("mcp__switchbay__ce_dispatch_worker")
+    assert not ce_workers.is_cli_dispatch("ce_dispatch_worker")
+    assert not ce_workers.is_cli_dispatch("ce_wave_prime")
+    assert not ce_workers.is_cli_dispatch("")
+
+
+def test_cli_dispatches_land_on_the_dag_and_the_board():
+    plan = _curate_plan()
+    parent: dict = {}
+    running: set[str] = set()
+    completed: set[str] = set()
+    ids = [
+        ce_workers.register_cli_dispatch(
+            plan, parent, {"role": role, "brief": f"do {role}"},
+            from_node=plan.nodes[0], running=running,
+        )
+        for role in ("worker", "worker", "batch_reviewer")
+    ]
+    assert ids == ["ce-w0", "ce-w1", "ce-rev"]
+    orchestration._sync_parent_graph(
+        parent, plan, completed=completed, failed=set(), running=running,
+    )
+    view = {r["node_id"]: r for r in parent["plan_nodes"]}
+    assert view["ce-w0"]["kind"] == "investigate"
+    assert view["ce-rev"]["kind"] == "verify"       # reviewers verify
+    assert view["ce-w1"]["status"] == "running"
+    # Each dispatch is visible on the board, which used to sit at zero
+    # for the whole run because this path never touched a Blackboard.
+    assert parent["blackboard_n"] == 3
+    assert len(parent["blackboard_rows"]) == 3
+    assert "batch_reviewer" in parent["blackboard_rows"][-1]["claim"]
+
+    ce_workers.finish_cli_dispatches(ids, running=running, terminal=completed)
+    orchestration._sync_parent_graph(
+        parent, plan, completed=completed, failed=set(), running=running,
+    )
+    after = {r["node_id"]: r["status"] for r in parent["plan_nodes"]}
+    assert after["ce-w0"] == after["ce-w1"] == after["ce-rev"] == "done"
+
+
+def test_handback_publishes_findings_or_an_excerpt():
+    parent: dict = {}
+    ce_workers._publish_handback(
+        parent, node_id="ce-w0", role="worker",
+        rec={"ok": True, "output": '{"findings": [{"claim": "A is B", '
+             '"evidence": [{"source": "wiki/a.md"}]}]}'},
+    )
+    assert parent["blackboard_n"] == 1
+    row = parent["blackboard_rows"][0]
+    assert row["claim"] == "A is B"
+    assert row["kind"] == "finding"
+    assert row["sources"] == 1
+
+    ce_workers._publish_handback(
+        parent, node_id="ce-w1", role="worker",
+        rec={"ok": True, "output": "plain prose, no findings JSON"},
+    )
+    assert parent["blackboard_rows"][-1]["kind"] == "handback"
+    assert parent["candidate_findings_n"] == 2
+
+    ce_workers._publish_handback(
+        parent, node_id="ce-w2", role="worker",
+        rec={"ok": False, "error": "provider down"},
+    )
+    err = parent["blackboard_rows"][-1]
+    assert err["kind"] == "error"
+    assert "provider down" in err["claim"]

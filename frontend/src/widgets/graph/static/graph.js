@@ -57,6 +57,8 @@ window.Graph = (function () {
   let lastResizeH = 0;
   let classicMinimap = null;
   const ZOOM_SETTLE_MS = 120;
+  // Screen-px standoff between a search hit and its halo ring.
+  const SEARCH_RING_GAP = 6;
   // Trackpad inertia keeps firing tiny wheel events for ~2s after the
   // user lifts their fingers. Those must not reset the label-restore
   // timer (that stretch felt like a 3s cooldown vs ~1s after drag).
@@ -487,6 +489,7 @@ window.Graph = (function () {
         });
 
     nodeSel.append('circle')
+      .attr('class', 'node-body')
       .attr('r', d => d.r = nodeRadius(d))
       .attr('fill', d => colourFor(d.type, palette))
       // Unclassified renders as a white-filled circle with a thick
@@ -495,6 +498,12 @@ window.Graph = (function () {
       // size so it reads consistently across small + large nodes.
       .attr('stroke', d => d.type === 'unclassified' ? '#000' : null)
       .attr('stroke-width', d => d.type === 'unclassified' ? 1.5 : null);
+
+    // Atlas-parity search halo. Hidden by CSS until the node is a hit;
+    // `r` is re-derived on zoom so the standoff holds in screen px.
+    nodeSel.append('circle')
+      .attr('class', 'search-ring')
+      .attr('r', d => nodeRadius(d) + SEARCH_RING_GAP);
 
     textLayer = g.append('g').attr('class', 'node-labels');
     textSel = textLayer
@@ -659,8 +668,20 @@ window.Graph = (function () {
     svg.call(zoomBehavior);
     classicMinimap = createClassicMinimap(container, palette);
 
-    svg.on('click', () => {
+    // Clicking empty canvas drops the selection (node clicks
+    // stopPropagation, so only background clicks land here). A pan
+    // gesture ends in a click event too — ignore those.
+    let blankPressAt = null;
+    svg.on('mousedown.blank', (ev) => {
+      blankPressAt = [ev.clientX, ev.clientY];
+    });
+    svg.on('click', (ev) => {
       if (focusOrigin === 'hover') setFocus(null);
+      const moved = blankPressAt
+        && Math.hypot(ev.clientX - blankPressAt[0], ev.clientY - blankPressAt[1]) > 6;
+      blankPressAt = null;
+      if (moved || splitActive) return;
+      window.dispatchEvent(new CustomEvent('sy:graph-blank-click'));
     });
 
     window.addEventListener('resize', resize);
@@ -911,6 +932,17 @@ window.Graph = (function () {
             d3.zoomIdentity.translate(tx, ty).scale(k));
   }
 
+  /* Keep the search halo a constant distance from the node on screen.
+   * The ring lives in the zoomed layer, so its radius is divided by the
+   * current zoom — otherwise hits found while zoomed out wear a halo
+   * too tight to see, which is exactly when they need one. */
+  function sizeSearchRings() {
+    if (!nodeSel) return;
+    const k = (zoomTransform && zoomTransform.k) || 1;
+    const gap = SEARCH_RING_GAP / k;
+    nodeSel.select('circle.search-ring').attr('r', d => nodeRadius(d) + gap);
+  }
+
   /* Compute per-node + per-edge visibility. Called on every focus
    * change and zoom end (label opacity is split out into its own
    * loop that runs every tick). */
@@ -918,15 +950,15 @@ window.Graph = (function () {
     if (!g) return;
     const searching = searchHits && searchHits.size > 0;
     if (searching) {
-      nodeSel.attr('data-vis', d => searchHits.has(d.id) ? 'focus' : 'dim');
+      // Hits stay lit and wear the halo; everything else recedes. Edges
+      // are NOT recoloured: accent-striping every edge that touches a
+      // hit turned a 40-hit query into a canvas of green spaghetti, and
+      // Atlas doesn't paint them either. The halo is the whole signal.
+      nodeSel.attr('data-vis', d =>
+        (searchHits.has(d.id) || d.id === focusId) ? 'visible' : 'dim');
       nodeSel.classed('search-hit', d => searchHits.has(d.id));
-      edgeSel.attr('data-vis', e => {
-        const sId = (typeof e.source === 'object') ? e.source.id : e.source;
-        const tId = (typeof e.target === 'object') ? e.target.id : e.target;
-        if (searchHits.has(sId) && searchHits.has(tId)) return 'focus';
-        if (searchHits.has(sId) || searchHits.has(tId)) return 'neighbour';
-        return 'dim';
-      });
+      sizeSearchRings();
+      edgeSel.attr('data-vis', 'dim');
       applyLabelOpacity();
       return;
     }
@@ -974,29 +1006,34 @@ window.Graph = (function () {
       : null;
 
     textSel.style('opacity', function(d) {
-      if (searching) return searchHits.has(d.id) ? 1 : 0;
+      // The hovered (or modal) node always names itself. During a search
+      // this is how a hit gets read: hover it. Labelling all 41 at once
+      // buried the graph in overlapping text.
+      if (hasFocus && d.id === focusId) return 1;
 
       // Types the user has filtered out → label only on direct hover.
       // Defaults to concept/entity/note/todo; user toggles others via
       // the label-types popover.
-      if (!isLabelTypeAllowed(d.type)) {
-        return (hasFocus && d.id === focusId) ? 1 : 0;
-      }
+      if (!isLabelTypeAllowed(d.type)) return 0;
 
-      // Focus + 1-hop neighbours always show full opacity.
-      if (hasFocus && focusSet.has(d.id)) return 1;
+      // Focus + 1-hop neighbours always show full opacity. Not during a
+      // search — hovering a hit would then also label its neighbourhood.
+      if (!searching && hasFocus && focusSet.has(d.id)) return 1;
 
-      // Decide raw visibility (would-be-shown, ignoring dim).
+      // Decide raw visibility (would-be-shown, ignoring dim). A search
+      // does not override this: labels stay on whatever auto/on/off the
+      // user picked.
       let visible;
       if (labelMode === 'on')       visible = true;
       else if (labelMode === 'off') visible = false;
       else                          visible = _autoVisibleIds.has(d.id);
       if (!visible) return 0;
 
-      // Visible non-neighbour during a focus state → dim the label so
-      // attention follows the highlighted neighbourhood. Labels live in
+      // Visible non-hit / non-neighbour during a search or focus state →
+      // dim the label so attention follows the highlight. Labels live in
       // a separate layer now so they don't inherit the node-group dim
       // CSS — apply equivalent opacity here.
+      if (searching) return searchHits.has(d.id) ? 1 : 0.18;
       if (hasFocus) return 0.18;
       return 1;
     });
@@ -1154,28 +1191,9 @@ window.Graph = (function () {
     refreshSplitStyles();
   }
 
-  function fitSearchHits() {
-    if (!searchHits || !svg || !nodes || !zoomBehavior) return;
-    const pts = nodes.filter((d) => searchHits.has(d.id) && d.x != null);
-    if (!pts.length) return;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    pts.forEach((d) => {
-      if (d.x < minX) minX = d.x;
-      if (d.x > maxX) maxX = d.x;
-      if (d.y < minY) minY = d.y;
-      if (d.y > maxY) maxY = d.y;
-    });
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    const span = Math.max(maxX - minX, maxY - minY, 48);
-    const r = svg.node().getBoundingClientRect();
-    if (!r.width || !r.height) return;
-    const k = Math.min(2.4, Math.max(0.35, 0.65 * Math.min(r.width, r.height) / span));
-    svg.transition().duration(320)
-      .call(zoomBehavior.transform,
-            d3.zoomIdentity.translate(-cx * k, -cy * k).scale(k));
-  }
-
+  /* Highlight only — the camera stays where the user put it. (An
+   * auto-fit to the hits used to fire here; it yanked the view away
+   * from whatever the user was reading.) */
   function highlightSearch(ids) {
     if (!ids || ids.length === 0) {
       searchHits = null;
@@ -1185,7 +1203,6 @@ window.Graph = (function () {
     const host = document.getElementById('graph');
     if (host) host.dataset.searchHits = String(ids ? ids.length : 0);
     applyVisibility();
-    if (searchHits && searchHits.size > 0) fitSearchHits();
   }
 
   function initSplitInteractions() {

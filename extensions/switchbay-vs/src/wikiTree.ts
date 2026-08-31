@@ -44,7 +44,9 @@ export class WikiSearchDecorations implements vscode.FileDecorationProvider {
       badge: "●",
       tooltip: "Graph search match",
       color: new vscode.ThemeColor("list.highlightForeground"),
-      propagate: false,
+      // Carry the badge up to enclosing folders so a hit is findable in
+      // the Explorer without expanding wiki/ and vault/ by hand.
+      propagate: true,
     };
   }
 }

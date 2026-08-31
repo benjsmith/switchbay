@@ -175,6 +175,24 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     return () => window.removeEventListener("sy:graph-viewer-change", onViewer);
   }, []);
 
+  // Clicking empty canvas (either viewer) drops the selection — the
+  // same contract as closing the doc modal.
+  useEffect(() => {
+    const onBlank = () => {
+      // Nothing selected → nothing to drop. Modal.close() is not free
+      // (it runs the whole teardown incl. an Atlas scene rebuild), so
+      // don't fire it on every stray click at the background.
+      if (!selection && document.body.dataset.modal !== "open") return;
+      if (!suppressDocModal) {
+        try { window.Modal.close(); } catch { /* ignore */ }
+      }
+      try { window.Graph.clearFocus(); } catch { /* ignore */ }
+      setSelection(null);
+    };
+    window.addEventListener("sy:graph-blank-click", onBlank);
+    return () => window.removeEventListener("sy:graph-blank-click", onBlank);
+  }, [selection, setSelection, suppressDocModal]);
+
   // Search owns the canvas: close a stuck page modal so highlights
   // aren't painted on a dimmed graph. Restore focus when cleared.
   useEffect(() => {

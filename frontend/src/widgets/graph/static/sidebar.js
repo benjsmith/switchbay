@@ -64,6 +64,8 @@ window.Sidebar = (function () {
 
   let listEl, searchEl, fuse, allRecords, allPages;
   let collapsed = new Set();   // type names currently collapsed
+  let searchHits = new Set();  // page ids ringed by the graph-view search
+  let autoExpanded = new Set(); // groups opened to reveal a hit
 
   function init(data) {
     listEl = document.querySelector('#sidebar-list');
@@ -150,11 +152,13 @@ window.Sidebar = (function () {
       </section>`;
     }).join('');
     listEl.innerHTML = html;
+    applySearchHits();
   }
 
   /* Flat view (during search). */
   function renderFlat(items) {
     listEl.innerHTML = items.map(rowHtml).join('');
+    applySearchHits();
   }
 
   function rowHtml(rec) {
@@ -162,6 +166,40 @@ window.Sidebar = (function () {
       <span class="dot dot-${escapeAttr(rec.type)}"></span>
       <span class="row-title">${escapeHtml(rec.title)}</span>
     </button>`;
+  }
+
+  /* Graph-view search hits, mirrored onto the page list. Rows are
+   * rebuilt by both renderers, so the set is the source of truth and
+   * gets re-applied after every render rather than being painted once. */
+  function applySearchHits() {
+    if (!listEl) return;
+    listEl.querySelectorAll('.sidebar-row').forEach(row => {
+      row.dataset.searchHit = searchHits.has(row.dataset.id) ? 'true' : '';
+    });
+    // A hit inside a collapsed group is invisible. Open those groups for
+    // the life of the search and put them back when it clears — the
+    // user's own collapsed set (persisted) is left untouched.
+    listEl.querySelectorAll('.type-group').forEach(group => {
+      const t = group.dataset.type;
+      const hasHit = !!group.querySelector('.sidebar-row[data-search-hit="true"]');
+      if (hasHit && collapsed.has(t)) {
+        autoExpanded.add(t);
+        group.dataset.collapsed = 'false';
+      } else if (!hasHit && autoExpanded.has(t)) {
+        autoExpanded.delete(t);
+        group.dataset.collapsed = collapsed.has(t) ? 'true' : 'false';
+      }
+    });
+  }
+
+  function setSearchHits(ids) {
+    const had = searchHits.size > 0;
+    searchHits = new Set(ids || []);
+    applySearchHits();
+    if (!had && searchHits.size && listEl) {
+      const first = listEl.querySelector('.sidebar-row[data-search-hit="true"]');
+      if (first && first.scrollIntoView) first.scrollIntoView({ block: 'nearest' });
+    }
   }
 
   function setActive(pageId) {
@@ -214,5 +252,5 @@ window.Sidebar = (function () {
     window.location.hash = '#page=' + encodeURIComponent(row.dataset.id);
   });
 
-  return { init, setActive };
+  return { init, setActive, setSearchHits };
 })();
