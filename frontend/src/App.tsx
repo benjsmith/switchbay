@@ -18,6 +18,7 @@ import { loadPackTabs } from "./center/packTabs";
 // top via loadPackTabs() (an effect below).
 registerBuiltinTabs();
 import Rail, { type RailEntry } from "./rail/Rail";
+import { toast } from "./lib/toast";
 import ZenShell from "./zen/ZenShell";
 import { readUiMode, type UiMode } from "./layout/ModeToggle";
 import type { ZenArtifact } from "./zen/ZenSurfaceHost";
@@ -1591,7 +1592,11 @@ export default function App() {
       // click over to the Graph tab's doc modal.
       const prefer = detail?.prefer === "markdown" ? "markdown" : null;
       const g = graphDataRef.current;
-      if (!target || !g) return;
+      if (!target) return;
+      if (!g) {
+        toast("Wiki graph is still loading — try that link again in a moment.");
+        return;
+      }
       const tl = target.split("#")[0].toLowerCase().replace(/\.md$/, "");
       const stem = tl.split("/").pop() ?? tl;
       const bareTitle = (t: string) => t.replace(/^\[[^\]]+\]\s+/, "").toLowerCase();
@@ -1604,7 +1609,12 @@ export default function App() {
         })
         ?? nodes.find((n) => (n.title ?? "").toLowerCase() === tl)
         ?? nodes.find((n) => bareTitle(n.title ?? "") === tl || bareTitle(n.title ?? "") === stem);
-      if (!hit) return;
+      if (!hit) {
+        // Say so. A dead wikilink that does nothing at all is
+        // indistinguishable from a broken click handler.
+        toast(`No wiki page matches “${target}”.`, { err: true });
+        return;
+      }
       const page = g.pages[hit.id];
       setSelection({ kind: "page", id: hit.id, path: page?.path ?? hit.id });
       // Zen: docs open in the right-pane Editor (the graph doc modal

@@ -1,6 +1,10 @@
 """switchbay — local single-user workbench over knowledge bases."""
 
-__version__ = "0.12.1"
+# Keep in lockstep with pyproject.toml — Help → versions and the update
+# checker both read this, so drift here makes a current install look
+# stale and offers an "update" to a release it is already past.
+# tests/unit/test_version_sync.py fails the build if the two diverge.
+__version__ = "0.12.8"
 
 # Use the OS certificate store for HTTPS (corporate TLS proxies, custom
 # CAs). Must run before any aiohttp ClientSession creates an SSL context

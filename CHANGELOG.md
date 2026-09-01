@@ -3,6 +3,24 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-01 — v0.12.8 — Switch Bay VS 0.3.15
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` — the version fix is server-side, so the daemon
+has to restart before Help shows the right number.
+
+### Fixed
+
+- **Help reported v0.12.1 on every release since v0.12.1.** The release
+  checklist bumped `pyproject.toml`, `package.json` and the docs but not
+  `switchbay.__version__`, which is what Help → versions and the update
+  checker read — so a current install looked five releases stale and was
+  offered "updates" it was already past. `tests/unit/test_version_sync.py`
+  now fails the build when the version, the frontend package and the
+  newest CHANGELOG heading disagree.
+- A wikilink that resolves to nothing now says so instead of failing
+  silently — a dead link and a broken click handler looked identical.
+
 ## 2026-09-01 — v0.12.7 — Switch Bay VS 0.3.14
 
 **Migration:** none. **Breaking:** none. After pull, run

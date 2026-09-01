@@ -2,7 +2,7 @@
   "name": "switchbay-vs",
   "displayName": "Switch Bay VS",
   "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon. Local MLX / llama.cpp / Ollama models for Chat and Agents.",
-  "version": "0.3.14",
+  "version": "0.3.15",
   "publisher": "switchbay",
   "repository": {
     "type": "git",
