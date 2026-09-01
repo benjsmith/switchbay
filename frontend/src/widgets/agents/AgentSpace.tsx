@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { BLACKBOARD_ID, CHIEF_ID, spaceEdges } from "./spaceGraph";
 
 /**
  * Live 2-d agent-space for a multi-agent DAG.
@@ -88,8 +89,7 @@ export type SpaceRun = {
   workspace_name?: string;
 };
 
-export const CHIEF_ID = "chief";
-export const BLACKBOARD_ID = "blackboard";
+export { BLACKBOARD_ID, CHIEF_ID } from "./spaceGraph";
 
 type SpaceNode = {
   id: string;
@@ -193,6 +193,7 @@ function kindDepth(kind: string): number {
   if (kind === "verify") return 3;
   return 4;
 }
+
 
 function readCss(name: string, fallback: string): string {
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -326,6 +327,8 @@ export default function AgentSpace({
     }));
     const byId = new Set<string>([CHIEF_ID]);
     const liveKinds = new Set<string>();
+    /** node_id → the nodes it declared as dependencies. */
+    const depsById = new Map<string, string[]>();
     const visiblePlan = planNodes.filter((n) => {
       const w = workerByNode.get(n.node_id);
       const st = w?.status || n.status || "pending";
@@ -354,6 +357,7 @@ export default function AgentSpace({
           lastChunkAt: w?.last_chunk_at ?? 0,
           depth: kindDepth(kind),
         }));
+        depsById.set(n.node_id, (n.dependencies ?? []).map(String));
         byId.add(n.node_id);
       }
     } else {
@@ -401,43 +405,8 @@ export default function AgentSpace({
       }));
       byId.add(BLACKBOARD_ID);
     }
-    // The chief owns the board: it posts the objective and reads what
-    // comes back. Without this edge a DAG whose only worker is fed BY
-    // the blackboard (a lone synthesizer) drew the chief unconnected,
-    // floating above a graph it is the root of.
-    if (byId.has(BLACKBOARD_ID)) edges.push({ from: CHIEF_ID, to: BLACKBOARD_ID });
-    for (const n of nodes) {
-      if (n.kind === "chief" || n.kind === "blackboard") continue;
-      if (n.kind === "investigate" || n.kind === "execute") {
-        edges.push({ from: CHIEF_ID, to: n.id });
-        if (byId.has(BLACKBOARD_ID)) edges.push({ from: n.id, to: BLACKBOARD_ID });
-      } else if (n.kind === "reduce") {
-        edges.push({ from: CHIEF_ID, to: n.id });
-        if (byId.has(BLACKBOARD_ID)) edges.push({ from: n.id, to: BLACKBOARD_ID });
-      } else if (n.kind === "verify") {
-        if (byId.has(BLACKBOARD_ID)) edges.push({ from: BLACKBOARD_ID, to: n.id });
-        else edges.push({ from: CHIEF_ID, to: n.id });
-      } else if (n.kind === "synthesize") {
-        const hasVerify = nodes.some((x) => x.kind === "verify");
-        if (hasVerify) {
-          const v = nodes.find((x) => x.kind === "verify");
-          if (v) edges.push({ from: v.id, to: n.id });
-        } else if (byId.has(BLACKBOARD_ID)) {
-          edges.push({ from: BLACKBOARD_ID, to: n.id });
-        } else {
-          edges.push({ from: CHIEF_ID, to: n.id });
-        }
-      }
-    }
-    // Anything still unreachable from the chief hangs off it directly —
-    // a node with no lineage on screen reads as a rendering bug.
-    const hasIncoming = new Set(edges.map((e) => e.to));
-    for (const n of nodes) {
-      if (n.kind === "chief" || hasIncoming.has(n.id)) continue;
-      edges.push({ from: CHIEF_ID, to: n.id });
-    }
-    const pruned = edges.filter((e) => byId.has(e.from) && byId.has(e.to));
-    return { nodes, edges: pruned };
+    edges.push(...spaceEdges(nodes, depsById, byId));
+    return { nodes, edges };
   }, [chief, workers, planNodes, workerByNode, idle]);
   edgesRef.current = graph.edges;
 
@@ -477,6 +446,17 @@ export default function AgentSpace({
     }
   }, [graph]);
 
+  /** Who dispatched this node — its first dependency, else the chief.
+   *  The edge a node's own traffic belongs on. */
+  const dispatcherOf = useMemo(() => {
+    const from = new Map<string, string>();
+    for (const e of graph.edges) {
+      if (e.to === BLACKBOARD_ID || e.from === BLACKBOARD_ID) continue;
+      if (!from.has(e.to)) from.set(e.to, e.from);
+    }
+    return (id: string) => from.get(id) ?? CHIEF_ID;
+  }, [graph]);
+
   const prevToolsRef = useRef<Map<string, number>>(new Map());
   const prevTokRef = useRef<Map<string, { tokens: number; t: number; rate: number }>>(new Map());
   const toolsSeededRef = useRef(false);
@@ -488,10 +468,12 @@ export default function AgentSpace({
       const next = n.toolCount ?? 0;
       const last = prev.get(n.id) ?? 0;
       if (toolsSeededRef.current && next > last && n.kind !== "chief" && n.kind !== "blackboard") {
-        const dest = graph.nodes.some((x) => x.id === BLACKBOARD_ID) ? BLACKBOARD_ID : CHIEF_ID;
+        // Up the dispatch edge, not to the board. A worker running
+        // tools has not written anything to the board — drawing it as
+        // board traffic is what made an empty board look busy.
         pulsesRef.current.push({
-          from: n.id, to: dest, t0: performance.now(), dur: 520, kind: "tool",
-          read: true,
+          from: n.id, to: dispatcherOf(n.id), t0: performance.now(), dur: 520,
+          kind: "tool", read: true,
         });
       }
       prev.set(n.id, next);
@@ -507,13 +489,13 @@ export default function AgentSpace({
         if (toolsSeededRef.current && d > 0 && n.kind !== "chief" && n.kind !== "blackboard") {
           const nPulses = Math.min(6, Math.max(1, Math.round(d / 12)));
           const reading = n.ioMode === "read";
+          // Tokens travel between the node and whoever dispatched it.
+          // What lands on the board is drawn separately, off the rows
+          // the board actually gained.
+          const other = dispatcherOf(n.id);
           for (let i = 0; i < nPulses; i++) {
-            const from = reading
-              ? (n.kind === "verify" || n.kind === "synthesize" ? BLACKBOARD_ID : n.id)
-              : n.id;
-            const to = reading
-              ? n.id
-              : (graph.nodes.some((x) => x.id === BLACKBOARD_ID) ? BLACKBOARD_ID : CHIEF_ID);
+            const from = reading ? other : n.id;
+            const to = reading ? n.id : other;
             if (from === to) continue;
             pulsesRef.current.push({
               from, to,
@@ -531,6 +513,34 @@ export default function AgentSpace({
     }
     toolsSeededRef.current = true;
   }, [graph]);
+
+  // Board traffic, drawn only when the board actually gains a row —
+  // each row names the node that posted it, so the pulse runs along
+  // that node's board edge instead of standing in for its tool calls.
+  const seenBbRows = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    const rows = chief.blackboard_rows ?? [];
+    const seen = seenBbRows.current;
+    const first = seen.size === 0;
+    for (const r of rows) {
+      const key = r.id || `${r.node_id}|${r.ts ?? 0}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      if (first) continue;            // don't replay the board on mount
+      if (!graph.nodes.some((n) => n.id === BLACKBOARD_ID)) continue;
+      const src = graph.nodes.some((n) => n.id === r.node_id) ? r.node_id : CHIEF_ID;
+      if (src === BLACKBOARD_ID) continue;
+      pulsesRef.current.push({
+        from: src, to: BLACKBOARD_ID, t0: performance.now(), dur: 620,
+        kind: "findings",
+      });
+    }
+    if (seen.size > 400) {
+      seenBbRows.current = new Set(
+        rows.slice(-120).map((r) => r.id || `${r.node_id}|${r.ts ?? 0}`),
+      );
+    }
+  }, [chief.blackboard_rows, graph]);
 
   // New handoffs → pulses. Also accept live WS events.
   useEffect(() => {

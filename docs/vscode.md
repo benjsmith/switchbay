@@ -23,7 +23,7 @@ product — see the root README.
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.3.13.vsix
+   code --install-extension dist/switchbay-vs-0.3.14.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).
@@ -40,7 +40,7 @@ Sideload installs do **not** auto-update. Same id
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.3.13.vsix
+code --install-extension dist/switchbay-vs-0.3.14.vsix
 ```
 
 Then **Developer: Reload Window**. Or Command Palette → **Switch Bay VS:

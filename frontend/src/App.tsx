@@ -1584,9 +1584,12 @@ export default function App() {
    *  id, path stem, or title — model-authored links vary in shape. */
   useEffect(() => {
     const onOpenWiki = (ev: Event) => {
-      const target = String(
-        (ev as CustomEvent<{ target?: string }>).detail?.target ?? "",
-      ).trim();
+      const detail = (ev as CustomEvent<{ target?: string; prefer?: string }>).detail;
+      const target = String(detail?.target ?? "").trim();
+      // A caller already reading a page (the Editor preview) asks to
+      // stay put; without this, Power mode would bounce every wikilink
+      // click over to the Graph tab's doc modal.
+      const prefer = detail?.prefer === "markdown" ? "markdown" : null;
       const g = graphDataRef.current;
       if (!target || !g) return;
       const tl = target.split("#")[0].toLowerCase().replace(/\.md$/, "");
@@ -1607,7 +1610,7 @@ export default function App() {
       // Zen: docs open in the right-pane Editor (the graph doc modal
       // is suppressed there); Power keeps the modal-on-graph flow.
       switchToKindRef.current?.(
-        uiModeRef.current === "zen" ? "markdown" : "graph",
+        prefer ?? (uiModeRef.current === "zen" ? "markdown" : "graph"),
       );
     };
     window.addEventListener("sy:open-wiki-page", onOpenWiki);

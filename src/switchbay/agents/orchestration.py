@@ -3363,13 +3363,16 @@ async def execute(
         return True
 
     async def _start_handoffs(node: PlanNode) -> None:
+        """Who actually dispatched this node — and, separately, whether
+        it was handed a board to read.
+
+        Verify/synthesize nodes used to be announced as `blackboard →
+        node` and nothing else, so the dashboard drew the board running
+        the show and the chief with no edge to its own worker. The board
+        is material, not a dispatcher; it only gets a line when it has
+        something on it.
+        """
         excerpt = f"{node.kind}: {(node.objective or '')[:160]}"
-        if node.kind in ("verify", "synthesize") and node.output_contract != "concat":
-            await _emit_handoff(
-                app, parent, parent_run_id,
-                src=BLACKBOARD_ID, dst=node.node_id, kind="handoff", text=excerpt,
-            )
-            return
         if node.dependencies:
             for dep in node.dependencies:
                 await _emit_handoff(
@@ -3380,6 +3383,17 @@ async def execute(
             await _emit_handoff(
                 app, parent, parent_run_id,
                 src=CHIEF_ID, dst=node.node_id, kind="spawn", text=excerpt,
+            )
+        if (
+            node.kind in ("verify", "synthesize")
+            and node.output_contract != "concat"
+            and bb.findings
+        ):
+            n = len(bb.findings)
+            await _emit_handoff(
+                app, parent, parent_run_id,
+                src=BLACKBOARD_ID, dst=node.node_id, kind="reads",
+                text=f"{n} row{'' if n == 1 else 's'} of evidence",
             )
 
     async def _run_one(node: PlanNode) -> dict[str, Any]:

@@ -5504,6 +5504,17 @@ a.sy-source-cite { color: var(--accent); }
 .sy-editor-btn--back:hover:not(:disabled) {
   border-color: var(--accent);
 }
+/* Back one page in the Editor's own reading order — sits before the
+ * path, so it stays put as the path changes under it. */
+.sy-editor-btn--nav {
+  padding: 2px 8px;
+  font-size: 13px;
+  line-height: 1.2;
+  border-color: var(--line);
+  flex: 0 0 auto;
+}
+.sy-editor-btn--nav:disabled { opacity: 0.35; }
+.sy-editor-btn--nav:hover:not(:disabled) { border-color: var(--accent); }
 
 .sy-editor-split {
   flex: 1 1 auto;

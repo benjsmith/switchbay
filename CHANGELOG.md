@@ -3,6 +3,39 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-01 — v0.12.7 — Switch Bay VS 0.3.14
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1`.
+
+### Changed
+
+- **The agent DAG follows the plan's own dependencies.** Lineage was
+  inferred from node *kind*, which made the blackboard the parent of
+  every verify/synthesize node: a lone synthesizer hung off the board
+  with no chief edge at all, and the board looked like it was running
+  the orchestration. A node now hangs off its declared dependencies, or
+  off the chief when it has none, and the board gets one edge per worker
+  pointing the way that worker uses it.
+- **Token and tool pulses travel the dispatch edge**, not to the
+  blackboard. Board traffic is drawn only when the board actually gains
+  a row — each row names the node that posted it. An idle board no
+  longer looks busy.
+- The daemon no longer announces verify/synthesize nodes as
+  `blackboard → node`. The dispatcher is the chief (or the node's
+  dependencies); the board gets its own `reads` handoff, and only when
+  it has something on it.
+
+### Added
+
+- **Editor: wikilinks are clickable.** `[[links]]` in the preview render
+  as `#page=<link text>`, which the hash router could not resolve to a
+  page id, so clicking did nothing. They now go through the same fuzzy
+  resolver the rail uses (id, path stem, title) and open in the Editor
+  rather than bouncing to the Graph tab.
+- **Editor: a Back button** (top left) returns to the previously viewed
+  page. The trail survives tab switches.
+
 ## 2026-08-31 — v0.12.6 — Switch Bay VS 0.3.13
 
 **Migration:** none. **Breaking:** none. After pull, run

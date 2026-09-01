@@ -14,6 +14,7 @@ import {
 import CodeView, { detectLanguage, LANGUAGE_CHOICES, type CodeLanguage } from "./CodeView";
 import { notifyHtmlDeckOpen } from "../htmldeck/htmlDeckOpen";
 import { revealWorkspaceFile } from "../../lib/localPath";
+import { canGoBack, noteEditorVisit, popEditorHistory } from "./editorHistory";
 
 // Markdown view mode, driven by the chevron handle on the pane divider.
 // Ordered raw → split → rendered. The chevrons move the split the way
@@ -51,6 +52,22 @@ export default function EditorTab() {
 
   const path = selection?.kind === "page" ? selection.path : null;
   const pageId = selection?.kind === "page" ? selection.id : null;
+
+  // Trail for the Back button. Recorded here rather than in the
+  // selection layer: this is the Editor's own reading order, and other
+  // surfaces (graph, browser) drive selection for their own reasons.
+  const [backDepth, setBackDepth] = useState(0);
+  useEffect(() => {
+    if (!pageId || !path) return;
+    noteEditorVisit({ id: pageId, path });
+    setBackDepth(canGoBack() ? 1 : 0);
+  }, [pageId, path]);
+  const goBack = () => {
+    const prev = popEditorHistory();
+    if (!prev) return;
+    setSelection({ kind: "page", id: prev.id, path: prev.path });
+    setBackDepth(canGoBack() ? 1 : 0);
+  };
   const hasGraphTab = useMemo(() => tabs.some((t) => t.kind === "graph"), [tabs]);
   const hasProjectsTab = useMemo(() => tabs.some((t) => t.kind === "projects"), [tabs]);
   const hasSheetTab = useMemo(() => tabs.some((t) => t.kind === "univer"), [tabs]);
@@ -360,6 +377,18 @@ export default function EditorTab() {
   return (
     <div className="sy-editor">
       <header className="sy-editor-head">
+        <button
+          type="button"
+          className="sy-editor-btn sy-editor-btn--nav"
+          onClick={goBack}
+          disabled={backDepth === 0}
+          title={backDepth === 0
+            ? "No previous page in this session"
+            : "Back to the previously viewed page"}
+          aria-label="Back to the previously viewed page"
+        >
+          ←
+        </button>
         <span className="sy-editor-path" title={path}>{path}</span>
         <span className="sy-editor-spacer" />
         {hasProjectsTab && projectBackLink && (
@@ -933,7 +962,30 @@ function syncSourceToPreview(
       return;
     }
   }
-  if (target.tagName === "A") return;  // other wikilinks navigate normally
+  // Plain [[wikilinks]]. These render as href="#page=<slug>", and the
+  // slug is the link text — not a page id — so the hash router's exact
+  // id lookup found nothing and the click did nothing at all. Hand the
+  // target to the app's fuzzy resolver (id / path stem / title) and ask
+  // it to stay in the Editor, so following a link reads like reading.
+  const wikiAnchor = target.closest(
+    "a.wikilink, a[href^='#page=']",
+  ) as HTMLAnchorElement | null;
+  if (wikiAnchor) {
+    const href = wikiAnchor.getAttribute("href") || "";
+    const m = href.match(/^#page=(.+)$/);
+    const raw = m
+      ? decodeURIComponent(m[1])
+      : (wikiAnchor.textContent || "").trim();
+    if (raw) {
+      ev.preventDefault();
+      ev.stopPropagation();
+      window.dispatchEvent(new CustomEvent("sy:open-wiki-page", {
+        detail: { target: raw, prefer: "markdown" },
+      }));
+      return;
+    }
+  }
+  if (target.tagName === "A") return;  // other links navigate normally
   const block = target.closest<HTMLElement>(
     "h1, h2, h3, h4, h5, h6, p, li, pre, blockquote, table, hr",
   );
