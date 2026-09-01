@@ -8312,9 +8312,20 @@ async def handle_restart(request: web.Request) -> web.Response:
 
 async def handle_versions(request: web.Request) -> web.Response:
     """GET /api/versions — running Switch Bay / curiosity-engine /
-    curiosity-merge versions for the Help panel. Local only."""
+    curiosity-merge versions for the Help panel.
+
+    Local metadata first (git tag / the skill's own CHANGELOG). A skill
+    that carries neither — curiosity-engine keeps its changelog at the
+    repo root, outside the installed tree — is identified by matching
+    its SKILL.md bytes against recent releases, memoized per install.
+    Offline that lookup is skipped and Help says "installed" rather
+    than printing a version nobody verified.
+    """
+    def _components() -> list[dict[str, Any]]:
+        return updater.resolve_unknown_versions(updater.installed_components())
+
     try:
-        components = await asyncio.to_thread(updater.installed_components)
+        components = await asyncio.to_thread(_components)
     except Exception as e:  # noqa: BLE001
         log.exception("versions lookup failed")
         return web.json_response(

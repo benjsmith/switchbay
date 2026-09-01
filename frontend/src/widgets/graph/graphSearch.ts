@@ -177,7 +177,6 @@ export function installGraphSearch(data: GraphData): void {
   const input = document.getElementById("graph-search-input") as HTMLInputElement | null;
   const clearBtn = document.getElementById("graph-search-clear") as HTMLButtonElement | null;
   const countEl = document.getElementById("graph-search-count");
-  const host = input?.closest(".sy-graph-host") ?? document.getElementById("graph-pane");
   if (!input || !clearBtn) return;
 
   const prev = (input as HTMLInputElement & { _sbSearchAbort?: AbortController })._sbSearchAbort;
@@ -217,13 +216,11 @@ export function installGraphSearch(data: GraphData): void {
       input.blur();
     }
   }, { signal });
-  host?.addEventListener("keydown", (ev) => {
-    const ke = ev as KeyboardEvent;
-    if (!(ke.metaKey || ke.ctrlKey) || ke.key.toLowerCase() !== "f") return;
-    ke.preventDefault();
-    input.focus();
-    input.select();
-  }, { signal });
+  // No ⌘F / Ctrl-F binding. Scoped to the graph host, it only fired
+  // when focus happened to be inside that pane; everywhere else the
+  // browser's own find bar opened, so the shortcut produced two search
+  // boxes. Claiming it reliably means intercepting at the document,
+  // which takes find-in-page away from the rest of the app.
 
   const saved = peekPersistedQuery(data.workspace || "");
   input.value = saved;

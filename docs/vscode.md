@@ -23,7 +23,7 @@ product — see the root README.
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.3.15.vsix
+   code --install-extension dist/switchbay-vs-0.3.16.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).

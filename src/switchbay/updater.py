@@ -57,9 +57,6 @@ class Component:
     # order when we need a content fingerprint).
     skill_md_paths: tuple[str, ...] = ()
     sentinel: str = ""  # relative path that must survive an npx update
-    # Switch Bay release pairing. Help uses this when an npx skill
-    # install has no git tag / CHANGELOG. Bump alongside pyproject.
-    related_version: str = ""
 
 
 POLICY_KEEP = ("admin.json", "admin.baked.json", "SWITCHBAY_PROFILE")
@@ -104,7 +101,6 @@ COMPONENTS: tuple[Component, ...] = (
         skill_name="curiosity-engine",
         skill_md_paths=("skills/curiosity-engine/SKILL.md", "SKILL.md"),
         sentinel="scripts/setup.sh",
-        related_version="1.3.0",
     ),
     Component(
         id="curiosity-merge",
@@ -114,7 +110,6 @@ COMPONENTS: tuple[Component, ...] = (
         skill_name="curiosity-merge",
         skill_md_paths=("SKILL.md",),
         sentinel="scripts/setup.sh",
-        related_version="0.7.0",
     ),
 )
 
@@ -408,9 +403,18 @@ def match_skill_release(comp: Component, skill_dir: Path) -> str | None:
 def installed_components() -> list[dict[str, Any]]:
     """Running Switch Bay / skill versions. Local only — no GitHub.
 
-    Skill semver comes from git tag or CHANGELOG. npx installs often
-    have neither; Help then shows ``related_version`` (this Switch Bay
-    release's pairing) so the panel always has a number.
+    Skill semver comes from a git tag or the skill's own CHANGELOG.
+    An npx install may have neither (curiosity-engine ships its
+    changelog at the repo root, outside the installed skill tree), and
+    then `current` is None with `source: "unknown"` — the caller can
+    resolve it against GitHub (`resolve_unknown_versions`) or render
+    "installed" without a number.
+
+    What it must never do is print a number it cannot justify. This
+    used to fall back to a `related_version` constant compiled into
+    Switch Bay, so Help reported whatever skill version was current
+    when someone last edited that line — for as long as nobody
+    remembered to edit it again.
     """
     rows: list[dict[str, Any]] = []
     for comp in COMPONENTS:
@@ -423,17 +427,59 @@ def installed_components() -> list[dict[str, Any]]:
         }
         if comp.kind == "app":
             row["current"] = display_tag(local_switchbay_version())
+            row["source"] = "app"
             rows.append(row)
             continue
         skill_dir = find_skill_dir(comp.skill_name)
         if skill_dir is None:
             row["installed"] = False
+            row["source"] = "absent"
             rows.append(row)
             continue
-        current = local_skill_version(skill_dir) or comp.related_version or None
+        row["path"] = str(skill_dir)
+        if _skill_git_repo(skill_dir) is not None and _git_describe_tag(
+            _skill_git_repo(skill_dir),  # type: ignore[arg-type]
+        ):
+            row["source"] = "git"
+        else:
+            row["source"] = "changelog"
+        current = local_skill_version(skill_dir)
         if current:
             row["current"] = display_tag(current)
+        else:
+            row["source"] = "unknown"
         rows.append(row)
+    return rows
+
+
+def resolve_unknown_versions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Fill in versions the install could not tell us, from GitHub.
+
+    An npx install with no changelog carries no version anywhere — but
+    its SKILL.md bytes identify a release exactly. `match_skill_release`
+    walks recent tags newest-first and memoizes per (component, local
+    SKILL.md hash), so this costs one lookup per install, not one per
+    Help open. Offline, rows keep `current: None` and Help says
+    "installed" rather than inventing a number.
+    """
+    by_id = {c.id: c for c in COMPONENTS}
+    for row in rows:
+        if row.get("current") or not row.get("installed"):
+            continue
+        comp = by_id.get(str(row.get("id") or ""))
+        if comp is None or comp.kind == "app" or not comp.skill_name:
+            continue
+        skill_dir = find_skill_dir(comp.skill_name)
+        if skill_dir is None:
+            continue
+        try:
+            tag = match_skill_release(comp, skill_dir)
+        except Exception:  # noqa: BLE001 — Help must render regardless
+            log.exception("release fingerprint failed for %s", comp.id)
+            tag = None
+        if tag:
+            row["current"] = display_tag(tag)
+            row["source"] = "release-match"
     return rows
 
 
@@ -588,6 +634,36 @@ def _git_detached(repo: Path) -> bool:
     return r.returncode != 0
 
 
+def _fetch_tags(repo: Path) -> subprocess.CompletedProcess[str]:
+    """Fetch, letting the remote's tags win.
+
+    A plain `git fetch --tags` refuses to move a local tag that points
+    somewhere else and fails the whole fetch with "would clobber existing
+    tag" — so one rewritten release tag upstream bricks the in-app
+    updater until someone deletes tags by hand in a terminal. For an
+    updater whose entire job is "put me on the published release", the
+    published tag IS the truth: force it, and prune tags the remote has
+    deleted so a stale local tag can't be checked out later.
+    """
+    return _git(
+        ["fetch", "--tags", "--force", "--prune", "--prune-tags", "origin"],
+        cwd=repo,
+        timeout=90,
+    )
+
+
+def _fetch_failure_detail(proc: subprocess.CompletedProcess[str]) -> str:
+    """Say what a failed fetch usually means, not just what git printed."""
+    blob = ((proc.stderr or "") + "\n" + (proc.stdout or "")).strip()
+    if "would clobber existing tag" in blob:
+        return (
+            "git fetch could not update a local tag that points elsewhere. "
+            "Run `git fetch --tags --force origin` in the checkout, then "
+            "try again."
+        )
+    return f"git fetch failed: {blob[-300:]}"
+
+
 def _resolve_tag(repo: Path, latest: str) -> str | None:
     """Return a tag name that exists after fetch, trying v-prefix variants."""
     candidates = [latest]
@@ -677,11 +753,9 @@ def _apply_switchbay(comp: Component, latest: str) -> dict[str, Any]:
             out["status"] = "skipped"
             out["detail"] = "working tree has local changes — commit or stash first"
             return out
-        fetched = _git(["fetch", "--tags", "origin"], cwd=repo, timeout=90)
+        fetched = _fetch_tags(repo)
         if fetched.returncode != 0:
-            out["detail"] = (
-                f"git fetch failed: {(fetched.stderr or fetched.stdout or '')[-300:]}"
-            )
+            out["detail"] = _fetch_failure_detail(fetched)
             return out
         tag = _resolve_tag(repo, latest)
         if tag is None:
@@ -745,11 +819,9 @@ def _apply_skill_git(comp: Component, repo: Path, latest: str) -> dict[str, Any]
         out["status"] = "skipped"
         out["detail"] = "skill git checkout has local changes"
         return out
-    fetched = _git(["fetch", "--tags", "origin"], cwd=repo, timeout=90)
+    fetched = _fetch_tags(repo)
     if fetched.returncode != 0:
-        out["detail"] = (
-            f"git fetch failed: {(fetched.stderr or fetched.stdout or '')[-300:]}"
-        )
+        out["detail"] = _fetch_failure_detail(fetched)
         return out
     tag = _resolve_tag(repo, latest)
     if tag is None:

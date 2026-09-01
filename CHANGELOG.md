@@ -3,6 +3,34 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-01 — v0.12.9 — Switch Bay VS 0.3.16
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1`.
+
+### Fixed
+
+- **The Update button could not recover from a rewritten release tag.**
+  `git fetch --tags` refuses to move a local tag that points elsewhere
+  and fails the *whole* fetch with "would clobber existing tag", so one
+  force-pushed tag upstream left Update permanently failing until
+  someone deleted tags by hand in a terminal. The updater now fetches
+  with `--force --prune-tags` — for a thing whose job is "put me on the
+  published release", the published tag is the truth — and says what a
+  failed fetch means instead of quoting git at you.
+- **Help reported skill versions from a constant.** `related_version`
+  was a number compiled into Switch Bay and shown as the installed
+  skill's version, so it was right only until the next skill release.
+  It is gone. Versions now come from the install itself (git tag, or
+  the skill's own CHANGELOG); a skill carrying neither —
+  curiosity-engine keeps its changelog outside the installed tree — is
+  identified by matching its SKILL.md against recent releases, memoized
+  per install. Offline, Help says "installed" rather than printing a
+  version nobody verified.
+- Graph search no longer binds `⌘F`. Scoped to the graph pane, it only
+  fired when focus happened to be there; everywhere else the browser's
+  own find bar opened, so the shortcut produced two search boxes.
+
 ## 2026-09-01 — v0.12.8 — Switch Bay VS 0.3.15
 
 **Migration:** none. **Breaking:** none. After pull, run

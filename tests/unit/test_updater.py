@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -73,9 +75,14 @@ def test_installed_components_local_only(tmp_path, monkeypatch):
     assert rows["curiosity-merge"]["current"] == "v0.7.0"
 
 
-def test_installed_components_uses_related_version_when_npx_has_no_semver(
-    tmp_path, monkeypatch,
-):
+def test_installed_components_never_invents_a_version(tmp_path, monkeypatch):
+    """An install with no git tag and no CHANGELOG has no local version.
+
+    This used to fall back to a `related_version` constant compiled into
+    Switch Bay, so Help reported whatever the skill's version was when
+    someone last edited that line. Silence is the honest answer; the
+    number is filled in from GitHub by resolve_unknown_versions.
+    """
     skill = tmp_path / "curiosity-engine"
     skill.mkdir()
     (skill / "SKILL.md").write_text("x", encoding="utf-8")
@@ -87,7 +94,46 @@ def test_installed_components_uses_related_version_when_npx_has_no_semver(
 
     rows = {r["id"]: r for r in updater.installed_components()}
     assert rows["curiosity-engine"]["installed"] is True
-    assert rows["curiosity-engine"]["current"] == "v1.3.0"
+    assert rows["curiosity-engine"]["current"] is None
+    assert rows["curiosity-engine"]["source"] == "unknown"
+
+
+def test_resolve_unknown_versions_fingerprints_the_install(tmp_path, monkeypatch):
+    skill = tmp_path / "curiosity-engine"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.12")
+    monkeypatch.setattr(updater.skillkit, "_global_skill_roots", lambda: [tmp_path])
+    monkeypatch.setattr(updater.cebridge, "ce_root", lambda: skill)
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda _p: None)
+    monkeypatch.setattr(
+        updater, "match_skill_release", lambda comp, d: "v1.5.0"
+        if comp.id == "curiosity-engine" else None,
+    )
+
+    rows = updater.resolve_unknown_versions(updater.installed_components())
+    row = {r["id"]: r for r in rows}["curiosity-engine"]
+    assert row["current"] == "v1.5.0"
+    assert row["source"] == "release-match"
+
+
+def test_resolve_unknown_versions_stays_quiet_offline(tmp_path, monkeypatch):
+    skill = tmp_path / "curiosity-engine"
+    skill.mkdir()
+    (skill / "SKILL.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.12")
+    monkeypatch.setattr(updater.skillkit, "_global_skill_roots", lambda: [tmp_path])
+    monkeypatch.setattr(updater.cebridge, "ce_root", lambda: skill)
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda _p: None)
+
+    def _boom(comp, d):
+        raise updater.UpdateError("network error")
+
+    monkeypatch.setattr(updater, "match_skill_release", _boom)
+    rows = updater.resolve_unknown_versions(updater.installed_components())
+    row = {r["id"]: r for r in rows}["curiosity-engine"]
+    assert row["current"] is None          # no number beats a wrong number
+    assert row["installed"] is True
 
 
 def test_match_skill_release_walks_older_tags(tmp_path, monkeypatch):
@@ -593,3 +639,76 @@ def test_apply_skips_npx_skills_when_locked(tmp_path, monkeypatch):
     assert result["components"][0]["status"] == "skipped"
     assert "install_skills_npx" in result["components"][0]["detail"]
     admin_policy.reset_cache()
+
+
+def _git_init(path, env):
+    subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True, env=env)
+    subprocess.run(["git", "-C", str(path), "config", "user.email", "t@t"], check=True, env=env)
+    subprocess.run(["git", "-C", str(path), "config", "user.name", "t"], check=True, env=env)
+
+
+def _commit(path, text, env):
+    (path / "f.txt").write_text(text, encoding="utf-8")
+    subprocess.run(["git", "-C", str(path), "add", "-A"], check=True, env=env)
+    subprocess.run(["git", "-C", str(path), "commit", "-q", "-m", text], check=True, env=env)
+    out = subprocess.run(
+        ["git", "-C", str(path), "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True, env=env,
+    )
+    return out.stdout.strip()
+
+
+def test_fetch_tags_survives_a_rewritten_release_tag(tmp_path):
+    """A rewritten upstream tag must not brick the in-app updater.
+
+    `git fetch --tags` refuses to move a local tag that points elsewhere
+    and fails the WHOLE fetch with "would clobber existing tag" — so one
+    force-pushed release tag upstream left Update permanently failing
+    until someone deleted tags by hand in a terminal.
+    """
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": str(tmp_path / "gitconfig"),
+           "GIT_CONFIG_SYSTEM": str(tmp_path / "gitconfig-sys")}
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git_init(origin, env)
+    _commit(origin, "one", env)
+    subprocess.run(["git", "-C", str(origin), "tag", "v1.0.0"], check=True, env=env)
+
+    clone = tmp_path / "clone"
+    subprocess.run(
+        ["git", "clone", "-q", str(origin), str(clone)], check=True, env=env,
+    )
+
+    # Upstream rewrites history and re-points the release tag.
+    rewritten = _commit(origin, "one-rewritten", env)
+    subprocess.run(["git", "-C", str(origin), "tag", "-f", "v1.0.0"], check=True, env=env)
+
+    plain = subprocess.run(
+        ["git", "-C", str(clone), "fetch", "--tags", "origin"],
+        capture_output=True, text=True, env=env,
+    )
+    assert plain.returncode != 0
+    assert "would clobber existing tag" in (plain.stderr + plain.stdout)
+
+    forced = updater._fetch_tags(clone)
+    assert forced.returncode == 0, forced.stderr
+    local = subprocess.run(
+        ["git", "-C", str(clone), "rev-parse", "v1.0.0^{commit}"],
+        capture_output=True, text=True, check=True, env=env,
+    )
+    assert local.stdout.strip() == rewritten     # remote's tag won
+
+
+def test_fetch_failure_names_the_clobber_cause():
+    proc = subprocess.CompletedProcess(
+        args=[], returncode=1,
+        stdout="", stderr="! [rejected] v1.0.0 -> v1.0.0 (would clobber existing tag)",
+    )
+    detail = updater._fetch_failure_detail(proc)
+    assert "points elsewhere" in detail
+    assert "--force" in detail
+
+    other = subprocess.CompletedProcess(
+        args=[], returncode=1, stdout="", stderr="fatal: could not read from remote",
+    )
+    assert "could not read from remote" in updater._fetch_failure_detail(other)
