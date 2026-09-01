@@ -3,6 +3,26 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-01 — v0.12.10 — Switch Bay VS 0.3.16
+
+**Migration:** none. **Breaking:** none. Skill bump only — no app code
+changed since v0.12.9.
+
+### Changed
+
+- Bundled skills move to **curiosity-engine v1.5.0** (graph search in the
+  CE viewer, one mark per hit, the Classic/Atlas chooser always offered)
+  and **curiosity-merge v0.8.2** (unmerge reverses identity `same_as`;
+  source-stub wikilink folding).
+- Verified before adopting: the subgraph export the workspace-split tool
+  shells out to is byte-identical between curiosity-merge v0.8.0 and
+  v0.8.2, as is its one import (`preflight.py`). The files the unmerge
+  work touched — `identity.py`, `reconcile.py`, `unmerge.py`, `merge.py`
+  — are never imported by the exporter, and Switch Bay never invokes
+  `unmerge`. A live export of three pages under both versions produced
+  byte-identical trees (3 pages, 11 vault files) and identical manifest
+  keys.
+
 ## 2026-09-01 — v0.12.9 — Switch Bay VS 0.3.16
 
 **Migration:** none. **Breaking:** none. After pull, run
