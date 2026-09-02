@@ -13,10 +13,11 @@ import { workspaceFolder } from "./paths";
 import { chooseKnowledgeHarness, registerOpenFolder, rememberWiki } from "./registerRepo";
 import {
   invalidateWikiRootCache, knowledgeHarnessOn, modeLabel, pickWikiRoot,
-  resolveWiki, wikiFolderUri, wikiFsPath,
+  resolveWiki, wikiDisplayName, wikiFolderUri, wikiFsPath,
 } from "./wikiRoot";
 import { getPreference, preferenceLabel, setPreference } from "./preference";
 import { openWikiPage, openWikiPreview } from "./preview";
+import { FilesTreeProvider } from "./filesTree";
 import { ProjectsTreeProvider } from "./projectsTree";
 import { startScheduleTicker, upsertSchedule } from "./schedules";
 import { configurePython, maybeOfferSetup, probeSwitchbay } from "./setup";
@@ -37,12 +38,14 @@ export function activate(context: vscode.ExtensionContext): void {
   const log = vscode.window.createOutputChannel("Switch Bay VS");
   context.subscriptions.push(log);
   const wiki = new WikiTreeProvider();
+  const files = new FilesTreeProvider();
   const wikiDecor = new WikiSearchDecorations();
   const projects = new ProjectsTreeProvider();
-  // Wiki tree marks the matched pages; the Explorer badges every file
-  // behind the search, the vault sources of those pages included.
+  // Wiki tree marks the matched pages; the Files tree + Explorer badge
+  // every file behind the search, the vault sources of those pages included.
   const applyGraphSearch = (paths: string[], sourcePaths: string[] = []) => {
     wiki.setSearchPaths(paths);
+    files.setSearch(paths, sourcePaths);
     const folder = wikiFolderUri();
     if (!folder) {
       wikiDecor.setHits([]);
@@ -52,9 +55,20 @@ export function activate(context: vscode.ExtensionContext): void {
       [...paths, ...sourcePaths].map((p) => wikiPageUri(folder, p).fsPath),
     );
   };
+  const wikiView = vscode.window.createTreeView("switchbay.wiki", { treeDataProvider: wiki });
+  const filesView = vscode.window.createTreeView("switchbay.files", { treeDataProvider: files });
+  wiki.treeView = wikiView;
+  files.treeView = filesView;
+  const paintViewChrome = () => {
+    const name = wikiDisplayName() || "";
+    wikiView.description = name;
+    filesView.description = name;
+  };
+  paintViewChrome();
   // Views first — MCP/chat failures must not leave "no data provider".
   context.subscriptions.push(
-    vscode.window.createTreeView("switchbay.wiki", { treeDataProvider: wiki }),
+    wikiView,
+    filesView,
     vscode.window.registerFileDecorationProvider(wikiDecor),
     vscode.window.registerTreeDataProvider("switchbay.projects", projects),
     vscode.commands.registerCommand("switchbay.openWorkspace", () =>
@@ -77,7 +91,9 @@ export function activate(context: vscode.ExtensionContext): void {
         );
       }
       wiki.refresh();
+      files.refresh();
       projects.refresh();
+      paintViewChrome();
     }),
     vscode.commands.registerCommand("switchbay.ingestFile", () => pickAndIngest(context, false)),
     vscode.commands.registerCommand("switchbay.ingestFolder", () => pickAndIngest(context, true)),
@@ -153,7 +169,9 @@ export function activate(context: vscode.ExtensionContext): void {
           const result = await rebuildViewer(context, root);
           if (result.ok) {
             wiki.refresh();
+            files.refresh();
             projects.refresh();
+            paintViewChrome();
             void vscode.window.showInformationMessage("Wiki viewer rebuilt.");
           } else {
             void vscode.window.showErrorMessage(`Viewer rebuild failed.\n${result.text.slice(-500)}`);
@@ -183,7 +201,9 @@ export function activate(context: vscode.ExtensionContext): void {
   const ping = () => {
     updateWikiContext();
     wiki.refresh();
+    files.refresh();
     projects.refresh();
+    paintViewChrome();
   };
   const folder = workspaceFolder();
   const wikiRoot = wikiFsPath();

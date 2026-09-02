@@ -23,7 +23,7 @@ product — see the root README.
 
    ```sh
    make vsix
-   code --install-extension dist/switchbay-vs-0.3.16.vsix
+   code --install-extension dist/switchbay-vs-0.3.17.vsix
    ```
 
 3. Open a curiosity-engine folder (`wiki/` + `vault/`).
@@ -40,7 +40,7 @@ Sideload installs do **not** auto-update. Same id
 
 ```sh
 make vsix
-code --install-extension dist/switchbay-vs-0.3.15.vsix
+code --install-extension dist/switchbay-vs-0.3.17.vsix
 ```
 
 Then **Developer: Reload Window**. Or Command Palette → **Switch Bay VS:
@@ -66,8 +66,8 @@ Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (cheap pyp
 
 | Surface | How |
 | --- | --- |
-| Wiki / Projects | Activity bar (Switch Bay icon). Same WikiPage nodes as Graph (`graph.kuzu`). **Refresh** runs `graph.py rebuild`. |
-| Graph / Atlas | Wiki view title **Open Graph**; **view:** switches Atlas. Center-top search highlights nodes and Wiki-tree files; **×** clears. |
+| Wiki / Files / Projects | Activity bar (Switch Bay icon). Wiki is the same WikiPage set as Graph (`graph.kuzu`). Files is the wiki folder on disk (`wiki/`, `vault/`, …) — not the code-repo Explorer. Both show the wiki folder name (`curiosity-test`) at the top. **Refresh** runs `graph.py rebuild`. |
+| Graph / Atlas | Wiki view title **Open Graph**; **view:** switches Atlas. Center-top search highlights canvas nodes, Wiki-tree pages, and Files-tree rows (vault sources included); **×** clears. |
 | Wiki preview | Editor title on a `wiki/**/*.md` tab |
 | Agent Dashboard | Wiki view title, or **Open Agent Dashboard** |
 | Chat | `@switchbay` (`/curate`, `/thrusters`, `/plot`, `/deck`, `/sketch`) |

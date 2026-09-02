@@ -12,6 +12,7 @@ import { spawnSync } from "child_process";
 import * as vscode from "vscode";
 import { ceRoot } from "./ce";
 import { workspaceFsPath } from "./paths";
+import { displayNameForWikiRoot } from "./searchHits";
 import {
   expandUserPath, looksLikeCeWorkspace, parseCuriosityConfig,
   type CuriosityPointer,
@@ -187,6 +188,11 @@ export function wikiFsPath(): string | undefined {
 export function wikiFolderUri(): vscode.Uri | undefined {
   const root = wikiFsPath();
   return root ? vscode.Uri.file(root) : undefined;
+}
+
+/** Folder basename of the attached wiki (`curiosity-test`). */
+export function wikiDisplayName(res = resolveWiki()): string | undefined {
+  return displayNameForWikiRoot(res.wikiRoot);
 }
 
 export function knowledgeHarnessOn(): boolean {

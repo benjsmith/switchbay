@@ -11,7 +11,7 @@ in the Switch Bay repo.
 
 ## What you get
 
-- **Wiki** and **Projects** in the activity bar (same WikiPage set as Graph, from `.curator/graph.kuzu`; Refresh rebuilds that graph)
+- **Wiki**, **Files**, and **Projects** in the activity bar (Wiki is the same WikiPage set as Graph, from `.curator/graph.kuzu`; Files is the wiki folder on disk; both show the wiki name at the top. Refresh rebuilds the graph)
 - **Graph / Atlas** webview (edges from `.curator/graph.kuzu`)
 - Wiki markdown preview with `[[wikilinks]]`, `![[figures/_assets/…]]`, and clickable sources
 - **Ingest file / folder** from the Wiki view and Explorer (CE `local_ingest.py`)
@@ -83,7 +83,7 @@ Custom agents: Auto, Curator, Reviewer. Investigator is subagent-only.
 
 ```
 make vsix
-code --install-extension dist/switchbay-vs-0.3.16.vsix
+code --install-extension dist/switchbay-vs-0.3.17.vsix
 ```
 
 That same command **updates** an older sideload (same `publisher` + `name`). Then **Developer: Reload Window**. Command Palette → **Switch Bay VS: Update extension…** walks the same path if `dist/*.vsix` is already built.

@@ -2,7 +2,7 @@
   "name": "switchbay-vs",
   "displayName": "Switch Bay VS",
   "description": "Knowledge-graph workbench over a curiosity-engine folder. No daemon. Local MLX / llama.cpp / Ollama models for Chat and Agents.",
-  "version": "0.3.16",
+  "version": "0.3.17",
   "publisher": "switchbay",
   "repository": {
     "type": "git",
@@ -34,6 +34,7 @@
   "activationEvents": [
     "onStartupFinished",
     "onView:switchbay.wiki",
+    "onView:switchbay.files",
     "onView:switchbay.projects"
   ],
   "main": "./out/extension.js",
@@ -105,6 +106,10 @@
           "name": "Wiki"
         },
         {
+          "id": "switchbay.files",
+          "name": "Files"
+        },
+        {
           "id": "switchbay.projects",
           "name": "Projects"
         }
@@ -120,6 +125,11 @@
         "view": "switchbay.wiki",
         "contents": "This folder is not a wiki. Register it with a shared Switch Bay wiki (one wiki, many code/docs repos), or open a wiki folder.\n[Register this folder with a wiki…](command:switchbay.registerFolder)\n[Open a wiki folder](command:switchbay.openWorkspace)",
         "when": "workspaceFolderCount != 0 && !switchbay.hasWiki"
+      },
+      {
+        "view": "switchbay.files",
+        "contents": "Open a curiosity-engine folder, or register this folder with a wiki, to browse `wiki/` and `vault/`.",
+        "when": "!switchbay.hasWiki"
       }
     ],
     "commands": [
@@ -250,7 +260,7 @@
         },
         {
           "command": "switchbay.refreshTrees",
-          "when": "view == switchbay.wiki || view == switchbay.projects",
+          "when": "view == switchbay.wiki || view == switchbay.files || view == switchbay.projects",
           "group": "navigation@3"
         },
         {
@@ -339,7 +349,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "tsc -p ./ && node --test out/wikiPointer.test.js",
+    "test": "tsc -p ./ && node --test out/*.test.js",
     "package": "echo 'From the Switch Bay repo root run: make vsix' && exit 1"
   },
   "devDependencies": {

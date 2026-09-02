@@ -3,6 +3,22 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-02 — v0.12.12 — Switch Bay VS 0.3.17
+
+**Migration:** none. **Breaking:** none. Sideload the new VSIX
+(`make vsix` then `code --install-extension dist/switchbay-vs-0.3.17.vsix`)
+and **Developer: Reload Window**. No daemon restart.
+
+### Added
+
+- **Wiki and Files name the attached wiki.** Both Switch Bay VS
+  sidebar views show the wiki folder (`curiosity-test`) as the first
+  row and as the view subtitle, so a code-repo window is not mistaken
+  for the wiki.
+- **Graph search highlights files.** A Files tree (`wiki/` + `vault/`
+  on disk) sits under Wiki. Graph search marks matching Wiki pages and
+  Files rows, expands to the first page hit, and still badges Explorer.
+
 ## 2026-09-02 — v0.12.11 — Switch Bay VS 0.3.16
 
 **Migration:** none. **Breaking:** none. After pull, run
