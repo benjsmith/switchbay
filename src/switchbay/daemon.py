@@ -15964,7 +15964,8 @@ def _boot_workspace_under_home() -> Path | None:
 
 
 def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    from . import daemonlog
+    log_path = daemonlog.configure()
     from . import http as sbhttp
     sbhttp.install_gates()
     log.info(
@@ -16026,6 +16027,10 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
             )
             workspace = candidate
     log.info("workspace=%s  listening on http://%s:%d", workspace, host, port)
+    log.info(
+        "log=%s  rotate at %d MB (keep %d)",
+        log_path, daemonlog.LOG_MAX_BYTES // (1024 * 1024), daemonlog.LOG_BACKUP_COUNT,
+    )
     log.info("dev frontend: make dev-frontend  (proxies /api and /ws)")
 
     app = build_app(workspace)
@@ -16038,7 +16043,10 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     os.environ["CSWY_DAEMON_PORT"] = str(port)
     service.write_daemon_pid()
     try:
-        web.run_app(app, host=host, port=port, print=None)
+        web.run_app(
+            app, host=host, port=port, print=None,
+            access_log_class=daemonlog.QuietAccessLogger,
+        )
     except KeyboardInterrupt:
         pass
     finally:

@@ -64,6 +64,23 @@ def test_run_enterprise_user_only_on_install():
     assert service.run("status", enterprise_user=True) == 2
 
 
+def test_mac_plist_stdio_is_devnull(tmp_path, monkeypatch):
+    """launchd must not hold the rotating daemon log fd."""
+    repo = tmp_path / "repo"
+    py = repo / ".venv" / "bin" / "python"
+    if service.sys.platform == "win32":
+        py = repo / ".venv" / "Scripts" / "python.exe"
+    py.parent.mkdir(parents=True)
+    py.write_text("", encoding="utf-8")
+    plist = tmp_path / "LaunchAgents" / "com.switchbay.daemon.plist"
+    monkeypatch.setattr(service, "_mac_plist_path", lambda: plist)
+    service._mac_write_plist(repo)
+    text = plist.read_text(encoding="utf-8")
+    assert "<key>StandardOutPath</key><string>/dev/null</string>" in text
+    assert "<key>StandardErrorPath</key><string>/dev/null</string>" in text
+    assert "switchbay-daemon.log" not in text
+
+
 def test_main_passes_enterprise_user_flag(monkeypatch):
     seen: dict[str, object] = {}
 

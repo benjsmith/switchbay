@@ -3,6 +3,25 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-02 — v0.12.11 — Switch Bay VS 0.3.16
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make restart` — launchd has to reload so it drops the old log fd.
+No frontend rebuild.
+
+### Fixed
+
+- **The daemon log grew without bound and hid every real error.**
+  launchd pointed stdout and stderr at
+  `~/Library/Logs/switchbay-daemon.log` and never rotated it, so a
+  300+ MB file of `GET /api/health` / `GET /api/runs/active` (the
+  clients poll those every 1–2 s) buried the trail you need when the
+  daemon wedges. Python now owns that file with a 100 MB rotating
+  handler (one backup); launchd stdio goes to `/dev/null`. Successful
+  hits on those two endpoints are no longer access-logged; 4xx/5xx
+  still are. `make restart` rewrites the plist so an existing agent
+  picks this up.
+
 ## 2026-09-01 — v0.12.10 — Switch Bay VS 0.3.16
 
 **Migration:** none. **Breaking:** none. Skill bump only — no app code

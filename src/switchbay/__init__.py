@@ -4,7 +4,7 @@
 # checker both read this, so drift here makes a current install look
 # stale and offers an "update" to a release it is already past.
 # tests/unit/test_version_sync.py fails the build if the two diverge.
-__version__ = "0.12.10"
+__version__ = "0.12.11"
 
 # Use the OS certificate store for HTTPS (corporate TLS proxies, custom
 # CAs). Must run before any aiohttp ClientSession creates an SSL context

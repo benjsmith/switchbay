@@ -254,8 +254,8 @@ def write_launchagent_plist(dest: Path) -> None:
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ProcessType</key><string>Interactive</string>
-  <key>StandardOutPath</key><string>~/Library/Logs/switchbay-daemon.log</string>
-  <key>StandardErrorPath</key><string>~/Library/Logs/switchbay-daemon.log</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
 </dict>
 </plist>
 """,

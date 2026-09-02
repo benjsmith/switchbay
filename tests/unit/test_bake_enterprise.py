@@ -70,6 +70,16 @@ def test_layout_windows_writes_serve_task(tmp_path: Path):
     assert notes["host"] in ("python.exe fallback", "bin\\switchbay.exe")
 
 
+def test_launchagent_plist_stdio_is_devnull(tmp_path: Path):
+    m = _mod()
+    dest = tmp_path / "com.switchbay.daemon.plist"
+    m.write_launchagent_plist(dest)
+    text = dest.read_text(encoding="utf-8")
+    assert "<key>StandardOutPath</key><string>/dev/null</string>" in text
+    assert "<key>StandardErrorPath</key><string>/dev/null</string>" in text
+    assert "switchbay-daemon.log" not in text
+
+
 def test_overlay_example_mentions_host():
     m = _mod()
     ex = m.overlay_example(copilot_host="ghe.example.com", allow_hf=False)

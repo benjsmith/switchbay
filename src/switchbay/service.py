@@ -229,8 +229,6 @@ def _mac_write_plist(repo: Path) -> Path:
     py = _venv_python(repo)
     if not py.exists():
         raise SystemExit(f"venv python not found at {py} — run `make sync` first.")
-    log = Path.home() / "Library" / "Logs" / "switchbay-daemon.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
     p = _mac_plist_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     env = _service_environment(repo)
@@ -239,6 +237,11 @@ def _mac_write_plist(repo: Path) -> Path:
         f"    <key>{_xml_text(k)}</key><string>{_xml_text(v)}</string>"
         for k, v in env.items()
     )
+    # launchd opens StandardOut/Error once and never rotates. The daemon's
+    # RotatingFileHandler owns ~/Library/Logs/switchbay-daemon.log; pointing
+    # launchd at the same path would keep writing to a stale inode after
+    # rollover. /dev/null is correct — Python redirects non-TTY stdio
+    # into the rotating file after configure().
     p.write_text(
         f"""<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -258,8 +261,8 @@ def _mac_write_plist(repo: Path) -> Path:
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
-  <key>StandardOutPath</key><string>{_xml_text(str(log))}</string>
-  <key>StandardErrorPath</key><string>{_xml_text(str(log))}</string>
+  <key>StandardOutPath</key><string>/dev/null</string>
+  <key>StandardErrorPath</key><string>/dev/null</string>
   <key>ProcessType</key><string>Interactive</string>
 </dict>
 </plist>
@@ -269,22 +272,29 @@ def _mac_write_plist(repo: Path) -> Path:
     return p
 
 
+def _mac_bootout_wait() -> None:
+    """Unload the agent and wait until launchd actually drops it.
+
+    ``bootout`` is asynchronous; a following ``bootstrap`` fails (exit 5)
+    if the label is still in the domain.
+    """
+    dom, label = _mac_domain(), LABEL
+    subprocess.run(["launchctl", "bootout", f"{dom}/{label}"], capture_output=True)
+    for _ in range(40):
+        still = subprocess.run(
+            ["launchctl", "print", f"{dom}/{label}"], capture_output=True
+        )
+        if still.returncode != 0:
+            break
+        time.sleep(0.25)
+
+
 def _mac(action: str, repo: Path) -> int:
     dom, label = _mac_domain(), LABEL
     if action == "install":
         _require_built_frontend(repo)
         _mac_write_plist(repo)
-        # Bootout any existing agent and WAIT for it to actually leave the
-        # domain — bootstrap fails (exit 5) if the label is still loaded,
-        # and bootout is asynchronous.
-        subprocess.run(["launchctl", "bootout", f"{dom}/{label}"], capture_output=True)
-        for _ in range(40):
-            still = subprocess.run(
-                ["launchctl", "print", f"{dom}/{label}"], capture_output=True
-            )
-            if still.returncode != 0:  # not found → fully booted out
-                break
-            time.sleep(0.25)
+        _mac_bootout_wait()
         subprocess.run(["launchctl", "bootstrap", dom, str(_mac_plist_path())], check=True)
         subprocess.run(["launchctl", "kickstart", "-k", f"{dom}/{label}"], capture_output=True)
         print("installed + started. Open http://127.0.0.1:8765 and use your "
@@ -298,44 +308,34 @@ def _mac(action: str, repo: Path) -> int:
         subprocess.run(["launchctl", "kill", "TERM", f"{dom}/{label}"], capture_output=True)
         print("stopped (restarts on next login, or `service start`).")
     elif action == "start":
-        # kickstart fails (exit 113) if the agent isn't loaded — e.g.
-        # after a manual bootout or a never-install. Bootstrap first
-        # when print says the label is missing.
-        loaded = subprocess.run(
-            ["launchctl", "print", f"{dom}/{label}"], capture_output=True,
-        )
-        if loaded.returncode != 0:
-            plist = _mac_plist_path()
-            if not plist.is_file():
-                raise SystemExit(
-                    f"launchd agent not installed ({plist} missing) — "
-                    "run `make install-service` first."
-                )
-            subprocess.run(
-                ["launchctl", "bootstrap", dom, str(plist)], check=True,
+        # Rewrite the plist so Standard*Path / argv stay in sync with
+        # this checkout, then unload/load. kickstart -k alone would keep
+        # a stale loaded definition (the unbounded-log fd).
+        plist = _mac_plist_path()
+        if not plist.is_file():
+            raise SystemExit(
+                f"launchd agent not installed ({plist} missing) — "
+                "run `make install-service` first."
             )
+        _mac_write_plist(repo)
+        _mac_bootout_wait()
+        subprocess.run(["launchctl", "bootstrap", dom, str(plist)], check=True)
         subprocess.run(
             ["launchctl", "kickstart", "-k", f"{dom}/{label}"], check=True,
         )
         print("started.")
     elif action == "restart":
-        # Same resilience as start: kickstart -k alone fails when the
-        # label isn't in the domain (common when a one-shot nohup
-        # daemon was used during a prior session and the agent was
-        # never re-bootstrapped). Bootstrap if needed, then kill-start.
-        loaded = subprocess.run(
-            ["launchctl", "print", f"{dom}/{label}"], capture_output=True,
-        )
-        if loaded.returncode != 0:
-            plist = _mac_plist_path()
-            if not plist.is_file():
-                raise SystemExit(
-                    f"launchd agent not installed ({plist} missing) — "
-                    "run `make install-service` first."
-                )
-            subprocess.run(
-                ["launchctl", "bootstrap", dom, str(plist)], check=True,
+        # Same as start: rewrite plist + unload/load so launchd drops
+        # any fd it held on the daemon log, then kill-start.
+        plist = _mac_plist_path()
+        if not plist.is_file():
+            raise SystemExit(
+                f"launchd agent not installed ({plist} missing) — "
+                "run `make install-service` first."
             )
+        _mac_write_plist(repo)
+        _mac_bootout_wait()
+        subprocess.run(["launchctl", "bootstrap", dom, str(plist)], check=True)
         r = subprocess.run(
             ["launchctl", "kickstart", "-k", f"{dom}/{label}"],
             capture_output=True, text=True,

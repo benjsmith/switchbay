@@ -76,13 +76,14 @@ restart_daemon() {
   fi
 
   log "service start failed — launching detached serve"
-  # Last resort: same shape as a manual nohup daemon. Log to the
-  # standard macOS path when present, else /tmp.
+  # Last resort: same shape as a manual nohup daemon. Stdio goes to
+  # /dev/null — the process owns ~/Library/Logs/switchbay-daemon.log
+  # via RotatingFileHandler. Shell-appending to that path would keep
+  # writing to a stale inode after rollover.
   local logfile="${HOME}/Library/Logs/switchbay-daemon.log"
-  mkdir -p "$(dirname "$logfile")" 2>/dev/null || logfile="/tmp/sy-daemon.log"
   nohup env PYTHONPATH=src PYTHONUNBUFFERED=1 \
     uv run --no-sync python -m switchbay serve --workspace "${WORKSPACE:-$ROOT}" \
-    >>"$logfile" 2>&1 &
+    >/dev/null 2>&1 &
   log "detached serve pid $! (log: $logfile)"
 }
 

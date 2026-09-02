@@ -39,6 +39,9 @@ def _isolate_user_state(tmp_path_factory, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(config))
     # statedir.state_root() → $SWITCHBAY_STATE_DIR
     monkeypatch.setenv("SWITCHBAY_STATE_DIR", str(state))
+    # daemonlog.log_path() → $SWITCHBAY_DAEMON_LOG (never the real
+    # ~/Library/Logs/switchbay-daemon.log during the suite)
+    monkeypatch.setenv("SWITCHBAY_DAEMON_LOG", str(base / "daemon.log"))
     # Pin open so a developer with SWITCHBAY_PROFILE=enterprise in the
     # shell doesn't flip the whole suite. Policy tests opt in.
     monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
