@@ -195,8 +195,8 @@ def test_model_family_splits_copilot_catalog():
     assert policy.model_strength("qwen2.5-7b-instruct") < policy.model_strength("gpt-5.4")
 
 
-def test_mlx_default_prefers_copilot_catalog(tmp_path, monkeypatch):
-    """Rail picker on MLX must not lock Auto out of a signed-in Copilot."""
+def test_mlx_picker_is_chief_copilot_still_workers(tmp_path, monkeypatch):
+    """Rail picker is the chief; Copilot still fills independent workers."""
     monkeypatch.setattr(
         "switchbay.modestore.resolve_for_difficulty", lambda *a, **k: (None, None),
     )
@@ -223,18 +223,46 @@ def test_mlx_default_prefers_copilot_catalog(tmp_path, monkeypatch):
         default_provider="mlx", default_model="qwen2.5-7b-instruct",
         workspace=tmp_path, available=available,
     )
-    assert one[0][0] == "github_copilot"
-    assert one[0][1] != "qwen2.5-7b-instruct"
+    assert one[0] == ("mlx", "qwen2.5-7b-instruct")
     many = policy.allocate_models(
         4, independence="high", preference=0.85,
         default_provider="mlx", default_model="qwen2.5-7b-instruct",
         workspace=tmp_path, available=available,
     )
     assert len(many) == 4
-    assert all(p == "github_copilot" for p, _ in many)
-    assert len({m for _, m in many}) >= 3
-    families = {policy.model_family(m) for _, m in many}
-    assert len(families) >= 3
+    assert many[0] == ("mlx", "qwen2.5-7b-instruct")
+    workers = many[1:]
+    assert any(p == "github_copilot" for p, _ in workers)
+    families = {policy.model_family(m) for _, m in workers}
+    assert len(families) >= 2
+
+
+def test_economy_workers_can_pick_local_for_efficiency(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "switchbay.modestore.resolve_for_difficulty", lambda *a, **k: (None, None),
+    )
+    monkeypatch.setattr(
+        "switchbay.admin_policy.provider_allowed",
+        lambda pid: pid in ("github_copilot", "mlx"),
+    )
+    monkeypatch.setattr(
+        "switchbay.agents.orchestration_health.is_available", lambda pid: True,
+    )
+    monkeypatch.setattr(
+        "switchbay.model_cache.get_cached",
+        lambda pid: {
+            "github_copilot": (["gpt-5.4", "gpt-5.4-mini", "claude-haiku-4.5"], True),
+            "mlx": (["qwen2.5-7b-instruct"], True),
+        }.get(pid, ([], False)),
+    )
+    alloc = policy.allocate_models(
+        4, independence="high", preference=0.05,
+        default_provider="github_copilot", default_model="gpt-5.4",
+        workspace=tmp_path,
+        available=[("github_copilot", "gpt-5.4"), ("mlx", "qwen2.5-7b-instruct")],
+    )
+    assert alloc[0] == ("github_copilot", "gpt-5.4")
+    assert any(p == "mlx" for p, _ in alloc[1:])
 
 
 def test_denied_copilot_falls_back_to_local(tmp_path, monkeypatch):
@@ -283,23 +311,28 @@ def test_economy_picks_cheaper_copilot_than_maximum(tmp_path, monkeypatch):
         ),
     )
     cheap = policy.allocate_models(
-        1, independence="low", preference=0.05,
+        3, independence="high", preference=0.05,
         default_provider="github_copilot", default_model="gpt-5.4",
         workspace=tmp_path,
         available=[("github_copilot", "gpt-5.4")],
-    )[0][1]
+    )
     strong = policy.allocate_models(
-        1, independence="low", preference=0.95,
+        3, independence="high", preference=0.95,
         default_provider="github_copilot", default_model="gpt-5.4",
         workspace=tmp_path,
         available=[("github_copilot", "gpt-5.4")],
-    )[0][1]
-    assert cheap in ("gpt-5.4-mini", "claude-haiku-4.5")
-    assert strong in ("gpt-5.4", "claude-opus-5")
-    assert policy.model_strength(strong) > policy.model_strength(cheap)
+    )
+    assert cheap[0] == ("github_copilot", "gpt-5.4")
+    assert strong[0] == ("github_copilot", "gpt-5.4")
+    cheap_workers = [m for _, m in cheap[1:]]
+    strong_workers = [m for _, m in strong[1:]]
+    assert any(m in ("gpt-5.4-mini", "claude-haiku-4.5") for m in cheap_workers)
+    assert max(policy.model_strength(m) for m in strong_workers) >= max(
+        policy.model_strength(m) for m in cheap_workers
+    )
 
 
-def test_pick_chief_pair_ignores_local_picker(tmp_path, monkeypatch):
+def test_pick_chief_pair_honors_local_picker(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "switchbay.admin_policy.provider_allowed",
         lambda pid: pid in ("github_copilot", "mlx"),
@@ -321,8 +354,8 @@ def test_pick_chief_pair_ignores_local_picker(tmp_path, monkeypatch):
         workspace=tmp_path,
         available=[("mlx", "qwen2.5-7b-instruct"), ("github_copilot", "gpt-5.4")],
     )
-    assert pid == "github_copilot"
-    assert model in ("gpt-5.4", "claude-sonnet-4.6")
+    assert pid == "mlx"
+    assert model == "qwen2.5-7b-instruct"
 
 
 def test_denied_models_are_per_workspace(tmp_path, monkeypatch):

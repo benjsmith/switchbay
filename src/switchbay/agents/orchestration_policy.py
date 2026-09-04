@@ -894,21 +894,34 @@ def _rank_pairs(
     *,
     preference: float,
     roster: list[tuple[str, str | None]] | None = None,
+    chief: tuple[str, str | None] | None = None,
 ) -> list[tuple[str, str | None]]:
-    """Non-local first, then closest to the slider's strength target."""
+    """Worker ranking: independence first, then slider + token efficiency.
+
+    Local backends are treated as maximally token-efficient (strength 0)
+    at a quality/speed cost that depends on the box and the weights.
+    Economy therefore prefers them for extra tasks; Maximum still uses
+    them when a leftover slot needs a cheap independent opinion.
+    """
     s = clamp_preference(preference)
     target = 0.22 + 0.70 * s
     roster_set = set(roster or [])
+    chief_fam = model_family(chief[1]) if chief else ""
+    chief_pid = chief[0] if chief else ""
     def _key(pair: tuple[str, str | None]) -> tuple[Any, ...]:
         pid, model = pair
-        local = 1 if pid in LOCAL_PROVIDER_IDS or provider_category(pid) == "local" else 0
-        st = model_strength(model)
+        local = pid in LOCAL_PROVIDER_IDS or provider_category(pid) == "local"
+        st = 0.0 if local else model_strength(model)
         dist = abs(st - target)
+        same_fam = (
+            1 if chief and pid == chief_pid and model_family(model) == chief_fam
+            else 0
+        )
         in_roster = 0 if pair in roster_set else 1
         # Tie-break: Maximum prefers the stronger of two equally close
         # models; Economy prefers the cheaper.
         pull = -st if s >= 0.5 else st
-        return (local, dist, in_roster, pull)
+        return (same_fam, dist, in_roster, pull)
     return sorted(pairs, key=_key)
 
 
@@ -957,17 +970,20 @@ def allocate_models(
 
     Channel layer (who can talk) is separate from policy (what to buy):
 
-    * keyed non-local catalogs (Copilot, subscriptions, BYOK) outrank
-      local MLX/Ollama whenever the user has made them available;
-    * the rail picker is a hint, not a lock — Auto will not stay on
-      MLX just because the picker is local;
+    * the rail picker is the **chief** — questions, ``/curate``, and
+      the chief of staff run on that pair when it is allowed;
+    * extra task slots (investigators, CE workers, verifiers) come
+      from the dashboard allowlist when they add opinion independence
+      or token efficiency;
+    * local backends are maximally token-efficient (quality/speed
+      depend on the box and the weights);
     * per-workspace dashboard denylist is the user-facing allowlist
-      for the chief of staff;
+      for those extra slots;
     * last-good desk roster is a sort hint among allowed remotes;
     * cooled-down probes (weekly limit, dead local server) are skipped;
-    * the effort slider picks a strength band (Economy = cheaper /
-      smaller, Maximum = flagship) and how much independent fan-out
-      to buy;
+    * the effort slider picks a strength band for **workers**
+      (Economy = cheaper / local, Maximum = flagship) and how much
+      independent fan-out to buy;
     * the CE model ladder is not consulted — Auto owns this roster.
 
     Intra-provider catalogs (Copilot GPT vs Claude vs Gemini) still
@@ -1036,11 +1052,8 @@ def allocate_models(
                 seen.add(pair)
                 pool.append(pair)
 
-    for pid in remote_pids:
+    for pid in remote_pids + local_pids:
         _extend(pid, require_health=True)
-    if not pool:
-        for pid in local_pids:
-            _extend(pid, require_health=True)
     if not pool:
         for pid in remote_pids + local_pids:
             _extend(pid, require_health=False)
@@ -1056,9 +1069,27 @@ def allocate_models(
     if not ranked:
         ranked = [default]
 
+    chief: tuple[str, str | None] | None = None
+    if (
+        default_provider
+        and admin_policy.provider_allowed(default_provider)
+        and model_allowed(default_provider, default_model, denied)
+    ):
+        chief = default
+    if chief is None:
+        chief = ranked[0]
+
     if n == 1 or independence == "low":
-        return [ranked[0]] * n
-    return _diverse_assign(ranked, n)
+        return [chief] * n
+
+    ranked_workers = _rank_pairs(
+        [p for p in pool if p != chief] or pool,
+        preference=preference,
+        roster=list(roster or []),
+        chief=chief,
+    )
+    workers = _diverse_assign(ranked_workers, n - 1)
+    return [chief] + workers
 
 
 def pick_chief_pair(
@@ -1070,7 +1101,10 @@ def pick_chief_pair(
     available: list[tuple[str, str]] | None = None,
     denied_models: list[str] | None = None,
 ) -> tuple[str, str | None]:
-    """Single model for the chief / a one-node Auto or CE curator run."""
+    """Rail-picker pair for the chief / a one-node Auto or CE curator run.
+
+    Extra workers still fan out via ``allocate_models`` / ``allocate_unused``.
+    """
     alloc = allocate_models(
         1,
         independence="low",

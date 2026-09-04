@@ -2841,27 +2841,28 @@ def _candidate_pairs(
         if policy.model_allowed(pid, model)
     ]
     src = filtered or keyed
+    if default_pid:
+        head = [(p, m) for p, m in src if p == default_pid]
+        rest = [(p, m) for p, m in src if p != default_pid]
+        src = head + rest
     remotes = [
         (pid, model) for pid, model in src
         if policy.provider_category(pid) != "local"
         and pid not in policy.LOCAL_PROVIDER_IDS
     ]
     locals_ = [pair for pair in src if pair not in remotes]
-    default_local = bool(
-        default_pid
-        and (
-            default_pid in policy.LOCAL_PROVIDER_IDS
-            or policy.provider_category(default_pid) == "local"
-        )
+    ordered = (
+        [(p, m) for p, m in src if p == default_pid]
+        + remotes
+        + [pair for pair in locals_ if pair[0] != default_pid]
     )
     return policy.filter_keyed_providers(
-        remotes + locals_,
+        ordered,
         include_byok=byok_approved or (
             policy.provider_category(default_pid or "") == "byok"
         ),
         include_local=True,
-        # A local rail picker must not jump the remote roster.
-        always=None if (remotes and default_local) else default_pid,
+        always=default_pid,
     )
 
 

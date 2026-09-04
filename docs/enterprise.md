@@ -58,18 +58,26 @@ Set `copilot.host` to github.com or your GitHub Enterprise URL at bake.
   from the subscription catalog (`GET /models`, cached). If that list
   is cold, static suggestions are the current Copilot chat ids
   (gpt-5.4, claude-sonnet-4.6, gemini-3.x, grok-4.6 — not gpt-4o).
-  A signed-in non-local catalog **outranks** a local rail picker
-  (MLX / llama.cpp / Ollama): the chief of staff will not stay on a
-  local 7B just because the picker is local. Uncheck models under the
-  Agent Dashboard DAG to deny them; local remains the overnight
-  fallback when subscriptions cool down. The effort slider buys
-  fan-out and how readily Auto recruits flagship models.
+  Copilot models that only advertise `/responses` (newer GPT/Codex
+  rows) still appear in the picker; Switch Bay posts `/responses` for
+  those and `/chat/completions` when the catalog lists it. A 400
+  `unsupported_api_for_model` retries the other endpoint so switching
+  models stays seamless. Rows with `tool_calls: false` stay hidden —
+  the rail sends tools.
+  The **rail model picker** is the primary model for questions,
+  `/curate`, and the chief of staff. Independent investigators and
+  CE Phase 2 workers may still use other models checked under the
+  Agent Dashboard DAG when that adds opinion independence or token
+  efficiency (local backends are treated as maximally token-efficient;
+  quality and speed depend on the box and the weights). Uncheck a
+  row to deny it. The effort slider buys fan-out and how readily
+  Auto recruits flagship models for those extra tasks.
   Admin-disallowed providers are never used, even if a workspace
   ladder still names them. `/curate` stays one CE curator — not a
-  Switch Bay investigator DAG — but that curator uses the same
-  non-local preference, and on Copilot it dispatches CE Phase 2
-  workers (then a batch reviewer) as child runs. Local `/curate`
-  stays the single-session fallback.
+  Switch Bay investigator DAG — on the picker model, and on Copilot
+  it dispatches CE Phase 2 workers (then a batch reviewer) as child
+  runs. Local `/curate` stays the single-session fallback when the
+  picker is local.
 - **`features`** — see table below. Missing keys inherit the profile.
 - **`SWITCHBAY_PROFILE=open`** restores mainline behaviour without a file.
 

@@ -190,12 +190,24 @@ async def run_from_tool(
             plan.nodes.append(node)
     pref = policy.clamp_preference(preference)
     try:
-        wp, wm = policy.pick_chief_pair(
+        used: list[tuple[str, str | None]] = []
+        if curator_pid:
+            used.append((str(curator_pid), None))
+        if isinstance(parent, dict) and parent.get("provider"):
+            used.append((
+                str(parent.get("provider") or ""),
+                parent.get("model") if isinstance(parent.get("model"), str) else None,
+            ))
+        alloc = policy.allocate_unused(
+            1,
+            used=used,
+            independence="high",
+            preference=0.9 if role in REVIEW_ROLES else pref,
             default_provider=str(curator_pid or ""),
             default_model=None,
-            preference=0.9 if role in REVIEW_ROLES else pref,
             workspace=workspace,
         )
+        wp, wm = alloc[0]
     except Exception:  # noqa: BLE001
         wp, wm = str(curator_pid or ""), None
     node.provider = wp

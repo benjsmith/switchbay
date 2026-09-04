@@ -31,7 +31,7 @@ Last updated **2026-08-17**. Remaining Muse Code work waits on a live
 | **Grok Build** (`grok-build`) | First-class | `grok mcp add` (project) | PreToolUse + `bypassPermissions` | Live `grok models` list (grok-4.6 as of CLI 1.0.3). Hook **fails open** — every error path emits deny. |
 | **OpenAI Codex** (`openai-codex`) | Usable | inline `-c mcp_servers…` | no | Upstream has no PreToolUse. Workspace-write sandbox only. |
 | **Muse Code** (`muse-code`) | Preview | **no** | **no** | See [Muse Code](#muse-code) below. |
-| **GitHub Copilot** (`github_copilot`) | Usable | n/a (HTTP) | n/a | Device-flow + Enterprise SSO. OpenAI-compat tools. No shell. |
+| **GitHub Copilot** (`github_copilot`) | Usable | n/a (HTTP) | n/a | Device-flow + Enterprise SSO. Chat completions or Responses per model catalog. No shell. |
 
 ## Hosted APIs (BYOK)
 

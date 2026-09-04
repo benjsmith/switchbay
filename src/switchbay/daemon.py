@@ -7837,10 +7837,11 @@ def _auto_roster_pair(
     hint_model: str | None = None,
     preference: float | None = None,
 ) -> tuple[str, str | None]:
-    """Chief-of-staff (provider, model) given the picker as a hint.
+    """Chief-of-staff (provider, model) given the rail picker.
 
-    Non-local keyed catalogs (Copilot, …) outrank a local rail picker.
-    Dashboard denylist still wins.
+    The picker is the primary model for questions, ``/curate``, and
+    the chief. Dashboard denylist can still veto that pair; workers
+    fan out separately.
     """
     pid = hint_pid or _resolve_default_provider()
     model = hint_model or _effective_model(pid) or None
@@ -7875,11 +7876,10 @@ def _ce_action_provider(workspace: Path) -> tuple[str | None, str | None]:
     resolved per-difficulty inside the fan-out path.
 
     A pinned `hard` rung (Settings → CE curation → Override, or a
-    per-run override) still wins. When that rung is unset, Auto's
-    roster picks the model: Copilot/other non-local catalogs outrank
-    a local rail picker, and the Agent Dashboard denylist applies.
-    ``/curate`` stays one CE curator — this only chooses which model
-    drives it.
+    per-run override) still wins. When that rung is unset, the rail
+    picker is the curator (dashboard denylist can veto it). ``/curate``
+    stays one CE curator — this only chooses which model drives it.
+    Phase 2 workers may still use other allowlisted models.
 
     Returns the Auto roster pair when the `hard` rung is:
       · unset (the default);

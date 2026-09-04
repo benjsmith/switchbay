@@ -9,8 +9,10 @@ OAuth grant. We use the standard Copilot editor-integration client id
 device flow is public-client by design). The long-lived OAuth token
 lands in the secrets backend; per-request we exchange it for the
 short-lived Copilot bearer (`copilot_internal/v2/token`, cached until
-near expiry) and talk OpenAI-shaped chat completions to
-api.githubcopilot.com.
+near expiry) and talk OpenAI-shaped chat completions or the Responses API to
+api.githubcopilot.com. The model catalog's ``supported_endpoints``
+picks the path; a 400 ``unsupported_api_for_model`` retries the
+other.
 
 Requires an active Copilot subscription on the signed-in account
 (individual / business / enterprise); the token exchange fails with a
@@ -29,7 +31,14 @@ from typing import AsyncIterator
 import aiohttp
 
 from . import base
-from .openai_compat import messages_to_openai, parse_sse, tools_to_openai
+from .openai_compat import (
+    messages_to_openai,
+    messages_to_responses,
+    parse_responses_sse,
+    parse_sse,
+    tools_to_openai,
+    tools_to_responses,
+)
 from .. import secrets
 
 log = logging.getLogger("switchbay.llm.copilot")
@@ -135,6 +144,8 @@ def set_host(host: str | None, *, sso_slug: str | None = None) -> str:
     else:
         secrets.delete_key(_SSO_SLUG_KEY)
     _bearer_cache.clear()
+    _model_endpoints.clear()
+    _learned_kind.clear()
     return h
 
 
@@ -192,12 +203,37 @@ def _endpoints(host: str | None = None, *, sso_slug: str | None = None) -> dict[
     }
 
 
-_EDITOR_HEADERS = {
-    "Editor-Version": "vscode/1.99.0",
-    "Editor-Plugin-Version": "copilot-chat/0.26.0",
-    "Copilot-Integration-Id": "vscode-chat",
-    "User-Agent": "switchbay",
-}
+# Copilot's HTTP API is an IDE product surface. Enterprise and newer
+# models reject requests that omit IDE auth headers or that look like
+# an old vscode-chat client. These versions track current VS Code
+# Copilot Chat (in-tree extension 0.65, engines ^1.137). We still
+# identify as vscode-chat because that is the integration id the API
+# accepts; User-Agent matches the plugin, not a custom product name.
+_EDITOR_VERSION = "vscode/1.137.0"
+_PLUGIN_VERSION = "copilot-chat/0.65.0"
+
+
+def _editor_headers(*, agent: bool | None = None) -> dict[str, str]:
+    """IDE identity (+ optional turn intent).
+
+    ``agent=True`` for tool-using turns (rail / curate). ``agent=False``
+    for a plain chat completion. ``None`` for token/catalog fetches
+    that are not a conversation turn.
+    """
+    plugin_rev = _PLUGIN_VERSION.split("/", 1)[-1]
+    headers = {
+        "Editor-Version": _EDITOR_VERSION,
+        "Editor-Plugin-Version": _PLUGIN_VERSION,
+        "Copilot-Integration-Id": "vscode-chat",
+        "User-Agent": f"GitHubCopilotChat/{plugin_rev}",
+    }
+    if agent is True:
+        headers["Openai-Intent"] = "conversation-agent"
+        headers["X-Initiator"] = "agent"
+    elif agent is False:
+        headers["Openai-Intent"] = "conversation-edits"
+        headers["X-Initiator"] = "user"
+    return headers
 
 PROVIDER = {
     "id": ID,
@@ -221,7 +257,6 @@ PROVIDER = {
         "gpt-5.4",
         "gpt-5.4-mini",
         "gpt-5.5",
-        "gpt-5-mini",
         "claude-sonnet-4.6",
         "claude-sonnet-5",
         "claude-opus-5",
@@ -358,11 +393,17 @@ def sign_out() -> None:
     secrets.delete_key(_HOST_KEY)
     secrets.delete_key(_SSO_SLUG_KEY)
     _bearer_cache.clear()
+    _model_endpoints.clear()
+    _learned_kind.clear()
 
 
 # ── Copilot bearer exchange (short-lived; cached) ──────────────────
 
 _bearer_cache: dict = {}
+# Last GET /models endpoint sets, plus kinds learned from a 400 that
+# said the other path is required. Survives until sign-out / host change.
+_model_endpoints: dict[str, frozenset[str]] = {}
+_learned_kind: dict[str, str] = {}
 
 
 async def _bearer() -> str:
@@ -383,7 +424,7 @@ async def _bearer() -> str:
             headers={
                 "Authorization": f"token {oauth}",
                 "Accept": "application/json",
-                **_EDITOR_HEADERS,
+                **_editor_headers(),
             },
         ) as resp:
             body = await resp.json(content_type=None)
@@ -432,45 +473,135 @@ def _is_gpt5_family(model: str) -> bool:
     return m.startswith(("gpt-5", "o1", "o3", "o4"))
 
 
-def _supports_chat_completions(item: dict) -> bool:
+def _endpoint_list(item: dict) -> list[str]:
+    """Copilot puts ``supported_endpoints`` on the row, sometimes nested
+    under ``capabilities``. Paths may be ``/chat/completions``,
+    ``/responses``, or both."""
+    caps = item.get("capabilities") if isinstance(item.get("capabilities"), dict) else {}
+    raw = (
+        item.get("supported_endpoints")
+        or caps.get("supported_endpoints")
+        or caps.get("endpoints")
+        or []
+    )
+    if not isinstance(raw, list):
+        return []
+    return [str(e) for e in raw if e]
+
+
+def _has_chat_completions(endpoints: list[str] | frozenset[str]) -> bool:
+    return any("chat/completions" in e.lower() for e in endpoints)
+
+
+def _has_responses(endpoints: list[str] | frozenset[str]) -> bool:
+    return any("responses" in e.lower() for e in endpoints)
+
+
+def _is_picker_model(item: dict) -> bool:
     """True if this /models row should appear in our chat picker.
 
-    Prefer `model_picker_enabled` when present (matches the official
-    editor list). Fall back to `supported_endpoints` containing
-    chat/completions — responses-only models reject our API path.
-    `capabilities.type` is NOT used: almost everything is type=chat.
+    VS Code lists anything with ``model_picker_enabled``. We include
+    chat/completions *and* responses-only chat rows so newer Copilot
+    models (Codex / GPT-5.x that refuse chat/completions) are
+    selectable. Tool-less and non-chat rows still 400 on the rail.
     """
-    if "model_picker_enabled" in item:
-        return bool(item.get("model_picker_enabled"))
-    caps = item.get("capabilities") or {}
-    if isinstance(caps, dict):
-        if "model_picker_enabled" in caps:
-            return bool(caps.get("model_picker_enabled"))
-        endpoints = caps.get("supported_endpoints") or caps.get("endpoints")
-        if isinstance(endpoints, list) and endpoints:
-            joined = " ".join(str(e) for e in endpoints).lower()
-            if "chat/completions" in joined or "/chat" in joined:
-                return True
-            if "responses" in joined and "chat" not in joined:
-                return False
-    # No picker signal — keep the model (legacy payload shapes).
+    caps = item.get("capabilities") if isinstance(item.get("capabilities"), dict) else {}
+    ctype = str(caps.get("type") or "chat").lower()
+    if ctype != "chat":
+        return False
+    if item.get("model_picker_enabled") is False:
+        return False
+    if caps.get("model_picker_enabled") is False:
+        return False
+    endpoints = _endpoint_list(item)
+    if endpoints and not (
+        _has_chat_completions(endpoints) or _has_responses(endpoints)
+    ):
+        return False
+    supports = caps.get("supports") if isinstance(caps.get("supports"), dict) else {}
+    if supports.get("tool_calls") is False:
+        return False
     return True
 
 
-async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
-    bearer = await _bearer()
-    model = req.model or DEFAULT_MODEL
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {bearer}",
-        **_EDITOR_HEADERS,
-    }
+def _supports_chat_completions(item: dict) -> bool:
+    """True if this row can be POSTed to ``/chat/completions``."""
+    if not _is_picker_model(item):
+        return False
+    endpoints = _endpoint_list(item)
+    if endpoints and not _has_chat_completions(endpoints):
+        return False
+    return True
+
+
+def _ingest_catalog(items: list) -> list[str]:
+    """Remember per-model endpoints and return picker ids."""
+    new_eps: dict[str, frozenset[str]] = {}
+    out: list[str] = []
+    for it in items:
+        if not isinstance(it, dict) or not it.get("id"):
+            continue
+        mid = str(it["id"])
+        eps = _endpoint_list(it)
+        if eps:
+            new_eps[mid] = frozenset(e.lower() for e in eps)
+        if _is_picker_model(it):
+            out.append(mid)
+    _model_endpoints.clear()
+    _model_endpoints.update(new_eps)
+    return sorted(set(out))
+
+
+def _preferred_kind(model: str) -> str:
+    """``chat`` or ``responses``. Prefer chat when the catalog lists it."""
+    learned = _learned_kind.get(model)
+    if learned in ("chat", "responses"):
+        return learned
+    eps = _model_endpoints.get(model)
+    if not eps:
+        return "chat"
+    if _has_chat_completions(eps):
+        return "chat"
+    if _has_responses(eps):
+        return "responses"
+    return "chat"
+
+
+def _endpoint_order(model: str) -> tuple[str, str]:
+    first = _preferred_kind(model)
+    second = "chat" if first == "responses" else "responses"
+    return first, second
+
+
+def _learn_kind(model: str, kind: str) -> None:
+    if kind in ("chat", "responses"):
+        _learned_kind[model] = kind
+
+
+def _is_wrong_endpoint_error(text: str) -> bool:
+    low = (text or "").lower()
+    if "unsupported_api_for_model" in low:
+        return True
+    if "not accessible via the /chat/completions" in low:
+        return True
+    if "not accessible via the /responses" in low:
+        return True
+    if "does not support" in low and "/chat/completions" in low:
+        return True
+    if "does not support" in low and "/responses" in low:
+        return True
+    if "use the responses api" in low:
+        return True
+    return False
+
+
+def _build_chat_body(req: base.ChatRequest, model: str) -> dict:
+    tools = tools_to_openai(req.tools)
     body: dict = {
         "model": model,
         "messages": messages_to_openai(req.messages, req.system),
         "stream": True,
     }
-    tools = tools_to_openai(req.tools)
     if tools:
         body["tools"] = tools
     # GPT-5 / o-series reject temperature and want max_completion_tokens.
@@ -481,18 +612,72 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
             body["max_completion_tokens"] = req.max_tokens
         else:
             body["max_tokens"] = req.max_tokens
+    return body
 
+
+def _build_responses_body(req: base.ChatRequest, model: str) -> dict:
+    instructions, input_items = messages_to_responses(req.messages, req.system)
+    tools = tools_to_responses(req.tools)
+    body: dict = {
+        "model": model,
+        "input": input_items,
+        "stream": True,
+        "store": False,
+    }
+    if instructions:
+        body["instructions"] = instructions
+    if tools:
+        body["tools"] = tools
+    if req.temperature is not None and not _is_gpt5_family(model):
+        body["temperature"] = req.temperature
+    if req.max_tokens:
+        body["max_output_tokens"] = req.max_tokens
+    return body
+
+
+async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
+    bearer = await _bearer()
+    model = req.model or DEFAULT_MODEL
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {bearer}",
+        **_editor_headers(agent=bool(req.tools)),
+    }
     timeout = aiohttp.ClientTimeout(total=DEFAULT_TIMEOUT_S)
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.post(
-                f"{_endpoints()['api_base']}/chat/completions",
-                headers=headers, json=body,
-            ) as resp:
-                if resp.status != 200:
-                    raise _http_error(resp.status, await resp.text())
-                async for chunk in parse_sse(resp.content):
-                    yield chunk
+            kinds = _endpoint_order(model)
+            last_err: base.ProviderError | None = None
+            for i, kind in enumerate(kinds):
+                path = "/responses" if kind == "responses" else "/chat/completions"
+                body = (
+                    _build_responses_body(req, model)
+                    if kind == "responses"
+                    else _build_chat_body(req, model)
+                )
+                async with session.post(
+                    f"{_endpoints()['api_base']}{path}",
+                    headers=headers, json=body,
+                ) as resp:
+                    if resp.status != 200:
+                        text = await resp.text()
+                        err = _http_error(resp.status, text)
+                        if i == 0 and _is_wrong_endpoint_error(text):
+                            other = kinds[1]
+                            _learn_kind(model, other)
+                            log.info(
+                                "Copilot %s rejected %s; retrying %s",
+                                model, path, other,
+                            )
+                            last_err = err
+                            continue
+                        raise err
+                    parser = parse_responses_sse if kind == "responses" else parse_sse
+                    async for chunk in parser(resp.content):
+                        yield chunk
+                    return
+            if last_err is not None:
+                raise last_err
     except aiohttp.ClientConnectionError as e:
         raise base.ProviderError(
             "Could not reach api.githubcopilot.com",
@@ -517,7 +702,7 @@ async def list_models() -> list[str]:
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.get(
                 f"{_endpoints()['api_base']}/models",
-                headers={"Authorization": f"Bearer {bearer}", **_EDITOR_HEADERS},
+                headers={"Authorization": f"Bearer {bearer}", **_editor_headers()},
             ) as resp:
                 if resp.status != 200:
                     return []
@@ -527,14 +712,7 @@ async def list_models() -> list[str]:
     items = body.get("data") if isinstance(body, dict) else None
     if not isinstance(items, list):
         return []
-    out = []
-    for it in items:
-        if not isinstance(it, dict) or not it.get("id"):
-            continue
-        if not _supports_chat_completions(it):
-            continue
-        out.append(str(it["id"]))
-    return sorted(set(out))
+    return _ingest_catalog(items)
 
 
 async def validate_key(*, workspace: str | None = None) -> bool:

@@ -1,9 +1,11 @@
 """Effective LLM routing, for honest display in the rail picker.
 
 The rail's model picker shows one headline provider+model (the
-default / picker selection). Everything the user types in the rail runs
-on it. But two subsystems deliberately route elsewhere, and the picker
-should say so — "displayed == what runs".
+default / picker selection). Questions, ``/curate``, and the chief of
+staff run on it. Auto may still assign *other* allowlisted models to
+worker tasks (independence / token efficiency). Two subsystems
+deliberately route elsewhere, and the picker should say so —
+"displayed == what runs" for the headline turn.
 
 **CE curation ladder (2026-07-24 reframe).** The model ladder is a
 CE-curation-only construct with three roles:

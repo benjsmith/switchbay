@@ -3,6 +3,33 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-04 — v0.12.13 — Switch Bay VS 0.3.17
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make restart`. No frontend rebuild. No new VSIX.
+
+### Added
+
+- **Copilot `/responses` for models that refuse chat completions.**
+  Newer GPT/Codex rows that only advertise `/responses` now appear
+  in the picker. Switch Bay posts `/chat/completions` when the
+  catalog lists it, `/responses` otherwise, and retries the other
+  path on a 400 `unsupported_api_for_model` so model switching stays
+  seamless. Tool-less and non-chat rows stay hidden.
+
+### Changed
+
+- **The rail picker is the primary model** for questions, `/curate`,
+  and the chief of staff. Auto may still assign other
+  dashboard-allowlisted models to workers for opinion independence
+  or token efficiency (local backends count as maximally
+  token-efficient).
+- Copilot IDE headers match current VS Code Copilot Chat
+  (`vscode/1.137.0`, `copilot-chat/0.65.0`). Tool turns send
+  `Openai-Intent: conversation-agent` and `X-Initiator: agent`.
+- Cold-cache Copilot suggestions drop `gpt-5-mini`. Live
+  `GET /models` remains authoritative.
+
 ## 2026-09-02 — v0.12.12 — Switch Bay VS 0.3.17
 
 **Migration:** none. **Breaking:** none. Sideload the new VSIX
