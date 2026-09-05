@@ -137,6 +137,13 @@ HARD_DENY_RULES = (
     "Bash(locate /*)",
 )
 
+# When the PreToolUse hook is missing, headless `-p` would otherwise
+# auto-run web_search/web_fetch (bypass is off, but those tools are
+# not in the propose-only deny set). Internal IDs, not prefixes.
+HOOKLESS_DISALLOWED_TOOLS = (
+    "run_terminal_cmd,search_replace,web_search,web_fetch"
+)  # one argv value (internal tool ids)
+
 
 def deny_argv(rules: tuple[str, ...] | list[str] = HARD_DENY_RULES) -> list[str]:
     """`--deny` flag pairs, skipping prefixes this grok CLI rejects."""
@@ -397,26 +404,36 @@ def _strip_legacy_mcp_servers(cfg: Path) -> None:
             log.exception("failed to strip legacy MCP server from %s", cfg)
 
 
-async def _ensure_mcp(workspace: Path) -> None:
+async def _ensure_mcp(
+    workspace: Path, *, allowed_tools: list[str] | None = None,
+) -> str:
     """Register switchbay's MCP server in <workspace>/.grok/config.toml
     (project scope) so grok exposes our tools (create_report, propose_*,
     wiki tools). Idempotent + guarded — only runs `grok mcp add` when the
     config is missing or its command path is stale, so it's a one-time
     cost per workspace. `grok mcp add` merges (never clobbers other
-    project config). Best-effort: a failure just means chat-only."""
+    project config). Best-effort: a failure just means chat-only.
+
+    Package isolation uses a digest-named server so concurrent nodes
+    keep distinct CSWY_ALLOWED_TOOLS.
+    """
     from . import claude_code_settings as ccs
-    spec = ccs.mcp_server_spec(workspace)
+    name = ccs.isolation_server_name(allowed_tools)
+    spec = ccs.mcp_server_spec(workspace, allowed_tools=allowed_tools)
     cfg = workspace / ".grok" / "config.toml"
     if cfg.is_file():
         _strip_legacy_mcp_servers(cfg)
     try:
         if cfg.is_file():
             txt = cfg.read_text(encoding="utf-8")
-            if "[mcp_servers.switchbay]" in txt and spec["command"] in txt:
-                return
+            table = f"[mcp_servers.{name}]"
+            allow = spec["env"].get("CSWY_ALLOWED_TOOLS", "")
+            if table in txt and spec["command"] in txt:
+                if allowed_tools is None or allow in txt:
+                    return name
     except OSError:
         pass
-    argv = [grok_binary() or "grok", "mcp", "add", "switchbay", spec["command"]]
+    argv = [grok_binary() or "grok", "mcp", "add", name, spec["command"]]
     for k, v in spec["env"].items():
         argv += ["-e", f"{k}={v}"]
     argv += ["-s", "project", "--"] + list(spec["args"])
@@ -450,8 +467,7 @@ async def _ensure_mcp(workspace: Path) -> None:
                 log.exception("grok mcp add %s failed", s["name"])
     except Exception:  # noqa: BLE001
         log.exception("failed to enumerate user MCP servers for grok")
-    if cfg.is_file():
-        _strip_legacy_mcp_servers(cfg)
+    return name
 
 
 # Grok's hook timeout is a hard kill, and a killed hook FAILS OPEN.
@@ -605,7 +621,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     workspace = _verify_workspace(req.workspace)
     # Register switchbay's MCP tools for this workspace (idempotent) so
     # grok can call create_report / propose_* / the wiki tools.
-    await _ensure_mcp(workspace)
+    mcp_name = await _ensure_mcp(workspace, allowed_tools=req.allowed_tools)
     prompt = (_content_to_text(req.messages[-1].get("content", ""))
               if req.session_id and req.messages else _flatten_messages(req.messages))
 
@@ -624,7 +640,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
             # mcp__server__tool (those never match; tools then appear
             # "unavailable" and the model falls back to Edit/Write which
             # we deliberately deny).
-            "--allow", "MCPTool(switchbay__*)",
+            "--allow", f"MCPTool({mcp_name}__*)",
             ]
 
     effort = base.coerce_effort(req.reasoning_effort, reasoning_options(req.model))
@@ -677,7 +693,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         #    prefixes (Shell, NotebookEdit, …) abort the spawn — see
         #    DENY_PREFIXES / deny_argv().
         argv.extend([
-            "--disallowed-tools", "run_terminal_cmd,search_replace",
+            "--disallowed-tools", HOOKLESS_DISALLOWED_TOOLS,
             *deny_argv(("Bash(*)", "Edit(*)", "Write(*)")),
         ])
 
@@ -686,6 +702,8 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     # means grok never attempts the call that trips a macOS TCC
     # dialog ("… would like to access data from other apps").
     argv.extend(deny_argv())
+    if req.blocks_native_writes():
+        argv.extend(deny_argv(("Bash(*)", "Edit(*)", "Write(*)")))
     if req.system:
         # `--rules` APPENDS to grok's own system prompt (its
         # --append-system-prompt equivalent); layers switchbay's rules
@@ -701,6 +719,8 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     env = {k: v for k, v in os.environ.items()
            if k not in {"XAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
                         "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}}
+    if req.allowed_tools is not None:
+        env["CSWY_ALLOWED_TOOLS"] = ",".join(req.allowed_tools)
     from .. import cebridge
     env = cebridge.inject_skill_env(env)
 

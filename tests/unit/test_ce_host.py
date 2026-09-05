@@ -119,6 +119,8 @@ def test_dispatch_worker_plugin_does_not_complete(tmp_path: Path, monkeypatch):
     assert out.get("agent") == "NumericReviewer"
     assert "wiki/tables/t.md" in out.get("prompt", "")
     assert "text" not in out
+    assert out.get("launched") is False
+    assert "does not launch" in (out.get("note") or "").lower() or "not launch" in (out.get("note") or "").lower()
 
 
 def test_wave_prime_override_mode(tmp_path: Path, monkeypatch):

@@ -2776,6 +2776,7 @@ register(Tool(
 
 # CE script wrappers (Copilot / HTTP providers have no CE-aware shell).
 from . import ce_tools as _ce_tools  # noqa: E402,F401
+from . import research as _research  # noqa: E402,F401
 from . import workspace_plan as _workspace_plan  # noqa: E402
 from . import orchestration_report as _orchestration_report  # noqa: E402
 _workspace_plan.register_tools()

@@ -32,8 +32,10 @@ pin FOUR constraints, all hardwired here:
      answered, so non-allowlisted tools auto-deny. Effectively
      "allowlist or refuse" without needing plan-mode.
   4. **--disallowed-tools** for truly off-limits surfaces
-     (WebFetch, WebSearch, NotebookEdit, Task, EnterWorktree). These
-     never even reach the prompt path.
+     (NotebookEdit, Task, EnterWorktree, …). WebSearch/WebFetch are
+     *not* in this list: they reach PreToolUse and the rail approval
+     card. They are not on the static allowlist, so print-mode cannot
+     auto-run them.
 
 We also strip ANTHROPIC_API_KEY from the env so the CLI cannot fall
 through to API mode if both auths are configured; the rail agent must
@@ -70,16 +72,14 @@ LABEL = "Claude Code"
 DEFAULT_MODEL = "claude-sonnet-4-6"
 PROBE_TIMEOUT_S = 30.0
 
-# Hardwired-block tools — never reach the allowlist prompt. These are
-# either escape vectors (sub-agents, worktrees, remote triggers) or
-# capabilities switchbay explicitly doesn't want (network fetch,
-# notebooks). Bash / Edit / Write / Read are scoped through the
-# workspace allowlist instead of being blocked outright; see
-# claude_code_settings.py.
-DISALLOWED_TOOLS = ",".join([
+# Hardwired-block tools — never reach the allowlist prompt. Escape
+# vectors (sub-agents, worktrees, remote triggers) and notebooks stay
+# here. WebSearch / WebFetch are intentionally absent: they go through
+# PreToolUse → rail approval (not on the static allowlist, so `-p`
+# cannot auto-run them). Bash / Edit / Write / Read are scoped through
+# the workspace allowlist; see claude_code_settings.py.
+DISALLOWED_TOOL_NAMES = (
     "Task",        # parallel sub-agent — could escape the sandbox
-    "WebFetch",
-    "WebSearch",
     "NotebookEdit",
     "EnterWorktree",
     "ExitWorktree",
@@ -87,7 +87,20 @@ DISALLOWED_TOOLS = ",".join([
     "PushNotification",
     "CronCreate",
     "CronDelete",
-])
+)
+DISALLOWED_TOOLS = ",".join(DISALLOWED_TOOL_NAMES)
+
+_NATIVE_WRITE_TOOLS = ("Edit", "Write", "Bash")
+
+
+def disallowed_tools_for(req: base.ChatRequest) -> str:
+    """Static denylist plus package write-authority (explore/review)."""
+    names = list(DISALLOWED_TOOL_NAMES)
+    if req.blocks_native_writes():
+        for n in _NATIVE_WRITE_TOOLS:
+            if n not in names:
+                names.append(n)
+    return ",".join(names)
 
 PROVIDER = {
     "id": ID,
@@ -241,6 +254,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     )
     mcp_config_file = await asyncio.to_thread(
         claude_code_settings.write_mcp_config, workspace,
+        allowed_tools=req.allowed_tools,
     )
 
     argv = [
@@ -251,7 +265,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
         "--settings", str(settings_file),
         "--mcp-config", str(mcp_config_file),
         "--add-dir", str(workspace),
-        "--disallowed-tools", DISALLOWED_TOOLS,
+        "--disallowed-tools", disallowed_tools_for(req),
     ]
     if req.system:
         # Claude Code already has its own coding-assistant prompt;
@@ -339,10 +353,9 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
                         if text:
                             yield base.TextChunk(text=text)
                     elif btype == "tool_use":
-                        # The model wanted to invoke a CLI-side tool we
-                        # haven't allowlisted. Surface as a notice, no
-                        # execution — defense in depth alongside
-                        # --disallowed-tools.
+                        # CLI-side tool the model asked for. WebSearch /
+                        # WebFetch reach this only after the PreToolUse
+                        # hook (rail card). Surface as a notice.
                         yield base.ToolUseChunk(
                             id=str(block.get("id", "")),
                             name=str(block.get("name", "")),

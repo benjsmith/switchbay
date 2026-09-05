@@ -245,11 +245,7 @@ async def _stream_codex(
         # sandbox. Otherwise stick to workspace-write — same default
         # as before this commit, no behavioural regression for users
         # who never opt in.
-        sandbox = (
-            "danger-full-access"
-            if permissions.is_pre_approved(workspace, "_codex:full-access")
-            else "workspace-write"
-        )
+        sandbox = sandbox_for(req, workspace)
         argv += [
             "--json",
             "--sandbox", sandbox,
@@ -262,7 +258,8 @@ async def _stream_codex(
     # ~/.codex/config.toml, and `-c` lets us add one inline without
     # touching the user's file. `-c` is accepted by both `exec` and
     # `exec resume`, so both paths see the identical tool surface.
-    argv.extend(_mcp_overrides(workspace))
+    argv.extend(_mcp_overrides(workspace, allowed_tools=req.allowed_tools))
+    argv.extend(web_search_overrides(workspace))
     if req.model:
         argv.extend(["--model", req.model])
     argv.append(prompt)
@@ -397,7 +394,30 @@ def _toml_str(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
 
 
-def _mcp_overrides(workspace: Path) -> list[str]:
+def sandbox_for(req: base.ChatRequest, workspace: Path) -> str:
+    """Explore/review packages are read-only; else workspace-write or full."""
+    if req.blocks_native_writes():
+        return "read-only"
+    if permissions.is_pre_approved(workspace, "_codex:full-access"):
+        return "danger-full-access"
+    return "workspace-write"
+
+
+def web_search_overrides(workspace: Path) -> list[str]:
+    """Codex has no PreToolUse hook, so native web_search cannot card.
+
+    Always set ``tools.web_search`` explicitly. A globally disabled
+    default would otherwise stay off when Settings says enabled.
+    The Switch Bay ``research_*`` MCP tools remain the vault-ingest path.
+    """
+    if permissions.is_pre_approved(workspace, permissions.CODEX_WEB_SEARCH_SENTINEL):
+        return ["-c", "tools.web_search=true"]
+    return ["-c", "tools.web_search=false"]
+
+
+def _mcp_overrides(
+    workspace: Path, *, allowed_tools: list[str] | None = None,
+) -> list[str]:
     """Build the `-c mcp_servers.<name>.…` argv flags that register
     the switchbay MCP server with the codex CLI for this spawn.
     Each `-c` value parses as TOML. We emit three overrides — command,
@@ -415,7 +435,9 @@ def _mcp_overrides(workspace: Path) -> list[str]:
         ]
 
     name = claude_code_settings.MCP_SERVER_NAME
-    spec = claude_code_settings.mcp_server_spec(workspace)
+    spec = claude_code_settings.mcp_server_spec(
+        workspace, allowed_tools=allowed_tools,
+    )
     flags = _server_flags(name, spec["command"], spec["args"], spec["env"])
     # User-registered stdio MCP servers (mcpstore). codex TOML mcp_servers
     # is stdio (command/args/env); http servers are skipped here — they

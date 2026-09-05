@@ -274,6 +274,10 @@ def apply_task_context(
         features.graph = True
         if not constrained:
             features.n_subquestions = 1
+    if task_kind in {"projects", "code"}:
+        features.graph = True
+        if not constrained:
+            features.n_subquestions = max(features.n_subquestions, 1)
     return features
 
 

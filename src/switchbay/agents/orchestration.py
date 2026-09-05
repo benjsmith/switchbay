@@ -68,7 +68,7 @@ WRITE_TOOLS = frozenset({
     "ce_wiki_commit", "ce_evolve_guard", "ce_wave_prime",
     "ce_dispatch_worker", "ce_epoch_summary",
     "create_report", "create_slideshow", "save_plot", "save_skill",
-    "author_sketch", "run_command",
+    "author_sketch", "run_command", "ask_thread",
 })
 
 PARENT_ALLOW = frozenset(rail_default.ALLOWED_TOOLS)
@@ -386,6 +386,7 @@ class PlanNode:
     retrieval_query: str = ""
     provider: str | None = None
     model: str | None = None
+    harness: str | None = None
     cost_hint: str = "normal"
 
     def to_dict(self) -> dict[str, Any]:
@@ -420,6 +421,7 @@ class PlanNode:
             retrieval_query=str(raw.get("retrieval_query") or ""),
             provider=str(raw["provider"]) if raw.get("provider") else None,
             model=str(raw["model"]) if raw.get("model") else None,
+            harness=str(raw["harness"]) if raw.get("harness") else None,
             cost_hint=str(raw.get("cost_hint") or raw.get("difficulty") or "normal"),
         )
 
@@ -436,6 +438,7 @@ class OrchestrationPlan:
     features: dict[str, Any] = field(default_factory=dict)
     decision: dict[str, Any] = field(default_factory=dict)
     allow_expand: bool = False
+    extra_system: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -449,6 +452,7 @@ class OrchestrationPlan:
             "features": self.features,
             "decision": self.decision,
             "allow_expand": self.allow_expand,
+            "extra_system": self.extra_system,
         }
 
     def to_json(self) -> str:
@@ -473,6 +477,7 @@ class OrchestrationPlan:
             features=raw.get("features") if isinstance(raw.get("features"), dict) else {},
             decision=raw.get("decision") if isinstance(raw.get("decision"), dict) else {},
             allow_expand=bool(raw.get("allow_expand")),
+            extra_system=str(raw.get("extra_system") or ""),
         )
 
     def node_map(self) -> dict[str, PlanNode]:
@@ -605,7 +610,21 @@ def validate_plan(plan: OrchestrationPlan) -> list[str]:
             errors.append(f"{n.node_id}: bad difficulty")
         if n.output_contract not in OUTPUT_CONTRACTS:
             errors.append(f"{n.node_id}: bad output_contract")
+        from ..kernel.packages import WRITES_NONE, get_package as _gp
+        pkg = _gp(n.role)
         for t in n.tools:
+            if pkg is not None and n.role != "curator":
+                if t not in pkg.tools:
+                    errors.append(
+                        f"{n.node_id}: tool {t!r} not in package {pkg.id}"
+                    )
+                    continue
+                if t in WRITE_TOOLS and pkg.writes == WRITES_NONE:
+                    errors.append(
+                        f"{n.node_id}: write tool {t!r} forbidden on "
+                        f"{pkg.id} (writes={pkg.writes})"
+                    )
+                continue
             if t in WRITE_TOOLS:
                 if n.kind == "execute" and t in EXECUTE_TOOLS:
                     continue
@@ -808,6 +827,87 @@ def plan_fixed_fanout(
     )
 
 
+def _plan_projects(
+    objective: str,
+    decision: policy.PolicyDecision,
+    oid: str,
+    hires: list[dict[str, Any]],
+    *,
+    strategy: str = "projects",
+) -> OrchestrationPlan:
+    """Family desk: complementary packages. Review depends on the writer."""
+    from ..kernel.packages import WRITES_NONE, WRITES_REVIEW, get_package
+
+    nodes: list[PlanNode] = []
+    recon: list[str] = []
+    writers: list[str] = []
+    for h in hires:
+        pid = str(h.get("package_id") or h.get("package") or "").strip()
+        pkg = get_package(pid)
+        if pkg is None:
+            continue
+        nid = f"pkg-{pkg.id}"
+        writes = pkg.writes
+        kind = "investigate" if writes == WRITES_NONE else "synthesize"
+        if writes == WRITES_NONE:
+            deps: list[str] = []
+        elif writes == WRITES_REVIEW:
+            deps = list(writers or recon)
+        else:
+            deps = list(recon)
+        nodes.append(PlanNode(
+            node_id=nid,
+            kind=kind,
+            objective=objective,
+            dependencies=deps,
+            role=pkg.id,
+            difficulty="hard" if writes != WRITES_NONE else "normal",
+            ladder_hint="hard" if writes != WRITES_NONE else "normal",
+            tools=list(pkg.tools),
+            graph_access="read",
+            independence="high" if writes == WRITES_REVIEW else "medium",
+            output_contract="synthesis" if writes != WRITES_NONE else "findings",
+            provider=str(h["provider"]) if h.get("provider") else None,
+            model=str(h["model"]) if h.get("model") else None,
+            harness=str(h["harness"]) if h.get("harness") else None,
+        ))
+        if writes == WRITES_NONE:
+            recon.append(nid)
+        elif writes != WRITES_REVIEW:
+            writers.append(nid)
+    if not nodes:
+        p = plan_single(objective, orchestration_id=oid, preference=decision.preference)
+        p.decision = {**decision.to_dict(), "task_kind": strategy}
+        p.features = decision.features
+        return p
+    return OrchestrationPlan(
+        orchestration_id=oid,
+        strategy=strategy,
+        nodes=nodes,
+        objective=objective,
+        preference=decision.preference,
+        features=decision.features,
+        decision={**decision.to_dict(), "task_kind": strategy},
+    )
+
+
+def _critic_pair(
+    *,
+    workspace: Path | None,
+    fallback: tuple[str | None, str | None],
+    available: list[tuple[str, str]] | list[tuple[str, str | None]] | None = None,
+    denied: list[str] | None = None,
+) -> tuple[str | None, str | None]:
+    """Strongest allowed model for a verify node. Slider does not apply."""
+    from ..kernel.hire import pick_critic_model
+    pair = pick_critic_model(
+        workspace=workspace, available=available, denied=denied,
+    )
+    if pair:
+        return pair[0], pair[1]
+    return fallback
+
+
 def plan_from_decision(
     objective: str,
     decision: policy.PolicyDecision,
@@ -817,9 +917,23 @@ def plan_from_decision(
     allocations: list[tuple[str, str | None]] | None = None,
     method_hints: list[str] | None = None,
     task_kind: str | None = None,
+    curator_provider: str | None = None,
+    curator_model: str | None = None,
+    curator_harness: str | None = None,
+    project_hires: list[dict[str, Any]] | None = None,
+    workspace: Path | None = None,
+    available: list[tuple[str, str | None]] | None = None,
+    denied: list[str] | None = None,
 ) -> OrchestrationPlan:
     oid = orchestration_id or f"run-{uuid.uuid4().hex[:8]}"
+    if task_kind in {"projects", "code"}:
+        return _plan_projects(
+            objective, decision, oid, project_hires or [],
+            strategy=str(task_kind),
+        )
     if task_kind == "curation":
+        # Parent run is the rail-picker chief. This node is the curator
+        # package, on a kernel-chosen worker model / harness.
         node = PlanNode(
             node_id="curate",
             kind="synthesize",
@@ -831,6 +945,9 @@ def plan_from_decision(
             graph_access="read",
             independence="low",
             output_contract="synthesis",
+            provider=curator_provider,
+            model=curator_model,
+            harness=curator_harness,
         )
         return OrchestrationPlan(
             orchestration_id=oid,
@@ -959,7 +1076,11 @@ def plan_from_decision(
     extra = [p for p in extra if p not in used_pairs] or extra
 
     if decision.include_verify:
-        v_pid, v_model = (extra[0] if extra else (None, None))
+        fallback = extra[0] if extra else (None, None)
+        v_pid, v_model = _critic_pair(
+            workspace=workspace, fallback=fallback,
+            available=available, denied=denied,
+        )
         nodes.append(PlanNode(
             node_id="verify",
             kind="verify",
@@ -1934,30 +2055,41 @@ def _system_for(
     preference: float | None = None,
     workspace: Path | None = None,
     local: bool = False,
+    extra_system: str | None = None,
 ) -> str:
     if (node.method_hint or "").startswith("ce:"):
         from .ce_workers import WORKER_SYSTEM
-        return WORKER_SYSTEM.format(role=node.role or "worker")
-    if node.kind == "verify":
-        return VERIFY_SYSTEM
-    if node.kind == "synthesize":
-        if node.role == "curator":
-            from .ce_workers import curator_worker_instructions
-            extra = curator_worker_instructions(
-                preference=preference if preference is not None else policy.PREF_BALANCED,
-                local=local,
-                workspace=workspace,
-            )
-            return CURATE_SYNTH_SYSTEM + extra
-        return SYNTH_SYSTEM
-    if node.kind == "reduce":
-        return REDUCE_SYSTEM
-    if node.kind == "execute":
-        return EXECUTE_SYSTEM
-    extra = INVESTIGATE_SYSTEM
-    if node.method_hint:
-        extra += f"\n\nMethod for this worker: {node.method_hint}"
-    return extra
+        body = WORKER_SYSTEM.format(role=node.role or "worker")
+    else:
+        from ..kernel.packages import get_package as _get_pkg
+        pkg = _get_pkg(node.role)
+        if pkg is not None and node.role != "curator":
+            body = pkg.system
+        elif node.kind == "verify":
+            body = VERIFY_SYSTEM
+        elif node.kind == "synthesize":
+            if node.role == "curator":
+                from .ce_workers import curator_worker_instructions
+                extra = curator_worker_instructions(
+                    preference=preference if preference is not None else policy.PREF_BALANCED,
+                    local=local,
+                    workspace=workspace,
+                )
+                body = CURATE_SYNTH_SYSTEM + extra
+            else:
+                body = SYNTH_SYSTEM
+        elif node.kind == "reduce":
+            body = REDUCE_SYSTEM
+        elif node.kind == "execute":
+            body = EXECUTE_SYSTEM
+        else:
+            body = INVESTIGATE_SYSTEM
+            if node.method_hint:
+                body += f"\n\nMethod for this worker: {node.method_hint}"
+    note = (extra_system or "").strip()
+    if note:
+        return f"{body}\n\n{note}" if body else note
+    return body
 
 
 def _user_prompt(
@@ -2008,12 +2140,13 @@ def _user_prompt(
                 extra = "\n\n" + "\n\n".join(desk)
         if interrupt:
             extra = extra + "\n\n" + interrupt
+        pred = node.dependencies or None
         if node.role == "curator":
             return (
                 f"Curation objective: {node.objective}\n\n"
                 "Independent workspace findings:\n"
                 + blackboard.compact_for_prompt(
-                    role="synthesize", max_chars=10_000,
+                    role="synthesize", from_nodes=pred, max_chars=10_000,
                 )
                 + extra
                 + "\n\nRun one bounded curator wave with the supplied CE "
@@ -2024,7 +2157,9 @@ def _user_prompt(
             f"Original request: {node.objective}\n\n"
             "Verified findings (classified rows; minority/unsupported "
             "claims preserved; no worker transcripts):\n"
-            + blackboard.compact_for_prompt(role="synthesize", max_chars=10_000)
+            + blackboard.compact_for_prompt(
+                role="synthesize", from_nodes=pred, max_chars=10_000,
+            )
             + extra
             + "\n\nFollow the desk approach if present. Do not emit "
             "OBJECTIVE_MET: yes until curation has actually ingested "
@@ -2044,10 +2179,106 @@ def _user_prompt(
         parts.extend(_desk_context(workspace))
         if interrupt:
             parts.append(interrupt)
+        pred = _predecessor_artifacts(node, blackboard)
+        if pred:
+            parts.append(pred)
         return "\n\n".join(parts)
     if interrupt:
-        return node.objective + "\n\n" + interrupt
-    return node.objective
+        body = node.objective + "\n\n" + interrupt
+    else:
+        body = node.objective
+    pred = _predecessor_artifacts(node, blackboard)
+    if pred:
+        return body + "\n\n" + pred
+    return body
+
+
+def _predecessor_artifacts(node: PlanNode, blackboard: evidence.Blackboard) -> str:
+    if not node.dependencies:
+        return ""
+    blob = blackboard.compact_for_prompt(
+        from_nodes=node.dependencies, max_chars=6_000,
+    ).strip()
+    if not blob:
+        return ""
+    return "Predecessor artifacts:\n" + blob
+
+
+async def _run_pi_package_node(
+    node: PlanNode,
+    *,
+    provider: Any,
+    model: str | None,
+    workspace: Path,
+    parent_run_id: str,
+    thread_id: str,
+    app: Any,
+    worker_index: int | None,
+    attempt: int = 1,
+    blackboard: evidence.Blackboard | None = None,
+    plan: OrchestrationPlan | None = None,
+) -> dict[str, Any]:
+    """Curator (or other package) on the Pi harness. Tools run inside Pi."""
+    from ..kernel import NodeRequest, get_package, run_node
+    from ..kernel.packages import CURATOR_ID, package_tool_names
+
+    run_id = _node_run_id(parent_run_id, node.node_id, attempt)
+    pid = getattr(provider, "ID", None) or node.provider or "?"
+    model_s = model or node.model or getattr(provider, "DEFAULT_MODEL", "?")
+    _register_child(
+        app, run_id=run_id, parent_run_id=parent_run_id, thread_id=thread_id,
+        workspace=workspace, provider=str(pid), model=str(model_s),
+        excerpt=node.objective, node=node, worker_index=worker_index,
+    )
+    await _broadcast(app, protocol.run_started(
+        thread_id, run_id, pid, str(model_s), str(workspace),
+    ))
+    pkg_id = CURATOR_ID if node.role == "curator" else (node.role or node.kind)
+    pkg = get_package(pkg_id)
+    extra_sys = (plan.extra_system if plan is not None else "") or ""
+    system = (pkg.system if pkg else "") or _system_for(
+        node, workspace=workspace, extra_system=extra_sys,
+    )
+    if extra_sys and pkg is not None:
+        system = f"{system}\n\n{extra_sys}".strip()
+    bb = blackboard or evidence.Blackboard(parent_run_id)
+    user = _user_prompt(node, bb, workspace=workspace)
+    req = NodeRequest(
+        package_id=pkg_id,
+        system=system,
+        user=user,
+        tools=package_tool_names(pkg_id, node.tools or (pkg.tools if pkg else [])),
+        provider_id=str(pid),
+        model=str(model_s) if model_s != "?" else None,
+        workspace=workspace,
+    )
+    result = await run_node(req, harness="pi")
+    error = result.error
+    output = result.text or ""
+    in_tok = result.input_tokens
+    out_tok = result.output_tokens
+    _retire_child(app, run_id, parent_run_id, error)
+    if not error:
+        await _broadcast(app, protocol.run_finished(
+            thread_id, run_id, in_tok or None, out_tok or None, "end_turn",
+        ))
+    return {
+        "node_id": node.node_id,
+        "kind": node.kind,
+        "run_id": run_id,
+        "ok": error is None,
+        "error": error,
+        "output": output,
+        "provider": pid,
+        "model": model_s,
+        "input_tokens": in_tok or None,
+        "output_tokens": out_tok or None,
+        "task": {"description": node.objective, "difficulty": node.difficulty},
+        "worker_index": worker_index if worker_index is not None else 0,
+        "wiki_pages_landed": 0,
+        "reports_landed": 0,
+        "harness": "pi",
+    }
 
 
 async def _run_agent_node(
@@ -2069,6 +2300,20 @@ async def _run_agent_node(
     graph_running: set[str] | None = None,
 ) -> dict[str, Any]:
     """One DAG node as an ordinary child Run. Optional scoped tools."""
+    if (node.harness or "") == "pi":
+        return await _run_pi_package_node(
+            node,
+            provider=provider,
+            model=model,
+            workspace=workspace,
+            parent_run_id=parent_run_id,
+            thread_id=thread_id,
+            app=app,
+            worker_index=worker_index,
+            attempt=attempt,
+            blackboard=blackboard,
+            plan=plan,
+        )
     run_id = _node_run_id(parent_run_id, node.node_id, attempt)
     pid = getattr(provider, "ID", "?")
     model_s = model or getattr(provider, "DEFAULT_MODEL", "?")
@@ -2091,16 +2336,22 @@ async def _run_agent_node(
     allow_exec = node.kind == "execute"
     allow_synth = node.kind == "synthesize"
     allow_curate = allow_synth and node.role == "curator"
-    tool_names = (
-        narrow_tools(
-            node.tools,
-            allow_execute=allow_exec,
-            allow_synth=allow_synth,
-            allow_curate=allow_curate,
+    from ..kernel.packages import get_package as _pkg_for_tools
+    _hired = _pkg_for_tools(node.role)
+    if _hired is not None and node.role != "curator":
+        requested = list(node.tools or _hired.tools)
+        tool_names = [t for t in requested if t in _hired.tools]
+    else:
+        tool_names = (
+            narrow_tools(
+                node.tools,
+                allow_execute=allow_exec,
+                allow_synth=allow_synth,
+                allow_curate=allow_curate,
+            )
+            if node.tools or node.graph_access == "read" or allow_exec or allow_synth
+            else []
         )
-        if node.tools or node.graph_access == "read" or allow_exec or allow_synth
-        else []
-    )
     tool_specs = rail_default.compile_tool_specs(tool_names) if tool_names else None
     snap = load_snapshot(workspace, parent_run_id)
     live = load_node_live(workspace, parent_run_id, node.node_id)
@@ -2189,6 +2440,7 @@ async def _run_agent_node(
                 workspace=workspace,
                 local=policy.provider_category(str(pid)) == "local"
                 or str(pid) in policy.LOCAL_PROVIDER_IDS,
+                extra_system=plan.extra_system if plan is not None else None,
             ),
             tools=tool_specs or None,
             max_tokens=4096,
@@ -2199,6 +2451,8 @@ async def _run_agent_node(
             workspace=str(workspace),
             origin_thread=thread_id,
             session_id=cli_session,
+            allowed_tools=tool_names or None,
+            package_writes=_hired.writes if _hired is not None else None,
         )
         assistant_blocks: list[dict[str, Any]] = []
         current = ""
@@ -2635,9 +2889,12 @@ def _add_expansion_nodes(
     while vid in existing:
         vid = f"verify-x{k}"
         k += 1
-    v_pid, v_model = (
+    fallback = (
         allocs[n_extra] if len(allocs) > n_extra
         else (default_provider, default_model)
+    )
+    v_pid, v_model = _critic_pair(
+        workspace=workspace, fallback=fallback, available=available,
     )
     verify = PlanNode(
         node_id=vid,
@@ -2736,9 +2993,12 @@ def _add_continue_wave(
     while vid in existing:
         vid = f"verify-c{wave}-{k}"
         k += 1
-    v_pid, v_model = (
+    fallback = (
         allocs[n_extra] if len(allocs) > n_extra
         else (default_provider, default_model)
+    )
+    v_pid, v_model = _critic_pair(
+        workspace=workspace, fallback=fallback, available=available,
     )
     new_nodes.append(PlanNode(
         node_id=vid,
@@ -2873,6 +3133,7 @@ def _pick_available_provider(
     default_model: str | None,
     candidates: list[tuple[str, str]],
     exclude: set[str] | frozenset[str] | None = None,
+    preferred_model: str | None = None,
 ) -> tuple[Any, str | None] | None:
     """First cooling-free provider from preferred → default → roster."""
     from . import orchestration_health as health
@@ -2894,7 +3155,7 @@ def _pick_available_provider(
             or policy.provider_category(default_pid or "") == "local"
         )
     )
-    _add(preferred, None)
+    _add(preferred, preferred_model)
     if not default_local:
         _add(default_pid, default_model)
     for pid, model in candidates:
@@ -3471,14 +3732,14 @@ async def execute(
             picked = _pick_available_provider(
                 node.provider, default_provider=default_provider,
                 default_model=default_model, candidates=_pairs(),
-                exclude=tried,
+                exclude=tried, preferred_model=node.model,
             )
             if picked is None:
                 await _try_open_channels()
                 picked = _pick_available_provider(
                     node.provider, default_provider=default_provider,
                     default_model=default_model, candidates=_pairs(),
-                    exclude=tried,
+                    exclude=tried, preferred_model=node.model,
                 )
             if picked is None:
                 break

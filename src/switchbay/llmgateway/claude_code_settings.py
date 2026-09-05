@@ -19,12 +19,14 @@ print mode (`-p`), which is the safety floor.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
 import sys
 import threading
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from .. import ce_toolscope
@@ -155,6 +157,8 @@ def _fs_allow_for_workspace(workspace: Path) -> list[str]:
     ]
 
 # Auxiliary tools we want available without prompting.
+# WebSearch / WebFetch are deliberately NOT here: they must hit the
+# PreToolUse hook and the rail approval card.
 _AUX_ALLOW = [
     "TodoWrite",
     "Skill",
@@ -412,38 +416,60 @@ def _mcp_pythonpath() -> str:
 MCP_SERVER_NAME = _MCP_SERVER_NAME
 
 
-def mcp_server_spec(workspace: Path) -> dict:
+def isolation_server_name(allowed_tools: Sequence[str] | None) -> str:
+    """Grok project toml is shared; unique names keep per-package env."""
+    if not allowed_tools:
+        return MCP_SERVER_NAME
+    names = sorted({str(t).strip() for t in allowed_tools if str(t).strip()})
+    if not names:
+        return MCP_SERVER_NAME
+    digest = hashlib.sha1(",".join(names).encode("utf-8")).hexdigest()[:8]
+    return f"{MCP_SERVER_NAME}_{digest}"
+
+
+def mcp_server_spec(
+    workspace: Path, *, allowed_tools: Sequence[str] | None = None,
+) -> dict:
     """Provider-agnostic spawn descriptor for switchbay's MCP server:
     `{command, args, env}`. Talks JSON-RPC over stdio. PYTHONPATH
     points at switchbay's src so the server can import the tool
     registry without uv-syncing inside a foreign cwd. Consumed by
     claude-code (wrapped in `mcpServers` JSON) and by codex (folded
     into TOML `-c mcp_servers.<name>.…` overrides)."""
+    env = {
+        "CSWY_WORKSPACE": str(workspace.resolve()),
+        "PYTHONPATH": _mcp_pythonpath(),
+        # Surface any keychain backend the parent set so tools
+        # that read secrets (none today, but future-proof) work
+        # without re-prompting.
+        "PATH": os.environ.get("PATH", ""),
+        # ask_thread routes through the daemon's local A2A
+        # endpoint — the MCP subprocess needs to know the port.
+        "CSWY_DAEMON_PORT": os.environ.get("CSWY_DAEMON_PORT", "8765"),
+    }
+    if allowed_tools is not None:
+        env["CSWY_ALLOWED_TOOLS"] = ",".join(
+            str(t).strip() for t in allowed_tools if str(t).strip()
+        )
     return {
         "command": sys.executable,
         "args": ["-m", "switchbay.mcp_server"],
-        "env": {
-            "CSWY_WORKSPACE": str(workspace.resolve()),
-            "PYTHONPATH": _mcp_pythonpath(),
-            # Surface any keychain backend the parent set so tools
-            # that read secrets (none today, but future-proof) work
-            # without re-prompting.
-            "PATH": os.environ.get("PATH", ""),
-            # ask_thread routes through the daemon's local A2A
-            # endpoint — the MCP subprocess needs to know the port.
-            "CSWY_DAEMON_PORT": os.environ.get("CSWY_DAEMON_PORT", "8765"),
-        },
+        "env": env,
     }
 
 
-def build_mcp_config(workspace: Path) -> dict:
+def build_mcp_config(
+    workspace: Path, *, allowed_tools: Sequence[str] | None = None,
+) -> dict:
     """claude-code's `mcpServers` JSON shape: the first-party switchbay
     server plus any user-registered MCP servers (mcpstore). The
     switchbay entry always wins on a name clash (mcpstore rejects the
     reserved `switchbay` name at add time)."""
     from .. import mcpstore
 
-    servers: dict[str, object] = {_MCP_SERVER_NAME: mcp_server_spec(workspace)}
+    servers: dict[str, object] = {
+        _MCP_SERVER_NAME: mcp_server_spec(workspace, allowed_tools=allowed_tools),
+    }
     try:
         for name, spec in mcpstore.as_claude_mcp_servers().items():
             if name != _MCP_SERVER_NAME:
@@ -453,10 +479,24 @@ def build_mcp_config(workspace: Path) -> dict:
     return {"mcpServers": servers}
 
 
-def write_mcp_config(workspace: Path) -> Path:
-    """Write claude-code-mcp.json — pointed at by --mcp-config."""
-    p = mcp_config_path(workspace)
+def write_mcp_config(
+    workspace: Path, *, allowed_tools: Sequence[str] | None = None,
+) -> Path:
+    """Write claude-code-mcp.json — pointed at by --mcp-config.
+
+    Package isolation uses a digest-named file so concurrent family
+    nodes do not clobber each other's CSWY_ALLOWED_TOOLS.
+    """
+    if allowed_tools is not None:
+        digest = isolation_server_name(allowed_tools)
+        p = workspace / ".workbench" / "state" / f"claude-code-mcp-{digest}.json"
+    else:
+        p = mcp_config_path(workspace)
     _write_if_changed(
-        p, json.dumps(build_mcp_config(workspace), indent=2) + "\n",
+        p,
+        json.dumps(
+            build_mcp_config(workspace, allowed_tools=allowed_tools),
+            indent=2,
+        ) + "\n",
     )
     return p

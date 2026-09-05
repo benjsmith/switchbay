@@ -245,3 +245,14 @@ class ChatRequest:
     model that doesn't accept one is an API error. So providers must
     answer "what can THIS model do?" rather than declaring one static
     list, and callers must not invent ids."""
+    allowed_tools: list[str] | None = None
+    """MCP/host tool names this spawn may expose. None = the rail
+    default allowlist. CLI adapters pass this as CSWY_ALLOWED_TOOLS
+    because they ignore ChatRequest.tools."""
+    package_writes: str | None = None
+    """Package write-authority (none|plans|product|comms|review).
+    When none or review, native Edit/Write/Bash are denied and Codex
+    uses a read-only sandbox."""
+
+    def blocks_native_writes(self) -> bool:
+        return (self.package_writes or "") in ("none", "review")

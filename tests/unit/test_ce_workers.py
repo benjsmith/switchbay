@@ -62,6 +62,43 @@ def test_curator_system_prompt_asks_for_fanout(tmp_path: Path):
     assert "ARE the worker" in local
 
 
+def test_extra_system_appends_to_package_and_curator():
+    node = orchestration.PlanNode(
+        node_id="pkg-code-explore", kind="synthesize", objective="map",
+        role="code-explore",
+    )
+    text = orchestration._system_for(node, extra_system="Role lens: sponsor.")
+    assert "Role lens: sponsor." in text
+    curator = orchestration.PlanNode(
+        node_id="curate", kind="synthesize", objective="curate",
+        role="curator",
+    )
+    ctext = orchestration._system_for(
+        curator, extra_system="Wave-prime: tables.",
+    )
+    assert "Wave-prime: tables." in ctext
+
+
+def test_user_prompt_passes_predecessor_artifacts():
+    from switchbay.agents import evidence
+    bb = evidence.Blackboard("orch-1")
+    bb.append_finding(evidence.Finding(
+        claim="repo map",
+        node_id="pkg-code-explore",
+        notes="src/foo.py owns X",
+    ))
+    node = orchestration.PlanNode(
+        node_id="pkg-code-plan",
+        kind="synthesize",
+        objective="plan the change",
+        role="code-plan",
+        dependencies=["pkg-code-explore"],
+    )
+    prompt = orchestration._user_prompt(node, bb)
+    assert "src/foo.py owns X" in prompt
+    assert "repo map" in prompt
+
+
 def test_ce_worker_system_is_not_investigator_json():
     node = orchestration.PlanNode(
         node_id="ce-w0", kind="investigate", objective="brief",

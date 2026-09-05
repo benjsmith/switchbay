@@ -42,6 +42,19 @@ log = logging.getLogger("switchbay.permissions")
 
 
 ALLOW_FILE = "permission-allow.json"
+
+# Native CLI web tools — never on the builtin allow floor. They must
+# hit the rail card (or a remembered Approve+remember). Grok's
+# internal names are web_search / web_fetch; Claude uses WebSearch /
+# WebFetch. Codex has no PreToolUse: see `_codex:web-search`.
+WEB_SEARCH_TOOLS = frozenset({
+    "WebSearch", "WebFetch", "web_search", "web_fetch",
+})
+CODEX_WEB_SEARCH_SENTINEL = "_codex:web-search"
+
+
+def is_web_search_tool(tool: str) -> bool:
+    return str(tool or "") in WEB_SEARCH_TOOLS
 # Generous: a single-user local app shouldn't auto-deny while the user
 # reads the request or works through a backlog of prompts from several
 # concurrent agents. 30 min; the frontend is told when it lapses so the
@@ -173,6 +186,12 @@ def pattern_for(tool: str, tool_input: dict[str, Any]) -> str:
     if tool == "Orchestration":
         action = str(tool_input.get("action") or "").strip() or "unknown"
         return f"Orchestration({action})"
+    if is_web_search_tool(tool):
+        if tool in {"WebFetch", "web_fetch"}:
+            url = str(tool_input.get("url") or tool_input.get("href") or "")[:120]
+            return f"{tool}({url})" if url else f"{tool}(*)"
+        q = str(tool_input.get("query") or tool_input.get("q") or "")[:80]
+        return f"{tool}({q})" if q else f"{tool}(*)"
     # Generic shape — include a short input excerpt so the user can
     # tell two calls apart.
     blob = json.dumps(tool_input, sort_keys=True)[:80]

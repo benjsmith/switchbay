@@ -58,6 +58,20 @@ def set_default_provider(provider: str) -> None:
     save(data)
 
 
+def get_pi_harness() -> bool:
+    """User opt-in for the optional Pi harness. Default on (admin may still deny)."""
+    val = load().get("pi_harness")
+    if val is None:
+        return True
+    return bool(val)
+
+
+def set_pi_harness(enabled: bool) -> None:
+    data = load()
+    data["pi_harness"] = bool(enabled)
+    save(data)
+
+
 def get_model(provider: str) -> str | None:
     """User-chosen model for `provider`, or None to fall back to the
     provider's static default."""

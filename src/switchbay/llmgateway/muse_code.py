@@ -29,12 +29,14 @@ Claude Code and Grok Build mediate novel tool calls through
 Switch Bay's rail approval card (PreToolUse hook). Muse Code's hook
 payload dialect has not been validated against a live binary yet, so
 this spawn relies on Meta's sandbox + `--disable-approval` rather
-than our card. In-workspace writes and ordinary shell resolve by
-Muse's static policy; dangerous shapes still go through Muse's own
-reviewer. Switch Bay MCP is not registered per-workspace yet
-(Muse's MCP block lives in the user settings file and is not
-workspace-scoped). CE scripts still run because the CLI has a real
-shell (`can_execute` is True).
+than our card. Native Muse web search cannot be rail-carded until
+that hook exists; use the Switch Bay ``research_*`` tools instead.
+In-workspace writes and ordinary shell resolve by Muse's static
+policy; dangerous shapes still go through Muse's own reviewer.
+Switch Bay MCP is not registered per-workspace yet (Muse's MCP
+block lives in the user settings file and is not workspace-scoped).
+CE scripts still run because the CLI has a real shell
+(`can_execute` is True).
 """
 
 from __future__ import annotations
@@ -303,8 +305,15 @@ def build_argv(
         "--workspace", str(workspace),
         "--trust-workspace",
         # Headless cannot answer an approval prompt. Sandbox stays on
-        # (we never pass --yolo).
+        # (we never pass --yolo). Native web search cannot be
+        # rail-carded yet — refuse it rather than auto-running under
+        # --disable-approval. Switch Bay research_* tools are the
+        # vault-ingest path.
         "--disable-approval",
+        "--disable-web-tools",
+        # Shell sandbox stays on; restricted network is the documented
+        # way to refuse native web when we cannot card PreToolUse.
+        "--sandbox-network", "restricted",
     ]
     if model:
         argv.extend(["--model", model])

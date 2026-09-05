@@ -229,17 +229,19 @@ def dispatch_worker(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         "agent": agent,
         "prompt": filled,
         "source": str(path),
+        "launched": False,
     }
     if plugin:
         result["note"] = (
             f"VS Code: spawn Copilot custom agent {agent} with this prompt. "
-            "MCP has no model; do not expect this tool to complete the worker."
+            "MCP has no model; this tool does not launch a worker."
         )
         return result
     result["note"] = (
-        "PWA host completes this as a fresh-context child run when a "
-        "non-local provider is keyed. Local hosts run the prompt "
-        "in-session (CE single-session fallback)."
+        "Filled prompt only — this tool does not spawn a child. "
+        "On the rail, the host intercepts ce_dispatch_worker and may "
+        "launch a fresh-context child. Pi has no launch bridge; use the "
+        "prompt in-session or skip."
     )
     return result
 

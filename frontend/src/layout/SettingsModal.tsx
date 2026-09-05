@@ -54,6 +54,15 @@ type PolicyView = {
   features: Record<string, boolean>;
 };
 
+type PiHarnessView = {
+  admin_allowed: boolean;
+  user_enabled: boolean;
+  installed: boolean;
+  binary: string | null;
+  used: boolean;
+  permitted: boolean;
+};
+
 type ProvidersBody = {
   providers: ProviderInfo[];
   keychain_available: boolean;
@@ -61,6 +70,7 @@ type ProvidersBody = {
   default_provider: string;
   default_model?: string;
   policy?: PolicyView;
+  harness?: { pi?: PiHarnessView };
 };
 
 type Props = {
@@ -408,6 +418,13 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
               </React.Fragment>
             );
           })}
+          <PiHarnessPanel
+            open={open}
+            info={info}
+            busy={busy}
+            setBusy={setBusy}
+            onRefresh={refresh}
+          />
           <LocalModelPanel
             open={open}
             onClose={onClose}
@@ -1435,6 +1452,89 @@ function UserTabsPanel({ open }: { open: boolean }) {
 }
 
 
+// ── Optional Pi harness ────────────────────────────────────────────
+
+
+function PiHarnessPanel({
+  open,
+  info,
+  busy,
+  setBusy,
+  onRefresh,
+}: {
+  open: boolean;
+  info: ProvidersBody | null;
+  busy: string | null;
+  setBusy: (v: string | null) => void;
+  onRefresh: () => Promise<void>;
+}) {
+  if (!open || !info) return null;
+  const pi = info.harness?.pi;
+  const adminOn = pi ? pi.admin_allowed : feat(info, "pi_harness");
+  const userOn = pi?.user_enabled ?? true;
+  const installed = pi?.installed ?? false;
+  const used = pi?.used ?? false;
+
+  const toggle = async () => {
+    if (!adminOn) return;
+    setBusy("pi-harness");
+    try {
+      const r = await fetch("/api/llm/harness", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pi: !userOn }),
+      });
+      if (r.ok) await onRefresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <section className="sy-settings-section">
+      <h3 className="sy-settings-h">Optional harness · Pi</h3>
+      <p className="sy-settings-blurb">
+        Pi is an optional PATH binary for hired specialists (same job as
+        the rail or Grok Build). It is not the chat rail, not a picker
+        row, and not a lockfile pin. Install the <code>pi</code> CLI
+        yourself, or set <code>SWITCHBAY_PI</code>.
+      </p>
+      <div className="sy-settings-perm-row">
+        <span>
+          <strong>Status:</strong>{" "}
+          {!adminOn
+            ? "disabled by organisation"
+            : used
+              ? `in use${pi?.binary ? ` (${pi.binary})` : ""}`
+              : installed
+                ? (userOn ? "installed, waiting for a hire" : "installed, opted out")
+                : "not installed"}
+        </span>
+        <span className="sy-spacer" />
+        <button
+          type="button"
+          className={
+            "sy-settings-pill"
+            + (adminOn && userOn ? " sy-settings-pill--on" : "")
+          }
+          onClick={() => void toggle()}
+          disabled={!adminOn || busy !== null}
+          title={
+            !adminOn
+              ? "Admin policy pi_harness is off"
+              : userOn
+                ? "Stop using Pi even if it is on PATH"
+                : "Use Pi for hired packages when it is on PATH"
+          }
+        >
+          {!adminOn ? "locked" : userOn ? "on" : "off"}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+
 // ── Permissions panel ──────────────────────────────────────────────
 
 
@@ -1481,6 +1581,7 @@ function PermissionsPanel({ open }: { open: boolean }) {
   // directly via the allow-list endpoint; codex's next spawn picks
   // up the change without further plumbing.
   const codexFullAccess = (patterns ?? []).includes("_codex:full-access");
+  const codexWebSearch = (patterns ?? []).includes("_codex:web-search");
   const toggleCodexFullAccess = async () => {
     if (codexFullAccess) {
       await revoke("_codex:full-access");
@@ -1496,6 +1597,34 @@ function PermissionsPanel({ open }: { open: boolean }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pattern: "_codex:full-access" }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({} as Record<string, string>));
+        setStatus({ ok: false, msg: body.error || `HTTP ${r.status}` });
+        return;
+      }
+      await reload();
+    } catch (e) {
+      setStatus({ ok: false, msg: (e as Error).message });
+    }
+  };
+
+  const toggleCodexWebSearch = async () => {
+    if (codexWebSearch) {
+      await revoke("_codex:web-search");
+      return;
+    }
+    if (!window.confirm(
+      "Allow Codex native web_search in this workspace? Codex has no "
+      + "per-call rail card, so this is an all-or-nothing grant. Prefer "
+      + "Switch Bay research tools (search → vault → ingest) when you "
+      + "want sources in the wiki.",
+    )) return;
+    try {
+      const r = await fetch("/api/permission/allow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pattern: "_codex:web-search" }),
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({} as Record<string, string>));
@@ -1574,11 +1703,34 @@ function PermissionsPanel({ open }: { open: boolean }) {
           {codexFullAccess ? "elevated" : "default"}
         </button>
       </div>
+      <div className="sy-settings-perm-row sy-settings-perm-row--codex">
+        <span>
+          <strong>Codex web search:</strong>{" "}
+          {codexWebSearch ? "native web_search enabled" : "disabled (default)"}
+        </span>
+        <span className="sy-spacer" />
+        <button
+          type="button"
+          className={
+            "sy-settings-pill"
+            + (codexWebSearch ? " sy-settings-pill--on" : "")
+          }
+          onClick={() => void toggleCodexWebSearch()}
+          title={
+            codexWebSearch
+              ? "Disable Codex native web_search — next spawn forces web_search=disabled"
+              : "Allow Codex native web_search for this workspace (no per-call card)"
+          }
+        >
+          {codexWebSearch ? "on" : "off"}
+        </button>
+      </div>
       <p className="sy-settings-blurb" style={{ marginTop: 8 }}>
         Codex has no per-tool hook surface like Claude Code, so
-        per-command gating isn't possible. The toggle above is the
-        only sandbox knob — flip it when a prompt needs network or
-        out-of-workspace writes.
+        per-command gating isn't possible. Sandbox and web search are
+        spawn-time knobs. Claude Code and Grok Build web search still
+        card on the rail. Prefer Switch Bay research tools when the
+        result should land in the vault.
       </p>
     </section>
   );

@@ -75,6 +75,12 @@ def test_user_command_infers_tools(tmp_path: Path):
     assert "author_sketch" in hinted.tools
 
 
+def test_steer_and_code_slash_hints_match():
+    assert command_palettes.hint_shipped("/steer") == "steer"
+    assert command_palettes.hint_shipped("/code") == "code"
+    assert command_palettes.hint_shipped("please /steer the plan") == "steer"
+
+
 def test_unknown_command_without_tools_is_none():
     rung = _rung()
     assert command_palettes.resolve(None, "view", rung=rung) is None

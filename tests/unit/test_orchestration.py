@@ -679,6 +679,31 @@ def test_execute_node_allowed_for_lab_protocol():
     assert "run_command" not in synth.tools
 
 
+def test_verify_node_seats_strongest_allowed(tmp_path: Path):
+    d = policy.PolicyDecision(
+        strategy="investigate_verify_synthesize", n_investigators=1,
+        include_verify=True, include_reduce=False, include_execute=False,
+        independence="high", allow_expand=False, ladder_bias="balanced",
+        reason="t", arm_id="ivs:1", preference=0.0,
+        features={"preference": 0.0},
+    )
+    plan = orchestration.plan_from_decision(
+        "check this", d, [{"description": "a"}],
+        orchestration_id="run-c",
+        allocations=[("mlx", "qwen"), ("gemini", "flash")],
+        workspace=tmp_path,
+        available=[
+            ("anthropic", "claude-opus-4"),
+            ("mlx", "qwen"),
+            ("gemini", "flash"),
+        ],
+        denied=[],
+    )
+    verify = next(n for n in plan.nodes if n.kind == "verify")
+    assert verify.provider == "anthropic"
+    assert verify.model == "claude-opus-4"
+
+
 def test_synth_prompt_requires_inspectable_wiki_trail():
     assert "kind=evidence" in orchestration.SYNTH_SYSTEM
     assert "kind=analysis" in orchestration.SYNTH_SYSTEM

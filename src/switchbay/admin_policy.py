@@ -64,6 +64,8 @@ FEATURE_DEFAULTS_OPEN: dict[str, bool] = {
     "interactive_terminal": True,
     "agent_run_command": True,
     "demo_workspace": True,
+    # Optional PATH harness for hired packages. Not a lockfile pin.
+    "pi_harness": True,
 }
 
 FEATURE_DEFAULTS_ENTERPRISE: dict[str, bool] = {
@@ -86,6 +88,8 @@ FEATURE_DEFAULTS_ENTERPRISE: dict[str, bool] = {
     "interactive_terminal": True,
     "agent_run_command": True,
     "demo_workspace": False,
+    # Pi is a bash-capable Node CLI. Off until IT opts in.
+    "pi_harness": False,
 }
 
 _cache: dict[str, Any] | None = None

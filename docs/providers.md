@@ -61,22 +61,32 @@ items below land.
 **What works on paper**
 
 - Picker + Settings row (`muse-code`), default `muse-spark-1.2`
-- Headless spawn: `muse exec --json --workspace … --trust-workspace --disable-approval`
+- Headless spawn: `muse exec --json --workspace … --trust-workspace --disable-approval --disable-web-tools --sandbox-network restricted`
 - Reasoning rungs `minimal` … `xhigh` (never `none` / `ultra`)
 - Session continue via `--session-id`
 - `can_execute` is true — Meta's OS sandbox stays on (we never pass `--yolo`)
 - Optional `META_API_KEY` / Settings Meta key forwarded if the env is empty
 
-**What is not first-class yet** (needs a live `muse` install)
+**What is not first-class yet** (needs a live `muse` install — none on this machine, no Meta account to ping)
 
 1. **JSONL stream contract** — `parse_exec_event` accepts sibling-CLI shapes. The real `muse exec --json` schema has not been captured.
-2. **Rail approval cards** — spawn uses `--disable-approval`, so Meta's dangerous-set never stops for us either. Hook stdin/stdout dialect (`PreToolUse` / `PermissionRequest`) is unpublished in a form we can trust. Grok taught us empty hook output can mean *allow*.
+2. **Rail approval cards** — spawn uses `--disable-approval` (headless cannot answer prompts). Official docs now name `PreToolUse` / `PermissionRequest` project hooks (`.muse/hooks.json`) but do not specify the stdin JSON dialect. Grok taught us empty hook output can mean *allow* — do not wire a guessed dialect.
 3. **Per-workspace MCP** — Muse's documented MCP block is user-global (`~/.config/muse/settings.json`). Baking `CSWY_WORKSPACE` there would pin every project to one folder. No Switch Bay `propose_*` / wiki tools until there is a workspace-scoped injection.
 4. **CE toolscope + hard denies** at the hook (home-wide `find` / `mdfind`).
 5. **System/rules append** — no documented `--rules` flag; we prepend to the user prompt.
-6. **`validate_key` / live model list** — binary presence only; `muse models` is best-effort.
+6. **`validate_key` / live model list** — binary presence only; `muse models` is best-effort. Native web is refused (`--disable-web-tools` + `--sandbox-network restricted`) until a card exists.
 
 Until then: use Claude Code or Grok Build when you need per-call rail cards or Switch Bay MCP tools. Prefer `muse-spark-1.2` over `muse-spark-1.2-contributor` unless you opt into Meta training on prompts.
+
+## Harnesses (not picker rows)
+
+A **harness** is how one hired node runs. It is not a model vendor in the picker.
+
+| Harness | Status | Notes |
+|---|---|---|
+| **Rail / llmgateway** | First-class | Existing ChatRequest + tool loop. |
+| **Grok Build** | First-class | Same specialist job via the grok-build provider (MCP `ce_*`). |
+| **Pi** (`pi --mode rpc`) | Preview | Optional PATH binary (or `SWITCHBAY_PI` / repo `.local/pi-spike`). Not a lockfile pin. Settings → Optional harness · Pi; admin flag `pi_harness` (on in open, off in enterprise). Pack at `src/switchbay/kernel/pi_packages/curator/` calls `python -m switchbay.ce_cli`. `--no-builtin-tools --no-skills`. Model calls use HTTP providers (xAI API), **not** `grok -p`. Never nest Pi under Grok Build. Never the rail. |
 
 ## How to read the picker
 

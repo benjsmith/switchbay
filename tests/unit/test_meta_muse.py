@@ -46,6 +46,8 @@ def test_muse_argv_headless_flags(tmp_path: Path):
     assert "--workspace" in argv and str(tmp_path) in argv
     assert "--trust-workspace" in argv
     assert "--disable-approval" in argv
+    assert "--disable-web-tools" in argv
+    assert argv[argv.index("--sandbox-network") + 1] == "restricted"
     assert "--yolo" not in argv
     assert argv[argv.index("--model") + 1] == "muse-spark-1.2"
     assert argv[argv.index("--reasoning-effort") + 1] == "high"

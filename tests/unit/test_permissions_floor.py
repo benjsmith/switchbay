@@ -74,6 +74,13 @@ def test_outside_workspace_write_still_cards(tmp_path):
     assert not permissions.is_pre_approved(tmp_path, pat, tool="Write", tool_input=ti)
 
 
+def test_web_search_keeps_the_card(tmp_path):
+    pat = permissions.pattern_for("WebSearch", {"query": "qwen"})
+    assert not permissions.is_pre_approved(
+        tmp_path, pat, tool="WebSearch", tool_input={"query": "qwen"},
+    )
+
+
 def test_orchestration_pattern_is_action_scoped(tmp_path):
     start = permissions.pattern_for(
         "Orchestration",

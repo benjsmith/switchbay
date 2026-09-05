@@ -1389,6 +1389,16 @@ async def _tick_schedules(app: web.Application) -> None:
         except Exception:  # noqa: BLE001
             continue
         for item in items:
+            from . import kernel as sbk
+            if sbk.window_ended(item):
+                did = str(item.get("desk_id") or sbk.DESK_AUTO)
+                try:
+                    sbk.quiet(ws, did)
+                    if "curate" in str(item.get("title") or "").lower() or \
+                       "curate" in str(item.get("prompt") or "").lower():
+                        sbk.quiet(ws, sbk.DESK_CURATE)
+                except Exception:  # noqa: BLE001
+                    log.exception("desk quiet on schedule window failed")
             if not schedules.is_due(item):
                 continue
             asyncio.create_task(_fire_schedule(app, ws, item))
@@ -3548,7 +3558,9 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
     action = str(body.get("action") or "curate").strip().lower()
     args = str(body.get("args") or "").strip()
     if action in ("curate", "curator") and args.lower() in ("stop", "cancel", "halt"):
-        n = _cancel_ce_runs(request.app, "curate")
+        n = _cancel_ce_runs(
+            request.app, "curate", workspace=request.app["workspace"],
+        )
         return web.json_response({"ok": True, "cancelled": n, "action": "stop"})
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
@@ -5344,6 +5356,15 @@ async def handle_run_cancel(request: web.Request) -> web.Response:
     parent_id = rec.get("parent_run_id")
     if parent_id and runs.get(parent_id):
         runs[parent_id]["user_cancel"] = True
+    ws_raw = rec.get("workspace")
+    if ws_raw:
+        from . import kernel as sbk
+        try:
+            sbk.dismiss_run(Path(ws_raw), run_id)
+            if parent_id:
+                sbk.dismiss_run(Path(ws_raw), str(parent_id))
+        except Exception:  # noqa: BLE001
+            log.exception("desk dismiss on cancel failed")
     task = rec.get("task")
     if task is not None:
         try:
@@ -5360,14 +5381,27 @@ async def handle_run_cancel(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
-def _cancel_ce_runs(app: web.Application, action: str = "curate") -> int:
-    """Cancel running CE-action background jobs (``/curate stop``)."""
+def _cancel_ce_runs(
+    app: web.Application, action: str = "curate",
+    *, workspace: Path | None = None,
+) -> int:
+    """Cancel background jobs for one desk/command in one workspace.
+
+    Matches ``command`` or an excerpt prefix ``[action ·``, never a
+    substring like ``code`` inside ``Codex`` or an unrelated chat.
+    """
     runs: dict[str, dict[str, Any]] = app.get("runs") or {}
     needle = action.lower()
+    want_ws = str(workspace.resolve()) if workspace is not None else None
     cancelled = 0
     for rec in list(runs.values()):
-        excerpt = str(rec.get("input_excerpt") or "").lower()
-        if needle not in excerpt:
+        if want_ws:
+            rec_ws = str(rec.get("workspace") or "")
+            if rec_ws and rec_ws != want_ws:
+                continue
+        cmd = str(rec.get("command") or "").lower()
+        excerpt = str(rec.get("input_excerpt") or "")
+        if cmd != needle and not excerpt.lower().startswith(f"[{needle} ·"):
             continue
         task = rec.get("task")
         if task is None or task.done():
@@ -5387,7 +5421,15 @@ async def handle_runs_stop_all(request: web.Request) -> web.Response:
     work too' choice. The daemon itself stays up. Idempotent."""
     runs: dict[str, dict[str, Any]] = request.app.get("runs") or {}
     cancelled = 0
+    from . import kernel as sbk
     for rec in list(runs.values()):
+        ws_raw = rec.get("workspace")
+        rid = str(rec.get("run_id") or "")
+        if ws_raw and rid:
+            try:
+                sbk.dismiss_run(Path(ws_raw), rid)
+            except Exception:  # noqa: BLE001
+                log.exception("desk dismiss on stop-all failed")
         task = rec.get("task")
         if task is not None and not task.done():
             try:
@@ -5774,6 +5816,11 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
     except Exception:  # noqa: BLE001
         log.exception("routing_status.compute failed")
         routing = None
+    from .kernel.harness_pi import pi_binary
+    from .kernel.harness import pi_harness_permitted
+    pi_bin = pi_binary()
+    admin_pi = admin_policy.feature_enabled("pi_harness")
+    user_pi = llm_config.get_pi_harness()
     return web.json_response({
         "providers": providers,
         "keychain_available": secrets.available(),
@@ -5782,6 +5829,43 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
         "default_model": default_model,
         "routing": routing,
         "policy": admin_policy.public_view(),
+        "harness": {
+            "pi": {
+                "admin_allowed": admin_pi,
+                "user_enabled": user_pi,
+                "installed": pi_bin is not None,
+                "binary": pi_bin,
+                "used": bool(admin_pi and user_pi and pi_bin),
+                "permitted": pi_harness_permitted(),
+            },
+        },
+    })
+
+
+async def handle_llm_harness(request: web.Request) -> web.Response:
+    """User toggle for the optional Pi harness. Admin policy can still deny."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    if "pi" not in body:
+        return web.json_response({"error": "expected {pi: bool}"}, status=400)
+    if not admin_policy.feature_enabled("pi_harness"):
+        return web.json_response(
+            {"error": admin_policy.feature_error("pi_harness")},
+            status=403,
+        )
+    llm_config.set_pi_harness(bool(body.get("pi")))
+    from .kernel.harness_pi import pi_binary
+    from .kernel.harness import pi_harness_permitted
+    return web.json_response({
+        "ok": True,
+        "pi": {
+            "admin_allowed": True,
+            "user_enabled": llm_config.get_pi_harness(),
+            "installed": pi_binary() is not None,
+            "used": pi_harness_permitted() and pi_binary() is not None,
+        },
     })
 
 
@@ -9149,6 +9233,32 @@ async def _chat_notice(
     await _broadcast(app, msg)
 
 
+def _finish_desk(
+    workspace: Path,
+    task_kind: str | None,
+    run_id: str | None,
+    *,
+    cancelled: bool,
+) -> None:
+    """Quiet this run's desk, or dismiss on Stop. Ignore overlapping seats."""
+    from . import kernel as sbk
+    kind = str(task_kind or "")
+    desk_id = {
+        "curation": sbk.DESK_CURATE,
+        "projects": sbk.DESK_PROJECTS,
+        "code": sbk.DESK_CODE,
+    }.get(kind)
+    if not desk_id:
+        return
+    try:
+        if cancelled:
+            sbk.dismiss(workspace, desk_id)
+        else:
+            sbk.quiet(workspace, desk_id, run_id=run_id)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _dispatch_auto(
     app: web.Application, ws: web.WebSocketResponse | None, text: str,
     *, preference: float | None = None,
@@ -9162,6 +9272,7 @@ async def _dispatch_auto(
     task_kind: str | None = None,
     constrained: bool = False,
     lock_provider: bool = False,
+    family_staff: bool = False,
 ) -> str | None:
     """Default chat path: Auto orchestration.
 
@@ -9213,13 +9324,14 @@ async def _dispatch_auto(
     ce_provider_wave = (
         task_kind == "curation" and not constrained and not local_pid
     )
+    projects_desk_wave = task_kind in {"projects", "code"}
     plain_single = (
         decision.strategy == "single"
         and not decision.include_verify
         and not decision.include_execute
         and decision.n_investigators <= 1
     )
-    if plain_single and not ce_provider_wave:
+    if plain_single and not ce_provider_wave and not projects_desk_wave:
         await _chat_notice(
             app, ws,
             f"Auto: single run — {decision.reason}.",
@@ -9390,14 +9502,99 @@ async def _dispatch_auto(
         hints = orchestration_policy.method_hints_for(
             len(tasks_list), decision.independence, features,
         )
+        curator_provider = curator_model = curator_harness = None
+        project_hires: list[dict] | None = None
+        if str(task_kind or "") == "curation":
+            from . import kernel as sbk
+            from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
+            hire = sbk.decide_hire(
+                sbk.HireRequest(
+                    package_id=sbk.CURATOR_ID,
+                    justification="curate desk",
+                    needed_tools=list(sbk.get_package(sbk.CURATOR_ID).tools
+                                      if sbk.get_package(sbk.CURATOR_ID) else []),
+                    kind="specialist",
+                    desk_prior=True,
+                ),
+                preference=pref,
+                chief=(pid, model),
+                org=[],
+                workspace=workspace,
+                chief_tools=list(_CHIEF_TOOLS),
+                pi_available=sbk.pi_available(),
+            )
+            if hire.accepted:
+                curator_provider = hire.provider
+                curator_model = hire.model
+                curator_harness = hire.harness
+            sbk.seat(
+                workspace, sbk.DESK_CURATE,
+                chief_provider=pid,
+                chief_model=model,
+                thread_id=thread_id,
+                run_id=parent_run_id,
+                org=[{
+                    "package": sbk.CURATOR_ID,
+                    "provider": curator_provider or pid,
+                    "model": curator_model or model,
+                    "harness": curator_harness or "rail",
+                    "reports_to": "chief",
+                }],
+            )
+        elif str(task_kind or "") in {"projects", "code"}:
+            from . import kernel as sbk
+            from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
+            from .kernel.packages import CODING_FAMILY, PROJECTS_DESK_NOTE, PROJECTS_FAMILY
+            note = PROJECTS_DESK_NOTE if task_kind == "projects" else (
+                "Code desk: hire explore / plan / edit / review as distinct "
+                "write-authorities. Do not hire a 'frontend' persona."
+            )
+            extra_system = "\n\n".join(
+                p for p in (extra_system or "", note) if p
+            ) or None
+            family = PROJECTS_FAMILY if task_kind == "projects" else CODING_FAMILY
+            desk_id = sbk.DESK_PROJECTS if task_kind == "projects" else sbk.DESK_CODE
+            decisions = sbk.pick_family_hires(
+                text,
+                preference=pref,
+                chief=(pid, model),
+                workspace=workspace,
+                chief_tools=list(_CHIEF_TOOLS),
+                pi_available=sbk.pi_available(),
+                desk_prior=True,
+                family=family,
+                staff_desk=family_staff,
+            )
+            project_hires = [d.to_dict() for d in decisions]
+            sbk.seat(
+                workspace, desk_id,
+                chief_provider=pid,
+                chief_model=model,
+                thread_id=thread_id,
+                run_id=parent_run_id,
+                org=[{
+                    "package": d.package_id,
+                    "provider": d.provider or pid,
+                    "model": d.model or model,
+                    "harness": d.harness or "rail",
+                    "reports_to": "chief",
+                } for d in decisions],
+            )
         plan = orchestration.plan_from_decision(
             text, decision, tasks_list,
             orchestration_id=parent_run_id,
             allocations=allocations,
             method_hints=hints,
             task_kind=task_kind,
+            curator_provider=curator_provider,
+            curator_model=curator_model,
+            curator_harness=curator_harness,
+            project_hires=project_hires,
+            workspace=workspace,
         )
         plan.features = features.to_dict()
+        if extra_system:
+            plan.extra_system = extra_system
         if parent_run_id in runs:
             runs[parent_run_id]["planner_provider"] = planner_meta.get("provider")
             runs[parent_run_id]["planner_model"] = planner_meta.get("model")
@@ -9411,6 +9608,9 @@ async def _dispatch_auto(
             app=app, workspace=workspace, thread_id=thread_id,
             parent_run_id=parent_run_id, default_provider=provider,
             default_model=model, ws=ws,
+        )
+        _finish_desk(
+            workspace, task_kind, parent_run_id, cancelled=result.cancelled,
         )
         merged = result.output
         if not merged:
@@ -9439,14 +9639,17 @@ async def _dispatch_auto(
             "end_turn",
         ))
     except asyncio.CancelledError:
+        _finish_desk(workspace, task_kind, parent_run_id, cancelled=True)
         await _broadcast(app, protocol.run_error(
             parent_run_id, "cancelled", "orchestration cancelled", thread_id,
         ))
         raise
     except llmgateway.ProviderError as e:
+        _finish_desk(workspace, task_kind, parent_run_id, cancelled=False)
         await _broadcast(app, protocol.run_error(parent_run_id, e.code, str(e), thread_id))
     except Exception as e:  # noqa: BLE001
         log.exception("auto orchestration crashed; falling back to single run")
+        _finish_desk(workspace, task_kind, parent_run_id, cancelled=False)
         await _broadcast(app, protocol.run_error(
             parent_run_id, "server", str(e), thread_id,
         ))
@@ -14486,6 +14689,100 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                 _handle_project_slash(request.app, ws, sargs),
                             )
                             continue
+                        if sname.lower() in ("steer", "steering"):
+                            # Projects/portfolio desk. Not /project
+                            # (thread binding) and not /portfolio (Library).
+                            if sargs.strip().lower() in ("stop", "cancel", "halt"):
+                                from . import kernel as sbk
+                                try:
+                                    sbk.dismiss(
+                                        request.app["workspace"],
+                                        sbk.DESK_PROJECTS,
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
+                                n = _cancel_ce_runs(
+                                    request.app, "steer",
+                                    workspace=request.app["workspace"],
+                                )
+                                await ws.send_json(protocol.notice(
+                                    f"Stopped {n} steer-desk run"
+                                    + ("" if n == 1 else "s")
+                                    + ".",
+                                    kind="slash",
+                                ))
+                                continue
+                            staff = not sargs.strip()
+                            prompt = sargs.strip() or (
+                                "Staff the steer desk: ground from evidence, "
+                                "keep the plan of record, send only due "
+                                "messages, check drift. Do not invent status."
+                            )
+                            await ws.send_json(protocol.notice(
+                                "/steer running in the background. "
+                                "Stop with /steer stop.",
+                                kind="chat",
+                            ))
+                            t = asyncio.create_task(_dispatch_auto(
+                                request.app, None, prompt,
+                                preference=pref,
+                                input_excerpt=(
+                                    f"[steer · background] {sargs}"
+                                ).strip(),
+                                command="steer",
+                                task_kind="projects",
+                                family_staff=staff,
+                            ))
+                            t.add_done_callback(
+                                _make_dispatch_error_surface(request.app, None),
+                            )
+                            continue
+                        if sname.lower() in ("code", "coding"):
+                            if sargs.strip().lower() in ("stop", "cancel", "halt"):
+                                from . import kernel as sbk
+                                try:
+                                    sbk.dismiss(
+                                        request.app["workspace"],
+                                        sbk.DESK_CODE,
+                                    )
+                                except Exception:  # noqa: BLE001
+                                    pass
+                                n = _cancel_ce_runs(
+                                    request.app, "code",
+                                    workspace=request.app["workspace"],
+                                )
+                                await ws.send_json(protocol.notice(
+                                    f"Stopped {n} code-desk run"
+                                    + ("" if n == 1 else "s")
+                                    + ".",
+                                    kind="slash",
+                                ))
+                                continue
+                            staff = not sargs.strip()
+                            prompt = sargs.strip() or (
+                                "Staff the code desk: map the repo, plan the "
+                                "change, implement, and review. No product "
+                                "writes from explore or review."
+                            )
+                            await ws.send_json(protocol.notice(
+                                "/code running in the background. "
+                                "Stop with /code stop.",
+                                kind="chat",
+                            ))
+                            t = asyncio.create_task(_dispatch_auto(
+                                request.app, None, prompt,
+                                preference=pref,
+                                input_excerpt=(
+                                    f"[code · background] {sargs}"
+                                ).strip(),
+                                command="code",
+                                task_kind="code",
+                                family_staff=staff,
+                            ))
+                            t.add_done_callback(
+                                _make_dispatch_error_surface(request.app, None),
+                            )
+                            continue
                         if sname.lower() in ("effort", "reasoning", "think"):
                             # Reasoning effort for the current model.
                             # Handled here rather than forwarded: a
@@ -14813,7 +15110,18 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                         if sname.lower() in ("curate", "curator") and (
                             sargs.strip().lower() in ("stop", "cancel", "halt")
                         ):
-                            n = _cancel_ce_runs(request.app, "curate")
+                            from . import kernel as sbk
+                            try:
+                                sbk.dismiss(
+                                    request.app["workspace"],
+                                    sbk.DESK_CURATE,
+                                )
+                            except Exception:  # noqa: BLE001
+                                pass
+                            n = _cancel_ce_runs(
+                                request.app, "curate",
+                                workspace=request.app["workspace"],
+                            )
                             await ws.send_json(protocol.notice(
                                 f"Stopped {n} curation run"
                                 + ("" if n == 1 else "s")
@@ -15462,6 +15770,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_delete("/api/llm/key", handle_llm_delete_key)
     app.router.add_post("/api/llm/test", handle_llm_test)
     app.router.add_post("/api/llm/default", handle_llm_set_default)
+    app.router.add_post("/api/llm/harness", handle_llm_harness)
     app.router.add_get("/api/micro-edits/status", handle_micro_edits_status)
     app.router.add_post("/api/micro-edits/feedback", handle_micro_edits_feedback)
     app.router.add_post("/api/llm/reset", handle_llm_reset)
