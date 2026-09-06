@@ -103,8 +103,24 @@ def test_create_slideshow_accepts_json_string_slides(tmp_path: Path) -> None:
     out = tools.REGISTRY["create_slideshow"].handler(tmp_path, {
         "title": "JSON slides",
         "slides": json.dumps([
-            {"layout": "title", "heading": "Hello"},
-            {"layout": "bullets", "heading": "Points", "bullets": "one\ntwo"},
+            {
+                "layout": "title",
+                "heading": "Hello",
+                "lede": "A one-sentence thesis for the deck.",
+            },
+            {
+                "layout": "cards",
+                "heading": "Acts",
+                "cards": [
+                    {"title": "One", "body": "First claim"},
+                    {"title": "Two", "body": "Second claim"},
+                ],
+            },
+            {
+                "layout": "close",
+                "heading": "Takeaway",
+                "lede": "Remember the thesis.",
+            },
         ]),
     })
     assert out["ok"]
@@ -112,4 +128,5 @@ def test_create_slideshow_accepts_json_string_slides(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert "Hello" in html
-    assert "one" in html
+    assert "one-sentence thesis" in html
+    assert "First claim" in html

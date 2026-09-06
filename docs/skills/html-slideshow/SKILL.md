@@ -132,8 +132,18 @@ slideshow_html.write_slideshow(
 ## Quality bar
 
 - **Palette committed** — intro-grade dark chrome with accent.
-- **Every slide has a visual role** — title / media / cards / split / bullets.
-- **Typed hierarchy** — eyebrow, large heading, dim lede, panel bullets.
+- **Every slide has a visual role** — title / quote / stats / chart / compare /
+  timeline / table / media / cards / split / bullets / close.
+- **Spoken English** — use the paper's sentences (`quote` / `quote_from`) and
+  big numbers (`stats`, `chart`). Forbidden: "vault-backed", "working set",
+  "Act 1", Topics/Spine wikilink dumps.
+- **No blank slides** — a title slide without heading+lede, or a split/media
+  slide without a figure, is refused. `create_slideshow` drops empty shells.
+- **Tell a story** — title is a concrete problem; middle slides argue it
+  with quotes and numbers; close is the takeaway of the *science*, not a
+  punch-list of missing PDFs, ingest TODOs, or "what the deck still needs".
+  `create_slideshow` drops those slides.
+- **At least one table, quote, chart, or figure**.
 - **Media as siblings** — relative `src` next to `index.html` (no base64).
 - **Provider-agnostic** — LLMs supply content only; CSS/layout always from `slideshow_html`.
 
@@ -141,17 +151,23 @@ slideshow_html.write_slideshow(
 
 | layout | Use |
 |--------|-----|
-| `title` | Opening / closing |
+| `title` | Opening (heading + thesis lede) |
+| `quote` | Paper sentence (`quote` or `quote_from`) |
+| `stats` | 2–4 giant numbers |
+| `chart` | Bar chart from `{label, value, unit}` — one unit per chart |
+| `compare` | Before / after |
+| `timeline` | Dated steps |
 | `media` | Full-bleed video or figure |
-| `split` | Media + bullets |
+| `split` | Media + bullets (requires a figure) |
 | `cards` | 2–4 concept cards |
+| `table` | `wiki_table` or `columns`/`rows` |
 | `bullets` | Dense list (still in panels) |
-| `close` | Summary |
+| `close` | Takeaway in prose |
 
 ## Open in product
 
 - `/slideshows` · `/slideshow <slug>` · `/slideshow from-md <path.md>`
-- Click `[[slideshow:…]]` in editor preview
+- Click `[[slideshow:slug]]` in the rail, Zen chat, or editor preview
 - File browser → `slideshows/<slug>/index.html`
 
 ## Wiki link after build

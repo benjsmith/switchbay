@@ -77,7 +77,7 @@ SHIPPED: dict[str, tuple[str, ...] | None] = {
         "create_report",
         "wiki_neighbors",
     ),
-    "steer": _WIKI_READ + (
+    "work": _WIKI_READ + (
         "read_workspace_plan",
         "update_work_plan",
         "append_workspace_log",
@@ -110,7 +110,9 @@ ALIASES: dict[str, str] = {
     "make_slides": "deck",
     "slides": "deck",
     "slideshow-author": "deck",
-    "steering": "steer",
+    "steering": "work",
+    "steer": "work",
+    "working": "work",
     "coding": "code",
 }
 
@@ -122,7 +124,7 @@ DESCRIPTIONS: dict[str, str] = {
     "plot": "Vega-Lite plots (Plot-from-table, or a user command)",
     "lint": "CE lint, naming, small page edits",
     "report": "Rich HTML report (dropped on small local rungs)",
-    "steer": "Steer desk — project + portfolio (not /project)",
+    "work": "Work desk — projects + portfolio (not /project)",
     "code": "Code desk — explore / plan / edit / review",
 }
 
@@ -135,7 +137,7 @@ _HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
     (re.compile(r"\b(create_report|html report)\b", re.I), "report"),
     (re.compile(r"\b(vault/raw|local_ingest|ce_ingest)\b", re.I), "ingest"),
     (re.compile(r"\b(curate|curator)\b", re.I), "curate"),
-    (re.compile(r"(/steer\b|\bexec(utive)? deck\b|\bwork-plan\b|\borg systems\b)", re.I), "steer"),
+    (re.compile(r"(/work\b|/steer\b|\bexec(utive)? deck\b|\bwork-plan\b|\borg systems\b)", re.I), "work"),
     (re.compile(r"(/code\b|\brefactor\b|\bcode review\b|\bimplement the\b)", re.I), "code"),
 )
 

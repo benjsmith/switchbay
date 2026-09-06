@@ -263,13 +263,17 @@ completed, source-diverse, verifier-supported work, wiki/report artifacts
 that landed, and desk pages retrieved again later; it does not use Reviews
 clicks. Reviews stays an undo backlog. Buckets already split research /
 finance / code / science; Settings' **Reset learned policy** clears only the
-focused vault's bandit statistics, not its desk artifacts. Roles stay
-computational kinds (investigate / verify /
-synthesize / execute), not a user-built standing org. Recurring Auto
-prompts live in the **Schedules** tab (per workspace; the daemon
-fires due items even when that vault is not focused). A desk may
-keep `.orchestrator/APPROACH.md` as the overnight problem-solving
-sequence.
+focused vault's bandit statistics, not its desk artifacts. Package
+roles stay computational kinds (investigate / verify / synthesize /
+execute), not job titles. **Standing desks** (Curate, Work, Code, Deck,
+Auto) reuse a chief and org across waves: working while a run is live,
+quiet after Stop or a finished wave, dismissed only when you drop the
+row. `/curate`, `/work`, and `/code` always seat; authoring an HTML
+slideshow reuses one Deck desk; a wiki question (`what do we know
+about X`) does not seat. Recurring Auto prompts live in the
+**Schedules** tab (per workspace; the daemon fires due items even when
+that vault is not focused). A desk may keep `.orchestrator/APPROACH.md`
+as the overnight problem-solving sequence.
 
 ```
   Auto policy
@@ -359,6 +363,7 @@ group chat.
 | Concept | What it is |
 |---|---|
 | **Ordinary Run** | One agent execution inside a Thread. Auto's usual choice. |
+| **Standing desk** | Reused chief + org for Curate / Work / Code / Deck / Auto. Working, quiet, or dismissed. Listed on the Agents dashboard. |
 | **Fan-out** | Explicit fixed parallelism (compatibility / advanced N). |
 | **Auto orchestration** | Default adaptive sparse computation from task, evidence, resources, and the user's cost/performance preference. |
 | **Evidence blackboard** | Transient orchestration-local claims + provenance. Not the wiki. |

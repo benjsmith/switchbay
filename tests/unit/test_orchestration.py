@@ -302,6 +302,60 @@ def test_parse_findings_json_and_prose_fallback():
     assert "paragraph" in prose[0].claim
 
 
+def test_investigator_findings_hide_from_rail():
+    inv = _node(node_id="inv-0", kind="investigate", objective="look")
+    synth = _node(node_id="synth", kind="synthesize", objective="answer")
+    synth.output_contract = "synthesis"
+    curate = _node(node_id="curate", kind="synthesize", objective="curate")
+    curate.output_contract = "synthesis"
+    curate.role = "curator"
+    assert orchestration.node_hides_from_rail(inv) is True
+    assert orchestration.node_hides_from_rail(synth) is False
+    assert orchestration.node_hides_from_rail(curate) is False
+    verify = _node(node_id="verify", kind="verify", objective="check")
+    verify.output_contract = "verification"
+    assert orchestration.node_hides_from_rail(verify) is True
+
+
+def test_sync_with_empty_blackboard_keeps_published_rows():
+    """CE handbacks live on the parent; a later DAG sync must not wipe them."""
+    plan = orchestration.OrchestrationPlan(
+        orchestration_id="run-keep",
+        strategy="ce_curate",
+        objective="curate",
+        nodes=[_node(node_id="curate", kind="synthesize", objective="curate")],
+    )
+    parent: dict = {}
+    orchestration.publish_blackboard_row(parent, orchestration.blackboard_row(
+        row_id="ce-w0-dispatch", node_id="ce-w0", kind="dispatch",
+        claim="worker dispatched in-session",
+    ))
+    orchestration.publish_blackboard_row(parent, orchestration.blackboard_row(
+        row_id="ce-w0-handback", node_id="ce-w0", kind="handback",
+        claim="plain prose from the worker", verdict="candidate",
+    ))
+    assert parent["blackboard_n"] == 2
+    orchestration._sync_parent_graph(
+        parent, plan, completed=set(), failed=set(), running=set(),
+        blackboard=evidence.Blackboard("run-keep"),
+    )
+    ids = [r["id"] for r in parent["blackboard_rows"]]
+    assert ids == ["ce-w0-dispatch", "ce-w0-handback"]
+    assert parent["blackboard_n"] == 2
+    assert parent["candidate_findings_n"] == 1
+
+    bb = evidence.Blackboard("run-keep")
+    bb.append_finding(evidence.Finding(claim="from investigator", node_id="inv-0"))
+    orchestration._sync_parent_graph(
+        parent, plan, completed={"inv-0"}, failed=set(), running=set(),
+        blackboard=bb,
+    )
+    claims = [r["claim"] for r in parent["blackboard_rows"]]
+    assert "worker dispatched in-session" in claims
+    assert "from investigator" in claims
+    assert parent["blackboard_n"] == 3
+
+
 def test_blackboard_append_only_and_persist(tmp_path: Path):
     bb = evidence.Blackboard("run-1")
     bb.append_finding(evidence.Finding(claim="one", node_id="a"))
@@ -596,6 +650,55 @@ async def test_process_stop_checkpoint_is_interrupted_not_cancelled(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_parent_cancel_cancels_outstanding_children(tmp_path: Path, monkeypatch):
+    """Stop on the parent must cancel in-flight siblings, not leave them streaming."""
+    monkeypatch.setattr(
+        "switchbay.modestore.resolve_for_difficulty", lambda *a, **k: (None, None),
+    )
+    started = asyncio.Event()
+    n_started = 0
+    n_cancelled = 0
+
+    class Slow(ScriptedProvider):
+        async def chat_stream(self, req):
+            nonlocal n_started, n_cancelled
+            self.calls.append(req)
+            n_started += 1
+            if n_started >= 2:
+                started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                n_cancelled += 1
+                raise
+            yield base.TextChunk(text="late")
+            yield base.DoneChunk(stop_reason="end_turn")
+
+    plan = orchestration.plan_fixed_fanout(
+        "t", [{"description": "a"}, {"description": "b"}],
+        orchestration_id="run-sib",
+    )
+    app = _app()
+    app["runs"]["run-sib"] = {
+        "run_id": "run-sib", "status": "running", "started_at": 0.0,
+        "provider": "openai", "model": "fake",
+    }
+    task = asyncio.create_task(orchestration.execute(
+        plan, app=app, workspace=tmp_path, thread_id="th",
+        parent_run_id="run-sib", default_provider=Slow(["ok"]),
+        default_model="fake",
+    ))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    task.cancel()
+    try:
+        await asyncio.wait_for(task, timeout=5)
+    except asyncio.CancelledError:
+        pass
+    await asyncio.sleep(0.05)
+    assert n_cancelled == 2
+
+
+@pytest.mark.asyncio
 async def test_cancelled_checkpoint_is_not_resumed(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(
         "switchbay.modestore.resolve_for_difficulty", lambda *a, **k: (None, None),
@@ -644,6 +747,23 @@ def test_list_interrupted_skips_cancelled_and_completed(tmp_path: Path):
     ids = {i["orchestration_id"] for i in items}
     assert "run-live" in ids
     assert "run-dead" not in ids
+
+
+def test_quiet_checkpoint_is_not_auto_resumed_but_is_startable(tmp_path: Path):
+    plan = orchestration.plan_fixed_fanout(
+        "quiet", [{"description": "a"}, {"description": "b"}],
+        orchestration_id="run-quiet",
+    )
+    orchestration.persist_plan(tmp_path, plan)
+    orchestration.persist_checkpoint(
+        tmp_path, "run-quiet",
+        phase="quiet", completed={"w0"}, failed=set(),
+        expansions=0, results={}, elapsed_s=1.0, thread_id="th",
+    )
+    st = orchestration.load_checkpoint(tmp_path, "run-quiet")["status"]
+    assert orchestration.checkpoint_resumable(st) is False
+    items = orchestration.list_interrupted(tmp_path)
+    assert "run-quiet" not in {i["orchestration_id"] for i in items}
 
 
 def test_execute_node_allowed_for_lab_protocol():
@@ -910,9 +1030,82 @@ async def test_execute_records_plan_nodes_and_handoffs(tmp_path: Path, monkeypat
     org_ids = {n.get("node_id") for n in org.get("nodes") or []}
     assert "inv-0" in org_ids
     assert "inv-1" in org_ids
+    assert (parent.get("blackboard_n") or 0) >= 2
+    assert any(
+        "from worker" in str(r.get("claim") or "")
+        for r in (parent.get("blackboard_rows") or [])
+    )
+    assert (org.get("blackboard_n") or 0) >= 2
+    assert org.get("blackboard_rows")
     # Dashboard payload is JSON-serialisable (no asyncio.Task).
     import json as _json
     _json.dumps({k: v for k, v in parent.items() if k != "task"}, default=str)
+
+
+@pytest.mark.asyncio
+async def test_execute_posts_findings_as_each_worker_finishes(tmp_path: Path, monkeypatch):
+    """A slow sibling must not hide the fast worker's board row.
+
+    gather-then-ingest left the dashboard empty for the whole first
+    wave, which is why the blackboard lit up (token halo) with nothing
+    on it for minutes.
+    """
+    monkeypatch.setattr(
+        "switchbay.modestore.resolve_for_difficulty", lambda *a, **k: (None, None),
+    )
+    app = _app()
+    parent = {
+        "run_id": "run-stagger", "status": "running", "started_at": 0.0,
+        "provider": "openai", "model": "fake",
+    }
+    app["runs"]["run-stagger"] = parent
+
+    class Staggered(ScriptedProvider):
+        async def chat_stream(self, req):
+            self.calls.append(req)
+            user = ""
+            if req.messages:
+                c = req.messages[-1].get("content")
+                user = c if isinstance(c, str) else str(c)
+            if "slow slice" in user:
+                await asyncio.sleep(0.25)
+                text = '{"findings":[{"claim":"from slow"}]}'
+            else:
+                text = '{"findings":[{"claim":"from fast"}]}'
+            yield base.TextChunk(text=text)
+            yield base.DoneChunk(stop_reason="end_turn", input_tokens=2, output_tokens=3)
+
+    plan = orchestration.plan_fixed_fanout(
+        "stagger",
+        [{"description": "slow slice"}, {"description": "fast slice"}],
+        orchestration_id="run-stagger",
+    )
+    task = asyncio.create_task(orchestration.execute(
+        plan, app=app, workspace=tmp_path, thread_id="th",
+        parent_run_id="run-stagger", default_provider=Staggered(),
+        default_model="fake",
+    ))
+    saw_fast_alone = False
+    for _ in range(80):
+        await asyncio.sleep(0.025)
+        rows = parent.get("blackboard_rows") or []
+        claims = [str(r.get("claim") or "") for r in rows]
+        if any("from fast" in c for c in claims) and not any("from slow" in c for c in claims):
+            statuses = {
+                n.get("node_id"): n.get("status")
+                for n in (parent.get("plan_nodes") or [])
+            }
+            if "running" in statuses.values():
+                saw_fast_alone = True
+                break
+        if task.done():
+            break
+    result = await task
+    assert result.ok
+    assert saw_fast_alone, parent.get("blackboard_rows")
+    final = [str(r.get("claim") or "") for r in (parent.get("blackboard_rows") or [])]
+    assert any("from fast" in c for c in final)
+    assert any("from slow" in c for c in final)
 
 
 @pytest.mark.asyncio
@@ -1023,6 +1216,51 @@ async def test_worker_persists_tool_events_for_transcript(tmp_path: Path, monkey
     assert "tool_use" in kinds
     assert "tool_result" in kinds
     assert any("search_wiki" in (e.get("summary") or "") for e in evs)
+    assert any(
+        (e.get("payload") or {}).get("hide_from_rail") for e in evs
+    )
+    results = [e for e in evs if e.get("kind") == "tool_result"]
+    assert results
+    assert (results[0].get("payload") or {}).get("ok") is True
+    assert "hits" in str((results[0].get("payload") or {}).get("content") or "")
+
+
+@pytest.mark.asyncio
+async def test_worker_persists_reasoning_for_transcript(tmp_path: Path, monkeypatch):
+    from switchbay import conversations
+
+    monkeypatch.setattr(
+        "switchbay.modestore.resolve_for_difficulty", lambda *a, **k: (None, None),
+    )
+
+    class Thinks(ScriptedProvider):
+        async def chat_stream(self, req):
+            self.calls.append(req)
+            yield base.ReasoningChunk(text="checking wiki spine then vault extracts")
+            yield base.TextChunk(text='{"findings":[{"claim":"done"}]}')
+            yield base.DoneChunk(stop_reason="end_turn", input_tokens=2, output_tokens=3)
+
+    plan = orchestration.OrchestrationPlan(
+        orchestration_id="run-rzn",
+        strategy="parallel_investigate",
+        objective="x",
+        nodes=[
+            _node(node_id="inv-0"),
+            _node(
+                node_id="merge", kind="synthesize", objective="x",
+                dependencies=["inv-0"], output_contract="concat",
+            ),
+        ],
+    )
+    result = await orchestration.execute(
+        plan, app=_app(), workspace=tmp_path, thread_id="th-rzn",
+        parent_run_id="run-rzn", default_provider=Thinks(), default_model="fake",
+    )
+    assert result.ok
+    evs = conversations.list_events(tmp_path, run_id="run-rzn-inv-0", limit=50)
+    rzn = [e for e in evs if e.get("kind") == "reasoning"]
+    assert rzn
+    assert "wiki spine" in str((rzn[0].get("payload") or {}).get("text") or "")
 
 
 def test_live_org_summary_tracks_roster_not_opening_recipe():
@@ -1081,10 +1319,62 @@ def test_standing_org_drops_failed_and_pending(tmp_path: Path):
     assert ids == ["inv-0", "verify"]
     assert "inv-1" not in ids
     assert "synth" not in ids  # never started
+    bb = evidence.Blackboard("run-org")
+    bb.append_finding(evidence.Finding(claim="from inv-0", node_id="inv-0"))
+    view = orchestration.standing_org_view(
+        plan,
+        completed={"inv-0", "verify"},
+        failed={"inv-1"},
+        results={
+            "inv-0": {"provider": "grok_build", "model": "g"},
+            "inv-1": {"provider": "claude_code", "ok": False},
+            "verify": {"provider": "openai"},
+        },
+        running=set(),
+        blackboard=bb,
+        extra_rows=[orchestration.blackboard_row(
+            row_id="ce-w0-dispatch", node_id="ce-w0", kind="dispatch",
+            claim="worker dispatched in-session",
+        )],
+    )
+    row_ids = {r["id"] for r in view["blackboard_rows"]}
+    assert "ce-w0-dispatch" in row_ids
+    assert view["blackboard_n"] >= 2
     orchestrator_fs.save_org(tmp_path, view)
     loaded = orchestrator_fs.load_org(tmp_path)
     assert loaded is not None
     assert [n["node_id"] for n in loaded["nodes"]] == ["inv-0", "verify"]
+    assert loaded.get("blackboard_rows")
+
+
+def test_standing_org_full_keeps_the_whole_dag():
+    plan = orchestration.OrchestrationPlan(
+        orchestration_id="run-org",
+        strategy="investigate_verify_synthesize",
+        objective="research T",
+        nodes=[
+            _node(node_id="inv-0"),
+            _node(node_id="inv-1"),
+            _node(node_id="verify", kind="verify", objective="check",
+                  dependencies=["inv-0", "inv-1"]),
+            _node(node_id="synth", kind="synthesize", objective="research T",
+                  dependencies=["verify"]),
+        ],
+    )
+    view = orchestration.standing_org_view(
+        plan,
+        completed={"inv-0"},
+        failed=set(),
+        results={"inv-0": {"provider": "grok_build", "model": "g"}},
+        running={"inv-1"},
+        full=True,
+    )
+    ids = [n["node_id"] for n in view["nodes"]]
+    assert ids == ["inv-0", "inv-1", "verify", "synth"]
+    by_id = {n["node_id"]: n["status"] for n in view["nodes"]}
+    assert by_id["inv-0"] == "done"
+    assert by_id["inv-1"] == "idle"
+    assert by_id["synth"] == "idle"
 
 
 def test_snapshot_roundtrip_and_prompt(tmp_path: Path):

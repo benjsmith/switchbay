@@ -262,6 +262,15 @@ def _create_slideshow(workspace: Path, payload: dict[str, Any]) -> dict[str, Any
                 ]
         if "cards" in item:
             item["cards"] = _parse_json_value(item["cards"])
+        if "table" in item:
+            item["table"] = _parse_json_value(item["table"])
+        if "rows" in item:
+            item["rows"] = _parse_json_value(item["rows"])
+        if "columns" in item:
+            item["columns"] = _parse_json_value(item["columns"])
+        for key in ("stats", "chart", "steps", "left", "right"):
+            if key in item:
+                item[key] = _parse_json_value(item[key])
         slides.append(item)
     slug = str(payload.get("slug") or "").strip()
     if not slug:
@@ -269,12 +278,28 @@ def _create_slideshow(workspace: Path, payload: dict[str, Any]) -> dict[str, Any
     topics = _parse_json_value(payload.get("wiki_topics"))
     if not isinstance(topics, list):
         topics = []
+    gen_img = False
+    try:
+        from . import admin_policy
+        gen_img = admin_policy.feature_enabled("media_generation")
+    except Exception:  # noqa: BLE001
+        gen_img = False
+    prepared = slideshow_html.prepare_agent_slides(
+        workspace, title, slides, slug=slug, generate_images=gen_img,
+    )
+    if not prepared.get("ok"):
+        return {
+            "ok": False,
+            "error": str(prepared.get("error") or "slideshow refused"),
+            "warnings": prepared.get("warnings") or [],
+        }
     result = slideshow_html.write_slideshow(
         workspace,
         slug,
         title=title,
-        slides=slides,
+        slides=list(prepared.get("slides") or []),
         wiki_topics=[str(topic) for topic in topics],
+        media_files=prepared.get("media_files") or None,
     )
     try:
         from . import orchestrator_fs
@@ -283,6 +308,8 @@ def _create_slideshow(workspace: Path, payload: dict[str, Any]) -> dict[str, Any
         pass
     return {
         **result,
+        "warnings": prepared.get("warnings") or [],
+        "n_slides": len(prepared.get("slides") or []),
         "note": (
             "Slideshow opened in its tab. Your chat reply should be a "
             "short summary; the presentation lives in slideshows/."
@@ -295,11 +322,15 @@ register(Tool(
     description=(
         "Create the product's only presentation format: a self-contained "
         "HTML slideshow under slideshows/<slug>/ and open it in the "
-        "Slideshow tab. Use for every request to make slides, a deck, or "
-        "a presentation. Supply concise, visual slide objects; vary layouts "
-        "among title, media, split, cards, bullets, and close. Local media "
-        "paths must be relative to the slideshow package. Do not create "
-        "Sketch decks or analysis pages with slides arrays."
+        "Slideshow tab. Spoken English, not curator notes. Title is a "
+        "concrete problem plus a thesis lede. Prefer quote / quote_from "
+        "(paper sentences), stats, and chart [{label,value,unit}] over "
+        "paraphrase. wiki_table inlines tbl-* pages. Forbidden: "
+        "'vault-backed', 'working set', 'Act 1', Topics/Spine dumps, "
+        "blank splits, remaining-gaps / still-missing / never-ingested "
+        "punch-lists. Close on the story, not what the wiki still needs. "
+        "Layouts: title, quote, stats, chart, compare, "
+        "timeline, table, cards, bullets, split, media, close."
     ),
     input_schema={
         "type": "object",
@@ -323,7 +354,11 @@ register(Tool(
                         "id": {"type": "string"},
                         "layout": {
                             "type": "string",
-                            "enum": ["title", "media", "split", "cards", "bullets", "close"],
+                            "enum": [
+                                "title", "media", "split", "cards",
+                                "bullets", "table", "quote", "stats",
+                                "chart", "compare", "timeline", "close",
+                            ],
                         },
                         "eyebrow": {"type": "string"},
                         "heading": {"type": "string"},
@@ -341,6 +376,84 @@ register(Tool(
                         },
                         "media": {"type": "string"},
                         "media_kind": {"type": "string", "enum": ["image", "video"]},
+                        "figure": {
+                            "type": "string",
+                            "description": "Wiki figure stem or path to embed.",
+                        },
+                        "image_prompt": {
+                            "type": "string",
+                            "description": "Generate a figure from this prompt.",
+                        },
+                        "wiki_table": {
+                            "type": "string",
+                            "description": "wiki/tables/tbl-* stem; inlined as a table.",
+                        },
+                        "columns": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                        },
+                        "rows": {
+                            "type": "array",
+                            "items": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                            },
+                        },
+                        "table": {"type": "object"},
+                        "quote": {"type": "string"},
+                        "quote_from": {
+                            "type": "string",
+                            "description": "Wiki evidence page; first blockquote is used.",
+                        },
+                        "attr": {"type": "string"},
+                        "stats": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "value": {"type": "string"},
+                                    "label": {"type": "string"},
+                                    "hint": {"type": "string"},
+                                },
+                            },
+                        },
+                        "chart": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "label": {"type": "string"},
+                                    "value": {"type": "number"},
+                                    "unit": {"type": "string"},
+                                },
+                            },
+                        },
+                        "chart_title": {"type": "string"},
+                        "left": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "body": {"type": "string"},
+                            },
+                        },
+                        "right": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "body": {"type": "string"},
+                            },
+                        },
+                        "steps": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "year": {"type": "string"},
+                                    "title": {"type": "string"},
+                                    "body": {"type": "string"},
+                                },
+                            },
+                        },
                         "cite": {"type": "string"},
                         "notes": {"type": "string"},
                     },

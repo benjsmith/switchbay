@@ -75,10 +75,17 @@ def test_user_command_infers_tools(tmp_path: Path):
     assert "author_sketch" in hinted.tools
 
 
-def test_steer_and_code_slash_hints_match():
-    assert command_palettes.hint_shipped("/steer") == "steer"
+def test_work_and_code_slash_hints_match():
+    assert command_palettes.canonical("steer") == "work"
+    assert command_palettes.canonical("steering") == "work"
+    assert command_palettes.hint_shipped("/work") == "work"
+    assert command_palettes.hint_shipped("/steer") == "work"
     assert command_palettes.hint_shipped("/code") == "code"
-    assert command_palettes.hint_shipped("please /steer the plan") == "steer"
+    assert command_palettes.hint_shipped("please /work the plan") == "work"
+    rung = _rung()
+    got = command_palettes.resolve(None, "steer", rung=rung)
+    assert got is not None
+    assert got.name == "work"
 
 
 def test_unknown_command_without_tools_is_none():

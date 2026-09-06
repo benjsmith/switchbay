@@ -73,11 +73,12 @@ Set `copilot.host` to github.com or your GitHub Enterprise URL at bake.
   row to deny it. The effort slider buys fan-out and how readily
   Auto recruits flagship models for those extra tasks.
   Admin-disallowed providers are never used, even if a workspace
-  ladder still names them. `/curate` stays one CE curator — not a
-  Switch Bay investigator DAG — on the picker model, and on Copilot
-  it dispatches CE Phase 2 workers (then a batch reviewer) as child
-  runs. Local `/curate` stays the single-session fallback when the
-  picker is local.
+  ladder still names them. `/curate` always seats the Curate desk
+  (one CE curator package — not an investigator DAG) on the picker
+  model. Copilot, MLX, and llama.cpp drive `ce_*` through Switch Bay's
+  tool loop (no shell). Ollama is listed but `tools: false`, so it
+  cannot curate or author a Deck. A wiki question without `/curate`
+  does not seat a desk.
 - **`features`** — see table below. Missing keys inherit the profile.
 - **`SWITCHBAY_PROFILE=open`** restores mainline behaviour without a file.
 

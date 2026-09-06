@@ -1274,17 +1274,28 @@ async def handle_schedules_stop(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "cancelled": cancelled})
 
 
-def _cancel_run_ids(app: web.Application, ids: set[str]) -> int:
+def _cancel_run_ids(
+    app: web.Application, ids: set[str], *, dismiss: bool = False,
+) -> int:
     runs: dict[str, dict[str, Any]] = app.get("runs") or {}
+    extra = {
+        rid for rid, rec in runs.items()
+        if rec.get("parent_run_id") in ids
+    }
+    ids = set(ids) | extra
     n = 0
     for run_id in ids:
         rec = runs.get(run_id)
         if rec is None:
             continue
         rec["user_cancel"] = True
+        if dismiss:
+            rec["user_dismiss"] = True
         parent_id = rec.get("parent_run_id")
         if parent_id and runs.get(parent_id):
             runs[parent_id]["user_cancel"] = True
+            if dismiss:
+                runs[parent_id]["user_dismiss"] = True
         task = rec.get("task")
         if task is not None:
             try:
@@ -1404,20 +1415,126 @@ async def _tick_schedules(app: web.Application) -> None:
             asyncio.create_task(_fire_schedule(app, ws, item))
 
 
-async def handle_orchestration_org(request: web.Request) -> web.Response:
-    """Standing desk roster for Agent Space when no run is live."""
+def _workspace_from_request(request: web.Request) -> Path:
     raw = (request.query.get("workspace") or "").strip()
     workspace: Path = request.app["workspace"]
     if raw:
         cand = Path(raw)
         if cand.is_dir() and workspaces.is_within_home(cand):
             workspace = cand
+    return workspace
+
+
+async def handle_orchestration_org(request: web.Request) -> web.Response:
+    """Standing desk roster for Agent Space when no run is live."""
+    workspace = _workspace_from_request(request)
     org = await asyncio.to_thread(orchestrator_fs.load_org, workspace)
     return web.json_response({
         "org": org,
         "workspace": str(workspace),
         "workspace_name": workspace.name,
     })
+
+
+async def handle_desks_list(request: web.Request) -> web.Response:
+    """Standing (working + quiet) desks for the dashboard Desks list."""
+    from . import kernel as sbk
+    workspace = _workspace_from_request(request)
+    org = await asyncio.to_thread(orchestrator_fs.load_org, workspace)
+    recs = await asyncio.to_thread(sbk.list_standing, workspace)
+    oid = (org or {}).get("orchestration_id")
+    desks: list[dict[str, Any]] = []
+    for rec in recs:
+        info = sbk.DESK_INFO.get(rec.desk_id) or {}
+        objective = rec.objective
+        if not objective and org and rec.run_id and rec.run_id == oid:
+            objective = org.get("objective")
+        desks.append({
+            **rec.to_dict(),
+            "label": info.get("label") or rec.desk_id,
+            "slash": info.get("slash"),
+            "objective": objective,
+        })
+    return web.json_response({
+        "desks": desks,
+        "workspace": str(workspace),
+        "workspace_name": workspace.name,
+    })
+
+
+async def handle_desks_start(request: web.Request) -> web.Response:
+    spec = _desk_spec_from_id(request.match_info.get("desk_id", ""))
+    if spec is None:
+        return web.json_response({"error": "unknown desk"}, status=404)
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    workspace = _workspace_from_request(request)
+    prompt = str(body.get("prompt") or "").strip()
+    if not prompt:
+        resumed = _maybe_resume_quiet_desk(request.app, spec, workspace)
+        if resumed:
+            slash = spec.get("slash") or spec["desk_id"]
+            return web.json_response({
+                "ok": True, "started": True, "resumed": True, "slash": slash,
+            })
+    if not prompt and spec.get("desk_id") == "auto":
+        org = await asyncio.to_thread(orchestrator_fs.load_org, workspace)
+        prompt = str((org or {}).get("objective") or "")
+    _launch_desk(
+        request.app, spec, prompt=prompt, workspace=workspace,
+    )
+    slash = spec.get("slash") or spec["desk_id"]
+    return web.json_response({"ok": True, "started": True, "slash": slash})
+
+
+async def handle_desks_dismiss(request: web.Request) -> web.Response:
+    spec = _desk_spec_from_id(request.match_info.get("desk_id", ""))
+    if spec is None:
+        return web.json_response({"error": "unknown desk"}, status=404)
+    workspace = _workspace_from_request(request)
+    n = _dismiss_desk(request.app, spec, workspace)
+    return web.json_response({"ok": True, "cancelled": n})
+
+
+async def handle_orchestration_dismiss(request: web.Request) -> web.Response:
+    """Drop an interrupted checkpoint so it leaves the Desks list."""
+    oid = request.match_info.get("orchestration_id", "").strip()
+    if not oid:
+        return web.json_response({"error": "orchestration_id required"}, status=400)
+    fallback: Path = request.app["workspace"]
+    ws = await asyncio.to_thread(
+        orchestration.workspace_for_orchestration, oid, fallback=fallback,
+    )
+    if ws is None:
+        ws = fallback
+    cp = await asyncio.to_thread(orchestration.load_checkpoint, ws, oid)
+    if cp and cp.get("status"):
+        st = cp["status"]
+        await asyncio.to_thread(
+            orchestration.persist_checkpoint,
+            ws, oid,
+            phase="cancelled",
+            completed=st.get("completed") or [],
+            failed=st.get("failed") or [],
+            expansions=int(st.get("expansions") or 0),
+            results=cp.get("results") or {},
+            elapsed_s=float(st.get("elapsed_s") or 0),
+            thread_id=st.get("thread_id"),
+        )
+    org = await asyncio.to_thread(orchestrator_fs.load_org, ws)
+    if org and org.get("orchestration_id") == oid:
+        await asyncio.to_thread(orchestrator_fs.clear_org, ws)
+    _cancel_run_ids(request.app, {oid})
+    from . import kernel as sbk
+    try:
+        sbk.dismiss_run(ws, oid)
+    except Exception:  # noqa: BLE001
+        log.exception("desk dismiss on orchestration dismiss failed")
+    return web.json_response({"ok": True})
 
 
 async def handle_orchestration_policy_reset(request: web.Request) -> web.Response:
@@ -3557,11 +3674,17 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
 
     action = str(body.get("action") or "curate").strip().lower()
     args = str(body.get("args") or "").strip()
-    if action in ("curate", "curator") and args.lower() in ("stop", "cancel", "halt"):
-        n = _cancel_ce_runs(
-            request.app, "curate", workspace=request.app["workspace"],
-        )
-        return web.json_response({"ok": True, "cancelled": n, "action": "stop"})
+    if action in ("curate", "curator"):
+        cverb = _desk_slash_verb(args)
+        cspec = _desk_spec("curate") or {
+            "desk_id": "curate", "cancel": ("curate",), "slash": "curate",
+        }
+        if cverb == "quiet":
+            n = _quiet_desk(request.app, cspec, request.app["workspace"])
+            return web.json_response({"ok": True, "cancelled": n, "action": "stop"})
+        if cverb == "dismiss":
+            n = _dismiss_desk(request.app, cspec, request.app["workspace"])
+            return web.json_response({"ok": True, "cancelled": n, "action": "dismiss"})
     provider = str(body.get("provider") or "").strip()
     model = str(body.get("model") or "").strip()
 
@@ -5360,11 +5483,11 @@ async def handle_run_cancel(request: web.Request) -> web.Response:
     if ws_raw:
         from . import kernel as sbk
         try:
-            sbk.dismiss_run(Path(ws_raw), run_id)
+            sbk.quiet_run(Path(ws_raw), run_id)
             if parent_id:
-                sbk.dismiss_run(Path(ws_raw), str(parent_id))
+                sbk.quiet_run(Path(ws_raw), str(parent_id))
         except Exception:  # noqa: BLE001
-            log.exception("desk dismiss on cancel failed")
+            log.exception("desk quiet on cancel failed")
     task = rec.get("task")
     if task is not None:
         try:
@@ -5382,36 +5505,325 @@ async def handle_run_cancel(request: web.Request) -> web.Response:
 
 
 def _cancel_ce_runs(
-    app: web.Application, action: str = "curate",
-    *, workspace: Path | None = None,
+    app: web.Application, action: str | tuple[str, ...] = "curate",
+    *, workspace: Path | None = None, settle: str = "quiet",
 ) -> int:
     """Cancel background jobs for one desk/command in one workspace.
 
     Matches ``command`` or an excerpt prefix ``[action ·``, never a
     substring like ``code`` inside ``Codex`` or an unrelated chat.
+    Sets ``user_cancel`` so orchestration records cancelled (not
+    interrupted). The desk itself is quieted or dismissed by the
+    caller — Stop does not tear the chief down.
     """
+    needles = (
+        {action.lower()}
+        if isinstance(action, str)
+        else {a.lower() for a in action}
+    )
     runs: dict[str, dict[str, Any]] = app.get("runs") or {}
-    needle = action.lower()
     want_ws = str(workspace.resolve()) if workspace is not None else None
-    cancelled = 0
+    matched: set[str] = set()
     for rec in list(runs.values()):
         if want_ws:
             rec_ws = str(rec.get("workspace") or "")
-            if rec_ws and rec_ws != want_ws:
-                continue
+            if rec_ws:
+                try:
+                    rec_ws = str(Path(rec_ws).resolve())
+                except OSError:
+                    pass
+                if rec_ws != want_ws:
+                    continue
         cmd = str(rec.get("command") or "").lower()
-        excerpt = str(rec.get("input_excerpt") or "")
-        if cmd != needle and not excerpt.lower().startswith(f"[{needle} ·"):
+        excerpt = str(rec.get("input_excerpt") or "").lower()
+        if cmd not in needles and not any(
+            excerpt.startswith(f"[{n} ·") for n in needles
+        ):
             continue
-        task = rec.get("task")
-        if task is None or task.done():
+        rid = str(rec.get("run_id") or "")
+        if rid:
+            matched.add(rid)
+        parent = rec.get("parent_run_id")
+        if parent:
+            matched.add(str(parent))
+    if not matched:
+        return 0
+    for rec in list(runs.values()):
+        rid = str(rec.get("run_id") or "")
+        parent = str(rec.get("parent_run_id") or "")
+        if rid in matched or parent in matched:
+            if rid:
+                matched.add(rid)
+            if parent:
+                matched.add(parent)
+    if workspace is not None:
+        if settle == "cancelled":
+            _mark_orchestrations_cancelled(workspace, matched)
+        else:
+            _mark_orchestrations_quiet(workspace, matched)
+    return _cancel_run_ids(app, matched, dismiss=(settle == "cancelled"))
+
+
+def _mark_orchestrations_cancelled(workspace: Path, ids: set[str]) -> None:
+    """Write cancelled checkpoints immediately so Stop cannot auto-resume."""
+    from .agents import orchestration as orch
+    for oid in ids:
+        if not oid:
             continue
         try:
-            task.cancel()
-            cancelled += 1
+            cp = orch.load_checkpoint(workspace, oid)
         except Exception:  # noqa: BLE001
-            pass
-    return cancelled
+            continue
+        if not cp or not isinstance(cp.get("status"), dict):
+            continue
+        st = cp["status"]
+        if str(st.get("phase") or "") in ("completed", "cancelled"):
+            continue
+        try:
+            orch.persist_checkpoint(
+                workspace, oid,
+                phase="cancelled",
+                completed=st.get("completed") or [],
+                failed=st.get("failed") or [],
+                expansions=int(st.get("expansions") or 0),
+                results=cp.get("results") or {},
+                elapsed_s=float(st.get("elapsed_s") or 0),
+                thread_id=st.get("thread_id"),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("cancel checkpoint %s failed", oid)
+
+
+def _mark_orchestrations_quiet(workspace: Path, ids: set[str]) -> None:
+    """Freeze a DAG on Stop so boot does not auto-resume, but Start can."""
+    from .agents import orchestration as orch
+    for oid in ids:
+        if not oid:
+            continue
+        try:
+            cp = orch.load_checkpoint(workspace, oid)
+        except Exception:  # noqa: BLE001
+            continue
+        if not cp or not isinstance(cp.get("status"), dict):
+            continue
+        st = cp["status"]
+        if str(st.get("phase") or "") in ("completed", "cancelled"):
+            continue
+        try:
+            orch.persist_checkpoint(
+                workspace, oid,
+                phase="quiet",
+                completed=st.get("completed") or [],
+                failed=st.get("failed") or [],
+                expansions=int(st.get("expansions") or 0),
+                results=cp.get("results") or {},
+                elapsed_s=float(st.get("elapsed_s") or 0),
+                thread_id=st.get("thread_id"),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("quiet checkpoint %s failed", oid)
+
+
+_WORK_STAFF = (
+    "Staff the work desk: ground from evidence, keep the plan of "
+    "record, send only due messages, check drift. Do not invent status."
+)
+_CODE_STAFF = (
+    "Staff the code desk: map the repo, plan the change, implement, "
+    "and review. No product writes from explore or review."
+)
+_DECK_STAFF = (
+    "Build an HTML slideshow from this wiki. Use create_slideshow. "
+    "Spoken English; cite wiki and vault. Do not invent numbers."
+)
+
+
+def _desk_spec(sname: str) -> dict[str, Any] | None:
+    """Slash name → work/code desk spec. None if not a desk slash."""
+    n = (sname or "").strip().lower()
+    if n in ("work", "working", "steer", "steering"):
+        return {
+            "desk_id": "projects",
+            "command": "work",
+            "cancel": ("work", "steer"),
+            "task_kind": "projects",
+            "slash": "work",
+            "staff": _WORK_STAFF,
+        }
+    if n in ("code", "coding"):
+        return {
+            "desk_id": "code",
+            "command": "code",
+            "cancel": ("code",),
+            "task_kind": "code",
+            "slash": "code",
+            "staff": _CODE_STAFF,
+        }
+    if n in ("curate", "curator"):
+        return {
+            "desk_id": "curate",
+            "command": "curate",
+            "cancel": ("curate",),
+            "task_kind": "curation",
+            "slash": "curate",
+            "staff": "/curate",
+        }
+    if n in ("deck", "slideshow-author"):
+        return {
+            "desk_id": "deck",
+            "command": "deck",
+            "cancel": ("deck",),
+            "task_kind": "deck",
+            "slash": None,
+            "staff": _DECK_STAFF,
+        }
+    if n == "auto":
+        return {
+            "desk_id": "auto",
+            "command": None,
+            "cancel": (),
+            "task_kind": "auto",
+            "slash": None,
+            "staff": "Continue the standing Auto desk from the last roster.",
+        }
+    return None
+
+
+def _desk_spec_from_id(desk_id: str) -> dict[str, Any] | None:
+    did = (desk_id or "").strip().lower()
+    if did in ("projects", "work", "steer"):
+        return _desk_spec("work")
+    if did in ("code", "coding"):
+        return _desk_spec("code")
+    if did in ("curate", "curator"):
+        return _desk_spec("curate")
+    if did in ("deck", "slideshow"):
+        return _desk_spec("deck")
+    if did == "auto":
+        return _desk_spec("auto")
+    return None
+
+
+_DESK_STOP_WORDS = frozenset({"stop", "cancel", "halt"})
+_DESK_DISMISS_WORDS = frozenset({"dismiss", "fire"})
+
+
+def _desk_slash_verb(sargs: str) -> str | None:
+    """First token of ``/work <args>``: quiet, dismiss, or a brief."""
+    head = (sargs or "").strip().split(None, 1)
+    if not head:
+        return None
+    w = head[0].lower()
+    if w in _DESK_STOP_WORDS:
+        return "quiet"
+    if w in _DESK_DISMISS_WORDS:
+        return "dismiss"
+    return None
+
+
+def _quiet_desk(app: web.Application, spec: dict[str, Any], workspace: Path) -> int:
+    """Stop the live wave; the DAG stays standing (quiet) until Start."""
+    from . import kernel as sbk
+    rec = None
+    try:
+        rec = sbk.get(workspace, str(spec["desk_id"]))
+    except Exception:  # noqa: BLE001
+        rec = None
+    cancel = spec.get("cancel") or ()
+    n = (
+        _cancel_ce_runs(
+            app, tuple(cancel), workspace=workspace, settle="quiet",
+        ) if cancel else 0
+    )
+    rid = rec.run_id if rec is not None else None
+    if rid:
+        n += _cancel_run_ids(app, {rid})
+    try:
+        sbk.quiet(workspace, str(spec["desk_id"]), keep_run=True)
+    except Exception:  # noqa: BLE001
+        log.exception("desk quiet failed")
+    return n
+
+
+def _dismiss_desk(app: web.Application, spec: dict[str, Any], workspace: Path) -> int:
+    """Tear the chief and DAG down. Explicit dismiss only."""
+    from . import kernel as sbk
+    rec = None
+    try:
+        rec = sbk.get(workspace, str(spec["desk_id"]))
+        sbk.dismiss(workspace, str(spec["desk_id"]))
+    except Exception:  # noqa: BLE001
+        log.exception("desk dismiss failed")
+    cancel = spec.get("cancel") or ()
+    n = (
+        _cancel_ce_runs(
+            app, tuple(cancel), workspace=workspace, settle="cancelled",
+        ) if cancel else 0
+    )
+    rid = rec.run_id if rec is not None else None
+    if rid:
+        n += _cancel_run_ids(app, {rid}, dismiss=True)
+    return n
+
+
+def _stop_desk(app: web.Application, spec: dict[str, Any], workspace: Path) -> int:
+    """Any ``/<desk> stop`` quiets the DAG; dismiss is separate."""
+    return _quiet_desk(app, spec, workspace)
+
+
+def _maybe_resume_quiet_desk(
+    app: web.Application, spec: dict[str, Any], workspace: Path,
+) -> str | None:
+    """Resume a frozen DAG. Returns the run id, or None to launch new."""
+    from . import kernel as sbk
+    rec = sbk.get(workspace, str(spec["desk_id"]))
+    if rec is None or rec.state != sbk.STATE_QUIET or not rec.run_id:
+        return None
+    ck = orchestration.load_checkpoint(workspace, rec.run_id)
+    st = (ck or {}).get("status") if isinstance(ck, dict) else None
+    phase = str((st or {}).get("phase") or "")
+    if phase not in ("quiet", "interrupted", "running"):
+        return None
+    oid = rec.run_id
+    sbk.set_working(workspace, rec.desk_id, run_id=oid)
+    t = asyncio.create_task(
+        _resume_orchestration(app, oid, workspace=workspace),
+    )
+    t.add_done_callback(_make_dispatch_error_surface(app, oid))
+    return oid
+
+
+def _launch_desk(
+    app: web.Application,
+    spec: dict[str, Any],
+    *,
+    prompt: str,
+    workspace: Path | None = None,
+    preference: float | None = None,
+) -> None:
+    staff = not (prompt or "").strip()
+    text = (prompt or "").strip() or str(spec["staff"])
+    cmd = spec.get("command")
+    excerpt = (
+        f"[{cmd} · background] {prompt}"
+        if cmd else
+        f"[desk · background] {prompt}"
+    ).strip()
+    kind = spec.get("task_kind")
+    focused = Path(app["workspace"])
+    override = None
+    if workspace is not None and Path(workspace) != focused:
+        override = workspace
+    t = asyncio.create_task(_dispatch_auto(
+        app, None, text,
+        preference=preference,
+        workspace_override=override,
+        input_excerpt=excerpt,
+        command=cmd,
+        task_kind=kind,
+        family_staff=staff and kind in {"projects", "code"},
+    ))
+    t.add_done_callback(_make_dispatch_error_surface(app, None))
 
 
 async def handle_runs_stop_all(request: web.Request) -> web.Response:
@@ -5423,13 +5835,14 @@ async def handle_runs_stop_all(request: web.Request) -> web.Response:
     cancelled = 0
     from . import kernel as sbk
     for rec in list(runs.values()):
+        rec["user_cancel"] = True
         ws_raw = rec.get("workspace")
         rid = str(rec.get("run_id") or "")
         if ws_raw and rid:
             try:
-                sbk.dismiss_run(Path(ws_raw), rid)
+                sbk.quiet_run(Path(ws_raw), rid)
             except Exception:  # noqa: BLE001
-                log.exception("desk dismiss on stop-all failed")
+                log.exception("desk quiet on stop-all failed")
         task = rec.get("task")
         if task is not None and not task.done():
             try:
@@ -9233,6 +9646,27 @@ async def _chat_notice(
     await _broadcast(app, msg)
 
 
+def _desk_stopped_notice(task_kind: str | None) -> str:
+    kind = str(task_kind or "")
+    if kind == "curation":
+        return (
+            "Stopped — /curate desk is quiet. "
+            "Dismiss with /curate dismiss."
+        )
+    if kind == "deck":
+        return (
+            "Stopped — Deck desk is quiet. "
+            "Dismiss it from Desks."
+        )
+    slash = {"projects": "work", "code": "code"}.get(kind, "")
+    if slash:
+        return (
+            f"Stopped — /{slash} desk is quiet. "
+            f"Dismiss with /{slash} dismiss."
+        )
+    return "Stopped."
+
+
 def _finish_desk(
     workspace: Path,
     task_kind: str | None,
@@ -9240,21 +9674,27 @@ def _finish_desk(
     *,
     cancelled: bool,
 ) -> None:
-    """Quiet this run's desk, or dismiss on Stop. Ignore overlapping seats."""
+    """Quiet this run's desk when the wave ends or is stopped.
+
+    Dismiss is never implied here — only ``/work dismiss``,
+    ``/code dismiss``, or the Desks button tear a chief down.
+    Ignore overlapping seats.
+    """
     from . import kernel as sbk
     kind = str(task_kind or "")
     desk_id = {
         "curation": sbk.DESK_CURATE,
         "projects": sbk.DESK_PROJECTS,
         "code": sbk.DESK_CODE,
+        "deck": sbk.DESK_DECK,
+        "auto": sbk.DESK_AUTO,
     }.get(kind)
     if not desk_id:
         return
     try:
-        if cancelled:
-            sbk.dismiss(workspace, desk_id)
-        else:
-            sbk.quiet(workspace, desk_id, run_id=run_id)
+        sbk.quiet(
+            workspace, desk_id, run_id=run_id, keep_run=bool(cancelled),
+        )
     except Exception:  # noqa: BLE001
         pass
 
@@ -9276,15 +9716,22 @@ async def _dispatch_auto(
 ) -> str | None:
     """Default chat path: Auto orchestration.
 
-    Null hypothesis is a single ordinary Run (`_dispatch_chat`). Extra
-    workers / verify / expansion only fire when the conservative policy
-    says the task structure, uncertainty, or preference justifies them.
+    Null hypothesis is a single ordinary Run (`_dispatch_chat`). Simple
+    wiki/factual questions take ``fast_lookup`` (in-process search + a
+    cheap HTTP synthesizer, with a slider-gated kernel check) instead
+    of a CLI agent loop. Extra workers / verify / expansion only fire
+    when the conservative policy says the task structure, uncertainty,
+    or preference justifies them.
 
     ``workspace_override`` runs Auto in another vault (scheduler) without
     stealing the focused rail thread.
     """
     workspace: Path = workspace_override or app["workspace"]
     headless = ws is None or workspace_override is not None
+    from . import kernel as sbk
+    if not task_kind and sbk.looks_like_deck(text):
+        task_kind = "deck"
+        command = command or "deck"
     pref = (
         orchestration_policy.clamp_preference(preference)
         if preference is not None
@@ -9321,17 +9768,88 @@ async def _dispatch_auto(
     )
     # Provider-backed /curate is always the CE curator node so it can
     # dispatch Phase 2 workers. Local stays the single-session fallback.
+    # Constrained /curate still seats the Curate desk (chat path).
     ce_provider_wave = (
         task_kind == "curation" and not constrained and not local_pid
     )
     projects_desk_wave = task_kind in {"projects", "code"}
+    deck_wave = task_kind == "deck"
+    desk_id = sbk.choose_desk(
+        task_kind=task_kind,
+        command=command,
+        text=text,
+        strategy=decision.strategy,
+        n_investigators=int(decision.n_investigators or 1),
+        include_verify=bool(decision.include_verify),
+        lookup=bool(features.lookup),
+        research=bool(features.research),
+        code=bool(features.code),
+    )
+    if desk_id == sbk.DESK_AUTO and not task_kind:
+        task_kind = "auto"
     plain_single = (
         decision.strategy == "single"
         and not decision.include_verify
         and not decision.include_execute
         and decision.n_investigators <= 1
     )
-    if plain_single and not ce_provider_wave and not projects_desk_wave:
+    if (
+        decision.strategy == "fast_lookup"
+        and not ce_provider_wave
+        and not projects_desk_wave
+        and task_kind not in {"curation", "projects", "code", "deck", "auto"}
+    ):
+        from .agents import fast_lookup as fast_lookup_mod
+        from .kernel.hire import pick_fast_model, pick_kernel_model, strong_check_mode
+        hits = await asyncio.to_thread(fast_lookup_mod.retrieve, workspace, text)
+        synth = pick_fast_model(workspace=workspace)
+        if hits and synth is not None:
+            kernel = pick_kernel_model(workspace=workspace)
+            mode = strong_check_mode(pref, synth=synth, kernel=kernel)
+            await _chat_notice(
+                app, ws,
+                f"{fast_lookup_mod.notice_for(synth, mode)} {decision.reason}",
+                kind="chat", workspace=str(workspace),
+            )
+            t0 = time.time()
+            run_id = await fast_lookup_mod.dispatch(
+                app, ws, text,
+                workspace=workspace,
+                hits=hits,
+                preference=pref,
+                thread_id_override=thread_id_override,
+                input_excerpt=input_excerpt,
+            )
+            if run_id:
+                usage = (app.get("run_usage") or {}).pop(run_id, {}) or {}
+                tok_in = usage.get("input_tokens") if isinstance(usage.get("input_tokens"), int) else 0
+                tok_out = usage.get("output_tokens") if isinstance(usage.get("output_tokens"), int) else 0
+                orchestration_policy.record_outcome({
+                    "orchestration_id": run_id,
+                    "strategy": "fast_lookup",
+                    "arm_id": "fast_lookup",
+                    "explored": bool(decision.explored),
+                    "preference": pref,
+                    "features": features.to_dict(),
+                    "bucket": features.bucket(),
+                    "initial_nodes": 1,
+                    "final_nodes": 1,
+                    "dag_depth": 1,
+                    "max_concurrency": 1,
+                    "tokens": int(usage.get("tokens") or (tok_in + tok_out) or 0),
+                    "input_tokens": tok_in or None,
+                    "output_tokens": tok_out or None,
+                    "latency_s": time.time() - t0,
+                    "completed": True,
+                    "decision_reason": decision.reason,
+                }, workspace)
+                return run_id
+        # Empty wiki / no HTTP synth: ordinary chat, never a DAG.
+        plain_single = True
+    if (
+        plain_single and not ce_provider_wave
+        and not projects_desk_wave and not deck_wave
+    ):
         await _chat_notice(
             app, ws,
             f"Auto: single run — {decision.reason}.",
@@ -9346,6 +9864,7 @@ async def _dispatch_auto(
             input_excerpt=input_excerpt,
             extra_system=extra_system,
             command=command,
+            desk_id=desk_id,
         )
         if run_id:
             usage = (app.get("run_usage") or {}).pop(run_id, {}) or {}
@@ -9411,6 +9930,7 @@ async def _dispatch_auto(
         "independence": decision.independence,
         "command": command,
         "task_kind": task_kind,
+        "desk_id": desk_id,
     }
     _remember_run_workspace(app, parent_run_id, workspace)
 
@@ -9505,7 +10025,6 @@ async def _dispatch_auto(
         curator_provider = curator_model = curator_harness = None
         project_hires: list[dict] | None = None
         if str(task_kind or "") == "curation":
-            from . import kernel as sbk
             from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
             hire = sbk.decide_hire(
                 sbk.HireRequest(
@@ -9533,6 +10052,7 @@ async def _dispatch_auto(
                 chief_model=model,
                 thread_id=thread_id,
                 run_id=parent_run_id,
+                objective=text,
                 org=[{
                     "package": sbk.CURATOR_ID,
                     "provider": curator_provider or pid,
@@ -9540,6 +10060,52 @@ async def _dispatch_auto(
                     "harness": curator_harness or "rail",
                     "reports_to": "chief",
                 }],
+            )
+        elif str(task_kind or "") == "deck":
+            from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
+            pkg = sbk.get_package(sbk.SLIDESHOW_ID)
+            hire = sbk.decide_hire(
+                sbk.HireRequest(
+                    package_id=sbk.SLIDESHOW_ID,
+                    justification="deck desk",
+                    needed_tools=list(pkg.tools if pkg else []),
+                    kind="specialist",
+                    desk_prior=True,
+                ),
+                preference=pref,
+                chief=(pid, model),
+                org=[],
+                workspace=workspace,
+                chief_tools=list(_CHIEF_TOOLS),
+                pi_available=sbk.pi_available(),
+            )
+            if hire.accepted:
+                curator_provider = hire.provider
+                curator_model = hire.model
+                curator_harness = hire.harness
+            sbk.seat(
+                workspace, sbk.DESK_DECK,
+                chief_provider=pid,
+                chief_model=model,
+                thread_id=thread_id,
+                run_id=parent_run_id,
+                objective=text,
+                org=[{
+                    "package": sbk.SLIDESHOW_ID,
+                    "provider": curator_provider or pid,
+                    "model": curator_model or model,
+                    "harness": curator_harness or "rail",
+                    "reports_to": "chief",
+                }],
+            )
+        elif desk_id == sbk.DESK_AUTO:
+            sbk.seat(
+                workspace, sbk.DESK_AUTO,
+                chief_provider=pid,
+                chief_model=model,
+                thread_id=thread_id,
+                run_id=parent_run_id,
+                objective=text,
             )
         elif str(task_kind or "") in {"projects", "code"}:
             from . import kernel as sbk
@@ -9572,6 +10138,7 @@ async def _dispatch_auto(
                 chief_model=model,
                 thread_id=thread_id,
                 run_id=parent_run_id,
+                objective=text,
                 org=[{
                     "package": d.package_id,
                     "provider": d.provider or pid,
@@ -9612,33 +10179,48 @@ async def _dispatch_auto(
         _finish_desk(
             workspace, task_kind, parent_run_id, cancelled=result.cancelled,
         )
-        merged = result.output
-        if not merged:
-            merged = "_Auto orchestration produced no output._\n"
-        await _stream_parent_reply(
-            app, parent_run_id=parent_run_id, thread_id=thread_id, text=merged,
-        )
-        fanout.append_to_rail_log(
-            workspace, thread_id, parent_run_id=parent_run_id, merged=merged,
-        )
-        fanout.write_summary(
-            workspace, parent_run_id,
-            text=text, tasks=tasks_list, merged=merged,
-            planner_meta=planner_meta, results=result.results,
-        )
-        if parent_run_id in runs and result.telemetry:
-            runs[parent_run_id]["expansions"] = result.telemetry.get("targeted_expansions")
-            runs[parent_run_id]["verification_conflicts"] = result.telemetry.get(
-                "verification_conflicts",
+        if result.cancelled:
+            if parent_run_id in runs:
+                runs[parent_run_id]["status"] = "cancelled"
+                runs[parent_run_id]["user_cancel"] = True
+            await _broadcast(app, protocol.run_error(
+                parent_run_id, "cancelled", "orchestration cancelled", thread_id,
+            ))
+            await _chat_notice(
+                app, ws, _desk_stopped_notice(task_kind), kind="slash",
+                workspace=str(workspace),
             )
-            runs[parent_run_id]["tokens"] = result.telemetry.get("tokens")
-        await _broadcast(app, protocol.run_finished(
-            thread_id, parent_run_id,
-            result.telemetry.get("input_tokens"),
-            result.telemetry.get("output_tokens"),
-            "end_turn",
-        ))
+        else:
+            merged = result.output
+            if not merged:
+                merged = "_Auto orchestration produced no output._\n"
+            await _stream_parent_reply(
+                app, parent_run_id=parent_run_id, thread_id=thread_id, text=merged,
+            )
+            fanout.append_to_rail_log(
+                workspace, thread_id, parent_run_id=parent_run_id, merged=merged,
+            )
+            fanout.write_summary(
+                workspace, parent_run_id,
+                text=text, tasks=tasks_list, merged=merged,
+                planner_meta=planner_meta, results=result.results,
+            )
+            if parent_run_id in runs and result.telemetry:
+                runs[parent_run_id]["expansions"] = result.telemetry.get("targeted_expansions")
+                runs[parent_run_id]["verification_conflicts"] = result.telemetry.get(
+                    "verification_conflicts",
+                )
+                runs[parent_run_id]["tokens"] = result.telemetry.get("tokens")
+            await _broadcast(app, protocol.run_finished(
+                thread_id, parent_run_id,
+                result.telemetry.get("input_tokens"),
+                result.telemetry.get("output_tokens"),
+                "end_turn",
+            ))
     except asyncio.CancelledError:
+        if parent_run_id in runs:
+            runs[parent_run_id]["status"] = "cancelled"
+            runs[parent_run_id]["user_cancel"] = True
         _finish_desk(workspace, task_kind, parent_run_id, cancelled=True)
         await _broadcast(app, protocol.run_error(
             parent_run_id, "cancelled", "orchestration cancelled", thread_id,
@@ -9668,7 +10250,14 @@ async def _dispatch_auto(
         except Exception:  # noqa: BLE001
             log.exception("single-run fallback also failed")
     finally:
-        runs.pop(parent_run_id, None)
+        rec = runs.get(parent_run_id)
+        if rec and rec.get("status") == "cancelled":
+            async def _drop_cancelled(rid: str = parent_run_id) -> None:
+                await asyncio.sleep(8)
+                (app.get("runs") or {}).pop(rid, None)
+            asyncio.create_task(_drop_cancelled())
+        else:
+            runs.pop(parent_run_id, None)
     return parent_run_id
 
 
@@ -9689,7 +10278,8 @@ async def _resume_orchestration(
         log.warning("resume %s: no checkpoint", orchestration_id)
         return
     status = ck["status"]
-    if not orchestration.checkpoint_resumable(status):
+    phase = str(status.get("phase") or "")
+    if phase != "quiet" and not orchestration.checkpoint_resumable(status):
         log.info("resume %s: not resumable (phase=%s)", orchestration_id, status.get("phase"))
         return
     plan = ck["plan"]
@@ -9755,10 +10345,20 @@ async def _resume_orchestration(
         (" In flight: " + "; ".join(inflight_bits) + ".")
         if inflight_bits else ""
     )
+    if phase == "quiet":
+        notice = (
+            f"Resuming the quiet desk `{orchestration_id}` — same DAG, "
+            f"{len(status.get('completed') or [])} nodes already done."
+            f"{snap_line}"
+        )
+    else:
+        notice = (
+            f"This Auto run was interrupted. Resuming `{orchestration_id}` "
+            f"from snapshot — {len(status.get('completed') or [])} nodes already "
+            f"done.{snap_line} Chief of staff keeps the original goal."
+        )
     await _broadcast(app, protocol.notice(
-        f"This Auto run was interrupted. Resuming `{orchestration_id}` "
-        f"from snapshot — {len(status.get('completed') or [])} nodes already "
-        f"done.{snap_line} Chief of staff keeps the original goal.",
+        notice,
         kind="chat",
         workspace=str(workspace),
         run_id=orchestration_id,
@@ -10141,6 +10741,7 @@ async def _dispatch_chat(
     tool_palette: str | None = None,
     command: str | None = None,
     command_template: str | None = None,
+    desk_id: str | None = None,
 ) -> str | None:
     """Run the rail agent against `text`. Multi-turn: streams assistant
     text + tool_use blocks back to every connected client; when the
@@ -10339,7 +10940,25 @@ async def _dispatch_chat(
         "is_background": ws is None,
         "micro_edit": micro_meta,
         "command": command,
+        "desk_id": desk_id,
     }
+    if desk_id is None and command:
+        from . import kernel as sbk
+        desk_id = sbk.choose_desk(command=command, text=text)
+        runs[run_id]["desk_id"] = desk_id
+    if desk_id:
+        from . import kernel as sbk
+        try:
+            sbk.seat(
+                workspace, desk_id,
+                chief_provider=pid,
+                chief_model=model,
+                thread_id=thread_id,
+                run_id=run_id,
+                objective=text,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("desk seat on chat start failed")
     _remember_run_workspace(app, run_id, workspace)
     _remember_run_palette(app, run_id, command, command_template)
 
@@ -11008,6 +11627,14 @@ async def _dispatch_chat(
         log.exception("chat stream crashed")
         await _broadcast(app, protocol.run_error(run_id, "server", str(e), thread_id))
     finally:
+        if desk_id:
+            from . import kernel as sbk
+            try:
+                sbk.quiet(
+                    workspace, desk_id, run_id=run_id, keep_run=True,
+                )
+            except Exception:  # noqa: BLE001
+                log.exception("desk quiet on chat finish failed")
         # Always deregister so the Dashboard's "Running" panel
         # reflects truth even when the run errored or was cancelled.
         # Stash usage first so Auto N=1 telemetry can record tokens
@@ -14689,99 +15316,65 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                 _handle_project_slash(request.app, ws, sargs),
                             )
                             continue
-                        if sname.lower() in ("steer", "steering"):
-                            # Projects/portfolio desk. Not /project
-                            # (thread binding) and not /portfolio (Library).
-                            if sargs.strip().lower() in ("stop", "cancel", "halt"):
-                                from . import kernel as sbk
-                                try:
-                                    sbk.dismiss(
-                                        request.app["workspace"],
-                                        sbk.DESK_PROJECTS,
-                                    )
-                                except Exception:  # noqa: BLE001
-                                    pass
-                                n = _cancel_ce_runs(
-                                    request.app, "steer",
-                                    workspace=request.app["workspace"],
+                        desk_spec = _desk_spec(sname.lower())
+                        if desk_spec and desk_spec.get("task_kind") in (
+                            "projects", "code",
+                        ):
+                            # Work/code desks. /work is the projects
+                            # desk; /steer is a silent alias. Not
+                            # /project (thread binding) and not
+                            # /portfolio (Library).
+                            slash = str(desk_spec["slash"])
+                            verb = _desk_slash_verb(sargs)
+                            if verb is None and not sargs.strip():
+                                resumed = _maybe_resume_quiet_desk(
+                                    request.app, desk_spec,
+                                    request.app["workspace"],
+                                )
+                                if resumed:
+                                    await ws.send_json(protocol.notice(
+                                        f"Resuming the quiet {slash} desk "
+                                        f"(`{resumed}`). Same DAG.",
+                                        kind="slash",
+                                    ))
+                                    continue
+                            if verb == "quiet":
+                                n = _quiet_desk(
+                                    request.app, desk_spec,
+                                    request.app["workspace"],
                                 )
                                 await ws.send_json(protocol.notice(
-                                    f"Stopped {n} steer-desk run"
-                                    + ("" if n == 1 else "s")
+                                    f"Quieted the {slash} desk"
+                                    + (f" ({n} run" + ("" if n == 1 else "s")
+                                       + " stopped)" if n else "")
+                                    + f". Dismiss with /{slash} dismiss.",
+                                    kind="slash",
+                                ))
+                                continue
+                            if verb == "dismiss":
+                                n = _dismiss_desk(
+                                    request.app, desk_spec,
+                                    request.app["workspace"],
+                                )
+                                await ws.send_json(protocol.notice(
+                                    f"Dismissed the {slash} desk"
+                                    + (f" ({n} run" + ("" if n == 1 else "s")
+                                       + " stopped)" if n else "")
                                     + ".",
                                     kind="slash",
                                 ))
                                 continue
-                            staff = not sargs.strip()
-                            prompt = sargs.strip() or (
-                                "Staff the steer desk: ground from evidence, "
-                                "keep the plan of record, send only due "
-                                "messages, check drift. Do not invent status."
+                            _launch_desk(
+                                request.app, desk_spec,
+                                prompt=sargs.strip(),
+                                preference=pref,
                             )
                             await ws.send_json(protocol.notice(
-                                "/steer running in the background. "
-                                "Stop with /steer stop.",
+                                f"/{slash} running in the background. "
+                                f"Quiet with /{slash} stop; dismiss with "
+                                f"/{slash} dismiss.",
                                 kind="chat",
                             ))
-                            t = asyncio.create_task(_dispatch_auto(
-                                request.app, None, prompt,
-                                preference=pref,
-                                input_excerpt=(
-                                    f"[steer · background] {sargs}"
-                                ).strip(),
-                                command="steer",
-                                task_kind="projects",
-                                family_staff=staff,
-                            ))
-                            t.add_done_callback(
-                                _make_dispatch_error_surface(request.app, None),
-                            )
-                            continue
-                        if sname.lower() in ("code", "coding"):
-                            if sargs.strip().lower() in ("stop", "cancel", "halt"):
-                                from . import kernel as sbk
-                                try:
-                                    sbk.dismiss(
-                                        request.app["workspace"],
-                                        sbk.DESK_CODE,
-                                    )
-                                except Exception:  # noqa: BLE001
-                                    pass
-                                n = _cancel_ce_runs(
-                                    request.app, "code",
-                                    workspace=request.app["workspace"],
-                                )
-                                await ws.send_json(protocol.notice(
-                                    f"Stopped {n} code-desk run"
-                                    + ("" if n == 1 else "s")
-                                    + ".",
-                                    kind="slash",
-                                ))
-                                continue
-                            staff = not sargs.strip()
-                            prompt = sargs.strip() or (
-                                "Staff the code desk: map the repo, plan the "
-                                "change, implement, and review. No product "
-                                "writes from explore or review."
-                            )
-                            await ws.send_json(protocol.notice(
-                                "/code running in the background. "
-                                "Stop with /code stop.",
-                                kind="chat",
-                            ))
-                            t = asyncio.create_task(_dispatch_auto(
-                                request.app, None, prompt,
-                                preference=pref,
-                                input_excerpt=(
-                                    f"[code · background] {sargs}"
-                                ).strip(),
-                                command="code",
-                                task_kind="code",
-                                family_staff=staff,
-                            ))
-                            t.add_done_callback(
-                                _make_dispatch_error_surface(request.app, None),
-                            )
                             continue
                         if sname.lower() in ("effort", "reasoning", "think"):
                             # Reasoning effort for the current model.
@@ -15107,28 +15700,52 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                         # it FIRST so the prompt can be localised — the
                         # local model gets skill-free operating rules
                         # (it can't load the skill).
-                        if sname.lower() in ("curate", "curator") and (
-                            sargs.strip().lower() in ("stop", "cancel", "halt")
-                        ):
-                            from . import kernel as sbk
-                            try:
-                                sbk.dismiss(
+                        if sname.lower() in ("curate", "curator"):
+                            cspec = _desk_spec("curate") or {
+                                "desk_id": "curate",
+                                "cancel": ("curate",),
+                                "slash": "curate",
+                            }
+                            cverb = _desk_slash_verb(sargs)
+                            if cverb == "quiet":
+                                n = _quiet_desk(
+                                    request.app, cspec,
                                     request.app["workspace"],
-                                    sbk.DESK_CURATE,
                                 )
-                            except Exception:  # noqa: BLE001
-                                pass
-                            n = _cancel_ce_runs(
-                                request.app, "curate",
-                                workspace=request.app["workspace"],
-                            )
-                            await ws.send_json(protocol.notice(
-                                f"Stopped {n} curation run"
-                                + ("" if n == 1 else "s")
-                                + ". Reviews stay in the Reviews tab.",
-                                kind="slash",
-                            ))
-                            continue
+                                await ws.send_json(protocol.notice(
+                                    f"Quieted the curate desk"
+                                    + (f" ({n} run" + ("" if n == 1 else "s")
+                                       + " stopped)" if n else "")
+                                    + ". Dismiss with /curate dismiss. "
+                                    "Reviews stay in the Reviews tab.",
+                                    kind="slash",
+                                ))
+                                continue
+                            if cverb == "dismiss":
+                                n = _dismiss_desk(
+                                    request.app, cspec,
+                                    request.app["workspace"],
+                                )
+                                await ws.send_json(protocol.notice(
+                                    f"Dismissed the curate desk"
+                                    + (f" ({n} run" + ("" if n == 1 else "s")
+                                       + " stopped)" if n else "")
+                                    + ". Reviews stay in the Reviews tab.",
+                                    kind="slash",
+                                ))
+                                continue
+                            if cverb is None and not sargs.strip():
+                                resumed = _maybe_resume_quiet_desk(
+                                    request.app, cspec,
+                                    request.app["workspace"],
+                                )
+                                if resumed:
+                                    await ws.send_json(protocol.notice(
+                                        f"Resuming the quiet curate desk "
+                                        f"(`{resumed}`). Same DAG.",
+                                        kind="slash",
+                                    ))
+                                    continue
                         cp_pid, cp_model = _ce_action_provider(
                             request.app["workspace"],
                         )
@@ -15842,6 +16459,10 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/orchestration/org", handle_orchestration_org)
     app.router.add_get("/api/orchestration/interrupted", handle_orchestration_interrupted)
     app.router.add_post("/api/orchestration/{orchestration_id}/resume", handle_orchestration_resume)
+    app.router.add_post("/api/orchestration/{orchestration_id}/dismiss", handle_orchestration_dismiss)
+    app.router.add_get("/api/desks", handle_desks_list)
+    app.router.add_post("/api/desks/{desk_id}/start", handle_desks_start)
+    app.router.add_post("/api/desks/{desk_id}/dismiss", handle_desks_dismiss)
     app.router.add_post("/api/fs/hydrate", handle_fs_hydrate)
     app.router.add_get("/api/verbs", handle_verbs)
     app.router.add_get("/api/shell/detect", handle_shell_detect)

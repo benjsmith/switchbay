@@ -255,6 +255,7 @@ async def run_worker(
     pid = getattr(provider, "ID", "?")
     await _broadcast(app, protocol.run_started(
         thread_id, run_id, pid, runs[run_id]["model"], str(workspace),
+        parent_run_id=parent_run_id, hide_from_rail=True,
     ))
     # The worker's task description IS its step — gives cross-thread
     # dashboards a "working toward" line per worker.

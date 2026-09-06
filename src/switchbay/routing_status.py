@@ -126,7 +126,7 @@ def effort_for(
 # Model-id fragments that mark a small / fast / cheap tier.
 _WEAK_MODEL_RE = re.compile(
     r"(?:^|[-_/])(?:"
-    r"haiku|mini|nano|flash|lite|small|fast|tiny|"
+    r"haiku|mini|nano|flash|lite|small|fast|tiny|luna|"
     r"composer|"                       # grok-composer (fast tier)
     r"\d+b"                            # 7b / 8b / 13b … local GGUFs
     r")(?:[-_/.]|$)",

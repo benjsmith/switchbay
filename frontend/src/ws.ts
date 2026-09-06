@@ -148,6 +148,11 @@ export type RunStarted = {
    *  events for runs in another workspace (rail is per-workspace; the
    *  Agent Dashboard is the cross-workspace surface). */
   workspace?: string;
+  /** DAG child. The rail drops these when hide_from_rail is set. */
+  parent_run_id?: string;
+  node_kind?: string;
+  /** Structured findings/verification JSON — Agent Space, not chat. */
+  hide_from_rail?: boolean;
 };
 
 export type RunFinished = {

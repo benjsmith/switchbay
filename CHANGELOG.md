@@ -3,6 +3,37 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## Unreleased
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` (frontend changed). No new VSIX.
+
+Covers `5dcf43d` (desk kernel, already on `main`) plus the follow-up
+on standing desks, wiki lookup, and HTML slideshow quality.
+
+### Added
+
+- **Standing desks.** `/curate`, `/work`, and `/code` always seat a
+  named desk (working / quiet / dismissed). Authoring an HTML slideshow
+  reuses one Deck desk. Wiki questions (`what do we know about X`)
+  take the fast lookup path and do not seat. Agents → Desks: Start
+  (resumes a quiet DAG), Edit, Dismiss, Schedule. `/steer` remains a
+  silent alias of `/work`.
+- **HTML slideshow layouts** for quotes, stats, charts, compare,
+  timeline, and wiki tables. `create_slideshow` refuses curator-speak
+  and drops ingest/TODO punch-list slides. `[[slideshow:slug]]` in the
+  rail and Zen chat opens the Slideshow tab.
+
+### Changed
+
+- Copilot, MLX, and llama.cpp drive `/curate` and Deck through the
+  host tool loop (no shell). Ollama stays chat-only and cannot curate.
+  Small local Deck workers keep `create_slideshow` with a compact wiki
+  set; ram16 rail palettes still omit it.
+- Enterprise `media_generation: false` skips slideshow image generation.
+- Stop cancels in-flight sibling workers; Dismiss marks the run
+  dismissed and only clears the org this desk owns.
+
 ## 2026-09-04 — v0.12.13 — Switch Bay VS 0.3.17
 
 **Migration:** none. **Breaking:** none. After pull, run

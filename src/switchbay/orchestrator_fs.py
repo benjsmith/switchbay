@@ -200,6 +200,17 @@ def load_org(workspace: Path) -> dict[str, Any] | None:
     return data
 
 
+def clear_org(workspace: Path) -> None:
+    """Drop the standing roster. Used on dismiss / user cancel."""
+    p = org_path(workspace)
+    try:
+        p.unlink()
+    except FileNotFoundError:
+        return
+    except OSError:
+        return
+
+
 def record_last(workspace: Path, payload: dict[str, Any]) -> None:
     ensure(workspace)
     data = dict(payload)

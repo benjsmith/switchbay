@@ -39,6 +39,11 @@ RECIPES: dict[str, dict[str, Any]] = {
         "ladder": "cheap", "execute": False,
         "why": "cheapest competent single agent",
     },
+    "fast_lookup": {
+        "n": 1, "verify": False, "diverse": False,
+        "ladder": "cheap", "execute": False, "fast_path": True,
+        "why": "in-process wiki search plus a fast synthesizer",
+    },
     "single_strong": {
         "n": 1, "verify": False, "diverse": False,
         "ladder": "strong", "execute": False,
@@ -93,6 +98,7 @@ RECIPES: dict[str, dict[str, Any]] = {
 
 # Nearby policies for conservative exploration. Never a swarm jump.
 NEIGHBORS: dict[str, tuple[str, ...]] = {
+    "fast_lookup": ("single",),
     "single": ("single_strong", "single_verify"),
     "single_strong": ("single", "single_verify", "parallel_diverse_2"),
     "single_verify": ("single", "ivs_diverse_2"),
@@ -180,6 +186,19 @@ def _clip01(x: float) -> float:
     return max(0.0, min(1.0, x))
 
 
+def is_lookup_candidate(feat: Any) -> bool:
+    """Simple wiki/factual questions — not research, code, or multi-part."""
+    if bool(getattr(feat, "research", False) or getattr(feat, "finance", False)
+            or getattr(feat, "science", False) or getattr(feat, "experiment", False)
+            or getattr(feat, "code", False)):
+        return False
+    difficulty = float(getattr(feat, "difficulty", 0.2) or 0.0)
+    n_sub = int(getattr(feat, "n_subquestions", 1) or 1)
+    if difficulty >= 0.3 or n_sub > 1:
+        return False
+    return bool(getattr(feat, "lookup", False))
+
+
 def estimate_policy_quality(recipe: dict[str, Any], feat: Any) -> float:
     """Coarse prior Q ∈ [0, 1]. Ordering matters more than calibration."""
     n = int(recipe.get("n") or 1)
@@ -196,6 +215,16 @@ def estimate_policy_quality(recipe: dict[str, Any], feat: Any) -> float:
     experiment = bool(getattr(feat, "experiment", False))
     simple = difficulty < 0.3 and not research and n_sub <= 1
     prompt_len = int(getattr(feat, "prompt_len", 0) or 0)
+    preference = float(getattr(feat, "preference", PREF_BALANCED) or PREF_BALANCED)
+    if recipe.get("fast_path"):
+        if is_lookup_candidate(feat):
+            q = 0.80
+            if preference >= 0.8:
+                q += 0.04
+            elif preference >= 0.35:
+                q += 0.02
+            return _clip01(q)
+        return 0.38
 
     q = 0.70
     if simple:
@@ -244,6 +273,14 @@ def estimate_policy_quality(recipe: dict[str, Any], feat: Any) -> float:
 
 def estimate_policy_cost(recipe: dict[str, Any], feat: Any) -> float:
     """Cnorm relative to a cheap single agent. Parallel workers still add cost."""
+    if recipe.get("fast_path"):
+        s = float(getattr(feat, "preference", PREF_BALANCED) or PREF_BALANCED)
+        c = 0.30
+        if s >= 0.8:
+            c += 0.12
+        elif s >= 0.35:
+            c += 0.06
+        return max(0.05, c)
     n = int(recipe.get("n") or 1)
     verify = bool(recipe.get("verify"))
     execute = bool(recipe.get("execute"))
@@ -264,6 +301,14 @@ def estimate_policy_cost(recipe: dict[str, Any], feat: Any) -> float:
 
 def estimate_policy_latency(recipe: dict[str, Any], feat: Any) -> float:
     """Lnorm on the DAG critical path — parallel workers ≈ max, not sum."""
+    if recipe.get("fast_path"):
+        s = float(getattr(feat, "preference", PREF_BALANCED) or PREF_BALANCED)
+        l = 0.12
+        if s >= 0.8:
+            l += 0.10
+        elif s >= 0.35:
+            l += 0.06
+        return max(0.05, l)
     n = int(recipe.get("n") or 1)
     verify = bool(recipe.get("verify"))
     execute = bool(recipe.get("execute"))
@@ -297,7 +342,9 @@ def make_candidate(policy_id: str, feat: Any) -> CandidatePolicy | None:
     n = int(recipe["n"])
     verify = bool(recipe["verify"])
     execute = bool(recipe["execute"])
-    if n <= 1 and not verify and not execute:
+    if recipe.get("fast_path"):
+        strategy = "fast_lookup"
+    elif n <= 1 and not verify and not execute:
         strategy = "single"
     elif verify:
         strategy = "investigate_verify_synthesize"
@@ -357,6 +404,8 @@ def generate_candidates(feat: Any) -> list[CandidatePolicy]:
         and not finance and not science
     )
     ids: list[str] = ["single", "single_strong"]
+    if is_lookup_candidate(feat):
+        ids.insert(0, "fast_lookup")
     if simple:
         ids.append("parallel_homog_2")
     else:

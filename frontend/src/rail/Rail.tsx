@@ -641,6 +641,16 @@ export default function Rail({
       if (v.name.toLowerCase().startsWith(prefix)) return true;
       return v.aliases.some((a) => a.toLowerCase().startsWith(prefix));
     });
+    filtered.sort((a, b) => {
+      const score = (v: VerbInfo) => {
+        const n = v.name.toLowerCase();
+        if (n === prefix) return 0;
+        if (v.aliases.some((al) => al.toLowerCase() === prefix)) return 1;
+        if (n.startsWith(prefix)) return 2 + n.length;
+        return 10 + n.length;
+      };
+      return score(a) - score(b) || a.name.localeCompare(b.name);
+    });
     return filtered.slice(0, 8);
   }, [input, verbs]);
   const acOpen = acMatches.length > 0;
@@ -1036,14 +1046,7 @@ export default function Rail({
                      * pin sits below the rendered HTML. [[wikilinks]]
                      * become clickable → doc modal in the Graph tab. */
                     dangerouslySetInnerHTML={{ __html: mdWithWikilinks(e.text) }}
-                    onClick={(ev) => {
-                      const a = (ev.target as HTMLElement).closest?.("a.sy-wikilink");
-                      if (!a) return;
-                      ev.preventDefault();
-                      window.dispatchEvent(new CustomEvent("sy:open-wiki-page", {
-                        detail: { target: a.getAttribute("data-wiki") },
-                      }));
-                    }}
+                    onClick={(ev) => { handleRailWikilinkClick(ev); }}
                   />
                   {!e.done && <span className="sy-rail-cursor">▋</span>}
                 </span>
@@ -2387,21 +2390,126 @@ function shortRun(id: string): string {
   return id.replace(/^run-/, "").slice(0, 8);
 }
 
-/** Assistant markdown with [[wikilinks]] turned into clickable
- *  anchors (data-wiki carries the raw target; click is delegated to
- *  a window event App resolves against the graph). Runs BEFORE
- *  marked so the anchor survives as inline HTML. */
-export function mdWithWikilinks(text: string): string {
-  const esc = (s: string) => s
+function escAttr(s: string): string {
+  return s
     .replace(/&/g, "&amp;").replace(/</g, "&lt;")
     .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/** Assistant markdown with [[wikilinks]] turned into clickable
+ *  anchors. `[[slideshow:slug]]` / `[[report:…]]` / `[[worksheet:…]]`
+ *  are typed; the rest go to the wiki resolver. Runs BEFORE marked
+ *  so the anchor survives as inline HTML. */
+export function mdWithWikilinks(text: string): string {
   const pre = text.replace(
     /\[\[([^\]|]+?)(?:\|([^\]]+?))?\]\]/g,
-    (_m, target: string, alias?: string) =>
-      `<a href="#" class="sy-wikilink" data-wiki="${esc(target.trim())}">`
-      + `${esc((alias ?? target).trim())}</a>`,
+    (_m, target: string, alias?: string) => {
+      const raw = target.trim();
+      const label = escAttr((alias ?? target).trim());
+      const show = raw.match(/^slideshow:(.+)$/i);
+      if (show) {
+        const slug = show[1].trim();
+        return (
+          `<a href="#slideshow=${encodeURIComponent(slug)}" `
+          + `class="sy-wikilink sy-wikilink--slideshow" `
+          + `data-slideshow-slug="${escAttr(slug)}">${label}</a>`
+        );
+      }
+      const rep = raw.match(/^report:(.+)$/i);
+      if (rep) {
+        const slug = rep[1].trim();
+        return (
+          `<a href="#report=${encodeURIComponent(slug)}" `
+          + `class="sy-wikilink sy-wikilink--report" `
+          + `data-report-slug="${escAttr(slug)}">${label}</a>`
+        );
+      }
+      const ws = raw.match(/^worksheet:(.+)$/i);
+      if (ws) {
+        const slug = ws[1].trim();
+        return (
+          `<a href="#worksheet=${encodeURIComponent(slug)}" `
+          + `class="sy-wikilink sy-wikilink--worksheet" `
+          + `data-worksheet-slug="${escAttr(slug)}">${label}</a>`
+        );
+      }
+      return (
+        `<a href="#" class="sy-wikilink" data-wiki="${escAttr(raw)}">`
+        + `${label}</a>`
+      );
+    },
   );
   return sanitizeHtml(marked.parse(pre) as string);
+}
+
+function slideshowSlugFromHref(href: string): string | null {
+  const h = (href || "").trim();
+  if (!h) return null;
+  try {
+    const u = new URL(h, window.location.origin);
+    const hash = u.hash.replace(/^#/, "");
+    const mHash = hash.match(/^slideshow=(.+)$/i);
+    if (mHash) return decodeURIComponent(mHash[1]);
+    const mApi = u.pathname.match(/\/api\/slideshows\/([^/]+)/i);
+    if (mApi) return decodeURIComponent(mApi[1]);
+    const mDir = u.pathname.match(/(?:^|\/)slideshows\/([^/]+)/i);
+    if (mDir) return decodeURIComponent(mDir[1]);
+  } catch { /* relative / hash only */ }
+  const m = h.match(/(?:slideshows\/|#slideshow=)([^/#?]+)/i);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+/** Delegated click for rail/zen assistant markdown. */
+export function handleRailWikilinkClick(ev: { target: EventTarget | null; preventDefault: () => void }): boolean {
+  const el = ev.target as HTMLElement | null;
+  const a = el?.closest?.("a");
+  if (!(a instanceof HTMLAnchorElement)) return false;
+  const wikiAttr = (a.getAttribute("data-wiki") || "").trim();
+  const slideshowFromWiki = /^slideshow:/i.test(wikiAttr)
+    ? wikiAttr.replace(/^slideshow:/i, "").trim()
+    : "";
+  const slug = (
+    a.getAttribute("data-slideshow-slug")
+    || slideshowFromWiki
+    || slideshowSlugFromHref(a.getAttribute("href") || "")
+    || ""
+  ).trim();
+  if (slug && (a.hasAttribute("data-slideshow-slug") || slideshowFromWiki || slideshowSlugFromHref(a.getAttribute("href") || ""))) {
+    ev.preventDefault();
+    window.dispatchEvent(new CustomEvent("sy:open-as-slideshow", {
+      detail: { slug, title: (a.textContent || slug).trim() },
+    }));
+    void fetch("/api/slideshows/open", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ slug }),
+    }).catch(() => { /* tab focus still happens locally */ });
+    return true;
+  }
+  const report = (a.getAttribute("data-report-slug") || "").trim();
+  if (report) {
+    ev.preventDefault();
+    window.dispatchEvent(new CustomEvent("sy:open-report-doc", {
+      detail: { slug: report, title: (a.textContent || report).trim() },
+    }));
+    return true;
+  }
+  const sheet = (a.getAttribute("data-worksheet-slug") || "").trim();
+  if (sheet) {
+    ev.preventDefault();
+    window.dispatchEvent(new CustomEvent("sy:open-as-sheet", {
+      detail: { slug: sheet },
+    }));
+    return true;
+  }
+  if (a.classList.contains("sy-wikilink") && wikiAttr && !/^slideshow:/i.test(wikiAttr)) {
+    ev.preventDefault();
+    window.dispatchEvent(new CustomEvent("sy:open-wiki-page", {
+      detail: { target: wikiAttr },
+    }));
+    return true;
+  }
+  return false;
 }
 
 

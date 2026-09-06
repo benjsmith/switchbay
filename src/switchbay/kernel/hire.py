@@ -102,6 +102,99 @@ def pick_critic_model(
     )
 
 
+CHECK_SKIP = "skip"
+CHECK_CONFIRM = "confirm"
+CHECK_REVISE = "revise"
+
+_CLI_PROVIDERS = frozenset({
+    "grok-build", "claude-code", "openai-codex", "muse-code",
+})
+
+
+def _provider_is_cli(pid: str) -> bool:
+    if pid in _CLI_PROVIDERS:
+        return True
+    try:
+        from .. import llmgateway
+        return bool(llmgateway.can_execute(pid))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def is_fast_class_model(model: str | None) -> bool:
+    """Flash / luna / mini / haiku-class ids — fast synthesizers."""
+    from .. import routing_status
+    m = (model or "").strip()
+    if not m:
+        return False
+    if routing_status.is_weak_model(m):
+        return True
+    token = m.lower()
+    if "luna" in token:
+        return True
+    return policy.model_strength(m) <= 0.32
+
+
+def pick_fast_model(
+    *,
+    workspace: Path | None,
+    available: list[tuple[str, str | None]] | None = None,
+    denied: list[str] | None = None,
+) -> tuple[str, str | None] | None:
+    """Fastest keyed HTTP model. Never a CLI agent loop.
+
+    Prefers flash/luna/mini over flagship HTTP, and HTTP over local
+    (cold-start). Returns None when only CLIs are allowed — caller
+    should fall back to ordinary chat.
+    """
+    rows = policy.list_orchestrator_catalog(
+        available=available, denied=denied, workspace=workspace,
+    )
+    allowed = [r for r in rows if r.get("allowed")]
+    http = [r for r in allowed if not _provider_is_cli(str(r.get("provider") or ""))]
+    if not http:
+        return None
+
+    def sort_key(r: dict[str, Any]) -> tuple[int, int, int, float]:
+        model = str(r.get("model") or "")
+        fast = is_fast_class_model(model)
+        local = bool(r.get("local"))
+        strength = float(r.get("strength") or 0)
+        return (
+            0 if (fast and not local) else 1,
+            0 if fast else 1,
+            0 if not local else 1,
+            strength,
+        )
+
+    chosen = min(http, key=sort_key)
+    model = str(chosen.get("model") or "") or None
+    return str(chosen["provider"]), model
+
+
+def strong_check_mode(
+    preference: float,
+    *,
+    synth: tuple[str, str | None] | None,
+    kernel: tuple[str, str | None] | None,
+) -> str:
+    """How involved the strongest model is on a fast lookup.
+
+    Economy skips the check when a synthesizer already ran (flash/luna
+    class is the intended synth; a second call would only add latency).
+    Balanced asks for OK-or-rewrite. Maximum spends a few more tokens
+    tightening the answer. Same-model kernel/synth is always skip.
+    """
+    s = policy.clamp_preference(preference)
+    if not kernel or not synth or kernel == synth:
+        return CHECK_SKIP
+    if s < 0.35:
+        return CHECK_SKIP
+    if s < 0.8:
+        return CHECK_CONFIRM
+    return CHECK_REVISE
+
+
 def pick_worker_model(
     *,
     preference: float,
@@ -381,7 +474,7 @@ def pick_family_hires(
 
     if staff_desk:
         # Authoritative: the slash canned prompt must not be parsed as
-        # a narrow hint ("drift" in /steer staff text used to hire only
+        # a narrow hint ("drift" in /work staff text used to hire only
         # project-review).
         want = list(core)
     elif hinted:
@@ -406,7 +499,7 @@ def pick_family_hires(
             seen.add(pid)
             ordered.append(pid)
 
-    label = "steer desk" if family == PROJECTS_FAMILY else "code desk"
+    label = "work desk" if family == PROJECTS_FAMILY else "code desk"
     out: list[HireDecision] = []
     org: list[dict[str, Any]] = []
     for pid in ordered:

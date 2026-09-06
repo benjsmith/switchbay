@@ -49,9 +49,34 @@ KNOWLEDGE_READ: tuple[str, ...] = (
 )
 
 SLIDESHOW_TOOLS: tuple[str, ...] = (
-    "ce_query", "ce_graph_retrieve", "search_wiki", "read_wiki_page",
-    "read_source", "list_wiki_pages", "create_slideshow",
+    "ce_query", "ce_graph_retrieve", "ce_tables", "search_wiki",
+    "read_wiki_page", "read_source", "list_wiki_pages", "create_slideshow",
 )
+
+# ram16 / 4B Deck DAG: host still executes create_slideshow. Drop the
+# heavier CE retrieve schemas so the prompt fits the local budget.
+# create_slideshow stays first so a later budget clip cannot drop the job.
+SLIDESHOW_TOOLS_COMPACT: tuple[str, ...] = (
+    "create_slideshow",
+    "search_wiki", "read_wiki_page", "list_wiki_pages",
+)
+
+
+def slideshow_tools_for(*, local: bool = False, model_hint: str = "") -> tuple[str, ...]:
+    """Tools for the Deck DAG node.
+
+    RAM palettes drop ``create_slideshow`` on ram16 because the rail
+    catalog is too wide. This job *is* create_slideshow — keep it even
+    on 4B, and drop CE retrieve schemas so the prompt fits. HTTP chiefs
+    (Copilot) and 10B+ local (27B) get the full package.
+    """
+    if not local:
+        return SLIDESHOW_TOOLS
+    from ..agents.local_rungs import parse_param_b
+    params = parse_param_b(model_hint)
+    if params is None or params < 10:
+        return SLIDESHOW_TOOLS_COMPACT
+    return SLIDESHOW_TOOLS
 
 RESEARCH_TOOLS: tuple[str, ...] = (
     "research_search", "research_fetch",
@@ -111,14 +136,24 @@ workspace vault, ingest, then write a cited brief. No bash.
 """
 
 SLIDESHOW_SYSTEM = """\
-You build HTML slideshows from this workspace's knowledge graph and vault.
-Use Switch Bay tools only — no bash, no inventing numbers.
+You build HTML slideshows a person would actually present. Switch Bay
+tools only. Never invent numbers. Never write curator-speak.
 
-1. ce_query with verb=introspect, then sql or cypher to find vault-backed themes.
-2. read_source / read_wiki_page for excerpts. Cite vault/ and wiki/ paths.
-3. create_slideshow with a title, 6–8 visual slides (layouts: title, bullets,
-   cards, close). wiki_topics for the themes you used.
-If ce_query is empty, say so and still produce a short deck from wiki pages.
+Read evidence pages and vault extracts. Prefer the paper's own sentences
+(blockquotes) over your paraphrase. Prefer a number on a stats or chart
+slide over a bullet that mentions the number.
+
+create_slideshow, 6–10 slides:
+- title: a concrete problem in spoken English + a thesis lede
+- quote: quote_from a wiki/evidence page (or quote + attr)
+- stats / chart: only values that appear in the wiki or vault
+- table: wiki_table=tbl-* when a summary table exists
+- compare / timeline when the story is before/after or dated
+- close: the takeaway, not Topics/Spine/Table wikilinks
+
+Forbidden on slides: "vault-backed", "working set", "Act 1",
+"the claim in three moves", blank split slides.
+If the wiki has no figure for a mechanism, say so — do not fake a paper diagram.
 """
 
 CODE_EXPLORE_SYSTEM = """\
@@ -191,7 +226,8 @@ Then cut to the minimum.
    not fill from tone.
 2. ask_thread only for a specific thread that must act. Prefer one
    short update over a broadcast.
-3. create_slideshow for exec or community progress (cite wiki/vault).
+3. create_slideshow for exec or community progress (cite wiki/vault;
+   title+lede, a table or figure, a prose close — not wiki-link stubs).
    create_report for a longer brief.
 4. Do not rewrite the plan of record (no update_work_plan, no charter).
 """
@@ -287,6 +323,7 @@ _PACKAGES: dict[str, Package] = {
         family="knowledge",
         writes=WRITES_COMMS,
         needed_skills=("html-slideshow",),
+        desks=("deck",),
     ),
     RESEARCH_ID: Package(
         id=RESEARCH_ID,

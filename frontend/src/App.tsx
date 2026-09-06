@@ -202,6 +202,7 @@ export default function App() {
   // not-focused (dropped), which is the safe default.
   const runMetaRef = useRef<Map<string, {
     threadId: string; workspace?: string; provider?: string;
+    hideFromRail?: boolean;
   }>>(new Map());
   // Live AG-UI frames after RUN_STARTED carry only runId. A workspace
   // switch must keep dropping the previous workspace's stream even
@@ -210,6 +211,7 @@ export default function App() {
     if (foreignRunsRef.current.has(runId)) return false;
     const meta = runMetaRef.current.get(runId);
     if (!meta) return false;
+    if (meta.hideFromRail) return false;
     if (
       meta.workspace
       && focusedWsRef.current
@@ -707,6 +709,7 @@ export default function App() {
           threadId: msg.threadId,
           workspace: msg.workspace,
           provider: msg.provider,
+          hideFromRail: Boolean(msg.hide_from_rail),
         });
         if (runMetaRef.current.size > 512) {
           const oldest = runMetaRef.current.keys().next().value;
@@ -719,6 +722,9 @@ export default function App() {
           foreignRunsRef.current.add(msg.runId);
           return;
         }
+        // Investigators post findings JSON to the blackboard. Keep that
+        // off the parent rail; Agent Space / the expander still have it.
+        if (msg.hide_from_rail) return;
         if (focusedThreadRef.current === null) {
           // Our own dispatch on a fresh rail lazily created this
           // thread server-side — adopt it. No re-hydrate: we're
@@ -2511,6 +2517,20 @@ type RailEvent = {
   run_id: string | null;
 };
 
+/** DAG workers persist findings JSON onto the parent thread so the
+ *  Agent Space expander can replay them by run_id. The rail thread
+ *  view should not render that as chat. */
+function railEventHiddenFromChat(r: RailEvent): boolean {
+  const p = r.payload;
+  if (p && p.hide_from_rail === true) return true;
+  if (r.kind !== "assistant") return false;
+  const t = (r.summary || "").trimStart().replace(/^```(?:json)?\s*/i, "");
+  return t.startsWith('{"findings"')
+    || t.startsWith('{ "findings"')
+    || t.startsWith('{"classifications"')
+    || t.startsWith('{ "classifications"');
+}
+
 /** Convert event-log rows into the rail's display shapes. tool_use
  *  rows are paired with their tool_result siblings (matched by ref_id)
  *  so the resulting `tool` entries already carry the result and don't
@@ -2523,6 +2543,7 @@ function hydrateEvents(rows: RailEvent[]): RailEntry[] {
   const toolByRefId = new Map<string, Extract<RailEntry, { source: "tool" }>>();
   for (const r of rows) {
     if (r.kind === "tool_result") continue;
+    if (railEventHiddenFromChat(r)) continue;
     const id = r.event_id;
     if (r.kind === "user") {
       out.push({ id, source: "user", text: r.summary });

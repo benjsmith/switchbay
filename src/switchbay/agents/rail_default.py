@@ -87,7 +87,11 @@ HTML slideshows (the only presentation surface):
     [[slideshow:slug|title]] on a wiki page (## Presentations section).
   · Always generate via create_slideshow or slideshow_html.write_slideshow
     (intro-grade design system) — never raw bullet HTML, never a Sketch
-    deck. See docs/skills/html-slideshow. Sketches are diagrams/whiteboards.
+    deck. Every slide needs a heading; the title slide needs a thesis
+    lede; at least one table (wiki_table or rows) or figure; the close
+    is the takeaway, not Topics/Spine/Table wikilinks. Blank split
+    slides are refused. See docs/skills/html-slideshow. Sketches are
+    diagrams/whiteboards.
 
 Rich answers → the Report tab (create_report):
   · When your answer is document-shaped — an ANALYSIS, comparison,
@@ -206,8 +210,9 @@ Switch Bay tools you may call:
     The ONLY presentation authoring path. Creates a self-contained
     HTML package under slideshows/<slug>/ and opens the Slideshow tab.
     Use it for every request for slides, a deck, or a presentation.
-    Vary title/media/split/cards/bullets/close layouts; keep content
-    concise and source-aware. Never create a Sketch deck or an
+    Vary title/table/cards/bullets/split/media/close; title needs a
+    lede; inline wiki tables (wiki_table) instead of [[tbl-…]] stubs;
+    at least one table or figure. Never create a Sketch deck or an
     analysis page with a slides array.
   · author_sketch(layout, slots, sketch_id?, name?)
     Create or update an ordinary Excalidraw sketch in the workspace
@@ -489,8 +494,10 @@ _LOCAL_TOOL_BLURBS: dict[str, str] = {
         "Use for diagrams and whiteboards, never presentation decks."
     ),
     "create_slideshow": (
-        "Create an HTML slideshow package. Title + slides array. "
-        "Layouts: title, media, split, cards, bullets, close."
+        "HTML slideshow. Spoken English, paper quotes, big numbers, "
+        "charts. Layouts: title, quote, stats, chart, compare, "
+        "timeline, table, cards, bullets, split, media, close. "
+        "No curator jargon."
     ),
     "save_plot": (
         "Save a Vega-Lite spec to the Plot tab. Inline data.values; "

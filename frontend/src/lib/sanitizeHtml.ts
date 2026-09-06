@@ -14,7 +14,10 @@ import DOMPurify from "dompurify";
  */
 export function sanitizeHtml(html: string): string {
   return DOMPurify.sanitize(html, {
-    ADD_ATTR: ["target", "data-wiki", "class"],
+    ADD_ATTR: [
+      "target", "class",
+      "data-wiki", "data-slideshow-slug", "data-report-slug", "data-worksheet-slug",
+    ],
     // Allow http(s)/mailto and in-page '#' anchors (wikilinks use href="#").
     ALLOWED_URI_REGEXP:
       /^(?:(?:https?|mailto|tel):|[^a-z]|[a-z+.-]+(?:[^a-z+.:-]|$)|#)/i,

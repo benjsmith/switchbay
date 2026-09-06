@@ -6,7 +6,7 @@ import {
   DecisionRow, PermissionRow, ProviderRetryRow, MicroEditFeedbackRow,
   LocalModelsCheckRow, LocalModelsDiscoveryRow,
   ReasoningRow, detectUserKind,
-  mdWithWikilinks, prettyJson, summariseInput, uploadFile,
+  handleRailWikilinkClick, mdWithWikilinks, prettyJson, summariseInput, uploadFile,
   WikiPageJump,
 } from "../rail/Rail";
 import PtyThreadSurface, { type TerminalWsApi } from "../rail/PtyThreadSurface";
@@ -307,6 +307,16 @@ export default function ZenChatBox({
       if (!prefix) return true;
       if (v.name.toLowerCase().startsWith(prefix)) return true;
       return v.aliases.some((a) => a.toLowerCase().startsWith(prefix));
+    });
+    filtered.sort((a, b) => {
+      const score = (v: VerbInfo) => {
+        const n = v.name.toLowerCase();
+        if (n === prefix) return 0;
+        if (v.aliases.some((al) => al.toLowerCase() === prefix)) return 1;
+        if (n.startsWith(prefix)) return 2 + n.length;
+        return 10 + n.length;
+      };
+      return score(a) - score(b) || a.name.localeCompare(b.name);
     });
     return filtered.slice(0, 8);
   }, [input, verbs]);
@@ -730,14 +740,7 @@ function ResponseItem({ entry: e }: { entry: RailEntry }) {
         <span
           className="sy-mdview"
           dangerouslySetInnerHTML={{ __html: mdWithWikilinks(e.text) }}
-          onClick={(ev) => {
-            const a = (ev.target as HTMLElement).closest?.("a.sy-wikilink");
-            if (!a) return;
-            ev.preventDefault();
-            window.dispatchEvent(new CustomEvent("sy:open-wiki-page", {
-              detail: { target: a.getAttribute("data-wiki") },
-            }));
-          }}
+          onClick={(ev) => { handleRailWikilinkClick(ev); }}
         />
         {!e.done && <span className="sy-rail-cursor">▋</span>}
         {e.done && e.meta && <span className="sy-rail-meta">{e.meta}</span>}

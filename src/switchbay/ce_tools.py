@@ -250,6 +250,14 @@ def _ce_ingest(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     out = cebridge.run_script("local_ingest.py", args, cwd=workspace, timeout=300.0)
     if isinstance(out, dict):
         out["ingest_prep"] = meta
+        flagged = ingest_prep.flag_raw_pdf_extractions(workspace, out)
+        if flagged:
+            out["raw_pdf_extractions"] = flagged
+            out["warning"] = (
+                "extraction looks like raw PDF bytes, not prose. "
+                "Current curiosity-engine uses pypdf; re-ingest the PDF "
+                "or run pending-multimodal. Do not cite these files."
+            )
     return out
 
 
@@ -306,7 +314,13 @@ def _ce_naming(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     extra, err = _safe_args(payload.get("args"))
     if err:
         return {"error": err}
-    return cebridge.run_script("naming.py", extra, cwd=workspace, timeout=30.0)
+    out = cebridge.run_script("naming.py", extra, cwd=workspace, timeout=30.0)
+    if isinstance(out, dict):
+        for key in ("stem", "citation_stem", "name"):
+            val = out.get(key)
+            if isinstance(val, str):
+                out[key] = ingest_prep.dedupe_citation_stem(val)
+    return out
 
 
 def _ce_tables(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:

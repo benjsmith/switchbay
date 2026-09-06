@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from switchbay.agents import ce_workers
+from switchbay.agents import evidence
 from switchbay.agents import orchestration
 from switchbay.agents import orchestration_policy as policy
 from switchbay.agents.orchestration import plan_from_decision
@@ -187,6 +188,13 @@ def test_cli_dispatches_land_on_the_dag_and_the_board():
     assert parent["blackboard_n"] == 3
     assert len(parent["blackboard_rows"]) == 3
     assert "batch_reviewer" in parent["blackboard_rows"][-1]["claim"]
+    # A later DAG sync against the (empty) shared board must keep them.
+    orchestration._sync_parent_graph(
+        parent, plan, completed=completed, failed=set(), running=running,
+        blackboard=evidence.Blackboard("run-ce"),
+    )
+    assert parent["blackboard_n"] == 3
+    assert len(parent["blackboard_rows"]) == 3
 
     ce_workers.finish_cli_dispatches(ids, running=running, terminal=completed)
     orchestration._sync_parent_graph(

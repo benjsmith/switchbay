@@ -79,6 +79,21 @@ def test_list_image_prompt():
     assert s.image_prompts == ["generate a cat wearing sunglasses"]
 
 
+def test_resolve_figure_from_ce_asset_basename(tmp_path: Path):
+    assets = tmp_path / "wiki" / "figures" / "_assets"
+    assets.mkdir(parents=True)
+    png = assets / "paper-p2.png"
+    png.write_bytes(b"\x89PNG\r\n\x1a\n")
+    md = tmp_path / "wiki" / "figures" / "fig-paper.md"
+    md.write_text(
+        "---\nasset: paper-p2.png\n---\n\n"
+        "![[figures/_assets/paper-p2.png]]\n",
+        encoding="utf-8",
+    )
+    found = slideshow_from_md.resolve_figure(tmp_path, "fig-paper")
+    assert found == png.resolve()
+
+
 def test_resolve_figure(tmp_path: Path):
     assets = tmp_path / "wiki" / "figures" / "_assets"
     assets.mkdir(parents=True)

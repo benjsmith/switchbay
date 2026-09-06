@@ -382,14 +382,23 @@ def resolve_figure(workspace: Path, ref: str | Path) -> Path | None:
             body,
             re.I,
         ):
-            add(workspace / m.group(1))
-            add(workspace / "wiki" / m.group(1))
+            rel = m.group(1).strip()
+            add(workspace / rel)
+            add(workspace / "wiki" / rel)
+            add(workspace / "wiki" / "figures" / "_assets" / Path(rel).name)
+            add(workspace / "wiki" / "figures" / Path(rel).name)
+        for m in re.finditer(r"!\[\[([^\]]+)\]\]", body):
+            rel = m.group(1).strip().split("|", 1)[0]
+            add(workspace / "wiki" / rel)
+            add(workspace / rel)
+            add(workspace / "wiki" / "figures" / "_assets" / Path(rel).name)
         for m in re.finditer(r"!\[.*?\]\(([^)]+)\)", body):
             p = m.group(1).strip()
             add(workspace / p)
             add(workspace / "wiki" / p)
             if not p.startswith("figures"):
                 add(workspace / "wiki" / "figures" / p)
+            add(workspace / "wiki" / "figures" / "_assets" / Path(p).name)
 
     for c in candidates:
         try:

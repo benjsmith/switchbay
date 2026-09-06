@@ -958,6 +958,49 @@ def plan_from_decision(
             features=decision.features,
             decision={**decision.to_dict(), "task_kind": "curation"},
         )
+    if task_kind == "deck":
+        from ..kernel.packages import SLIDESHOW_ID, slideshow_tools_for
+        # Package tools, not the RAM rail palette. create_slideshow stays
+        # even on ram16/4B; compact retrieve on small local, full on 27B
+        # and HTTP (Copilot).
+        local = (
+            policy.provider_category(str(curator_provider or "")) == "local"
+            or str(curator_provider or "") in policy.LOCAL_PROVIDER_IDS
+        )
+        node = PlanNode(
+            node_id="deck",
+            kind="synthesize",
+            objective=objective,
+            role=SLIDESHOW_ID,
+            difficulty="hard",
+            ladder_hint="hard",
+            tools=list(slideshow_tools_for(
+                local=local, model_hint=str(curator_model or ""),
+            )),
+            graph_access="read",
+            independence="low",
+            output_contract="synthesis",
+            provider=curator_provider,
+            model=curator_model,
+            harness=curator_harness,
+        )
+        return OrchestrationPlan(
+            orchestration_id=oid,
+            strategy="deck",
+            nodes=[node],
+            objective=objective,
+            preference=decision.preference,
+            features=decision.features,
+            decision={**decision.to_dict(), "task_kind": "deck"},
+        )
+    if decision.strategy == "fast_lookup" or str(
+        getattr(decision, "arm_id", "") or ""
+    ) == "fast_lookup":
+        p = plan_single(objective, orchestration_id=oid, preference=decision.preference)
+        p.strategy = "fast_lookup"
+        p.decision = decision.to_dict()
+        p.features = decision.features
+        return p
     plain_single = (
         decision.strategy == "single"
         and not decision.include_verify
@@ -1242,7 +1285,7 @@ def checkpoint_resumable(status: dict[str, Any] | None) -> bool:
     if not isinstance(status, dict):
         return False
     phase = str(status.get("phase") or "")
-    if phase in ("completed", "cancelled"):
+    if phase in ("completed", "cancelled", "quiet"):
         return False
     return True
 
@@ -1519,6 +1562,22 @@ def load_plan(workspace: Path, orchestration_id: str) -> OrchestrationPlan | Non
 _MAX_HANDOFFS = 80
 CHIEF_ID = "chief"
 BLACKBOARD_ID = "blackboard"
+# Worker contracts that are coordination material, not chat. Their
+# JSON (and tool traces) belong on the blackboard / Agent Space, not
+# the parent rail transcript.
+_RAIL_HIDDEN_CONTRACTS = frozenset({"findings", "verification", "reduction"})
+
+
+def node_hides_from_rail(node: PlanNode) -> bool:
+    """True when this node's output should not become rail chat.
+
+    Investigators are instructed to reply with ONLY a findings JSON
+    object. Streaming that onto the parent thread looked like a dump.
+    The synthesizer/curator is the voice the user hired.
+    """
+    return (node.output_contract or "") in _RAIL_HIDDEN_CONTRACTS
+
+
 # Rows carried on the parent record so the dashboard can show what is
 # actually on the board. The counters alone read as broken when they sit
 # at zero — the content says whether that means "empty" or "not wired".
@@ -1567,6 +1626,65 @@ def blackboard_rows(bb: evidence.Blackboard) -> list[dict[str, Any]]:
         for f in bb.findings
     ]
     return rows[-_MAX_BLACKBOARD_ROWS:]
+
+
+def _merge_blackboard_rows(
+    existing: Any,
+    from_bb: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Union by row id. Blackboard findings overwrite; extras stay.
+
+    CE workers publish dispatch/handback rows onto the parent against a
+    throwaway Blackboard. A later ``_sync_parent_graph(..., blackboard=bb)``
+    used to *replace* the parent list with ``bb.findings``, which wiped
+    those rows and left the dashboard empty for the rest of the run.
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+
+    def _add(row: Any) -> None:
+        if not isinstance(row, dict):
+            return
+        rid = str(row.get("id") or "").strip()
+        if not rid:
+            rid = f"anon-{len(order)}"
+            row = {**row, "id": rid}
+        if rid in by_id:
+            by_id[rid] = row
+            return
+        by_id[rid] = row
+        order.append(rid)
+
+    if isinstance(existing, list):
+        for r in existing:
+            _add(r)
+    for r in from_bb:
+        _add(r)
+    return [by_id[i] for i in order][-_MAX_BLACKBOARD_ROWS:]
+
+
+def _apply_board(
+    dest: dict[str, Any],
+    blackboard: evidence.Blackboard | None,
+    extra_rows: Any = None,
+) -> None:
+    """Project the live board (+ any published extras) onto a dashboard dict."""
+    from_bb = blackboard_rows(blackboard) if blackboard is not None else []
+    seed = extra_rows if extra_rows is not None else dest.get("blackboard_rows")
+    rows = _merge_blackboard_rows(seed, from_bb)
+    dest["blackboard_rows"] = rows
+    dest["blackboard_n"] = len(rows)
+    dest["candidate_findings_n"] = sum(
+        1 for r in rows if str(r.get("verdict") or "") == "candidate"
+    )
+    src_n = blackboard.unique_source_count() if blackboard is not None else 0
+    dest["unique_sources"] = src_n or sum(int(r.get("sources") or 0) for r in rows)
+    if blackboard is not None:
+        v = blackboard.latest_verification()
+        if v is not None:
+            dest["verification_conflicts"] = v.conflicts
+            dest["verifier_confidence"] = v.confidence
+            dest["unsupported_rejected"] = v.unsupported
 
 
 def publish_blackboard_row(
@@ -1678,21 +1796,34 @@ def standing_org_view(
     results: dict[str, dict[str, Any]],
     blackboard: evidence.Blackboard | None = None,
     running: set[str] | None = None,
+    extra_rows: Any = None,
+    full: bool = False,
 ) -> dict[str, Any]:
-    """Desk roster: successful + currently running nodes, no errors.
+    """Desk roster.
 
-    Pending nodes that never started are omitted so the standing org
-    is what the chief actually found effective, not the first draft.
+    Default: successful + currently running nodes, no errors. Pending
+    nodes that never started are omitted so a finished wave shows what
+    the chief actually found effective.
+
+    ``full=True`` (Stop): keep the whole planned DAG at rest so Start
+    can resume it. Dropped only on dismiss.
     """
     running = running or set()
     nodes: list[dict[str, Any]] = []
     for n in plan.nodes:
-        if n.node_id in failed:
-            continue
-        if n.node_id not in completed and n.node_id not in running:
-            continue
         rec = results.get(n.node_id) if isinstance(results, dict) else None
         rec = rec if isinstance(rec, dict) else {}
+        if full:
+            if n.node_id in completed:
+                status = "done"
+            else:
+                status = "idle"
+        else:
+            if n.node_id in failed:
+                continue
+            if n.node_id not in completed and n.node_id not in running:
+                continue
+            status = "done" if n.node_id in completed else "running"
         nodes.append({
             "node_id": n.node_id,
             "kind": n.kind,
@@ -1701,23 +1832,18 @@ def standing_org_view(
             "objective": (n.objective or "")[:200],
             "provider": rec.get("provider") or n.provider,
             "model": rec.get("model") or n.model,
-            "status": "done" if n.node_id in completed else "running",
+            "status": status,
         })
-    return {
+    view: dict[str, Any] = {
         "orchestration_id": plan.orchestration_id,
         "strategy": plan.strategy,
         "objective": (plan.objective or "")[:400],
         "decision_reason": live_org_summary(plan, failed=failed),
         "arm_reason": (plan.decision or {}).get("reason") if isinstance(plan.decision, dict) else None,
         "nodes": nodes,
-        "blackboard_n": len(blackboard.findings) if blackboard is not None else 0,
-        "candidate_findings_n": (
-            len(blackboard.candidates()) if blackboard is not None else 0
-        ),
-        "unique_sources": (
-            blackboard.unique_source_count() if blackboard is not None else 0
-        ),
     }
+    _apply_board(view, blackboard, extra_rows=extra_rows)
+    return view
 
 
 def _sync_parent_graph(
@@ -1753,15 +1879,7 @@ def _sync_parent_graph(
         ),
     )
     if blackboard is not None:
-        parent["blackboard_n"] = len(blackboard.findings)
-        parent["candidate_findings_n"] = len(blackboard.candidates())
-        parent["unique_sources"] = blackboard.unique_source_count()
-        parent["blackboard_rows"] = blackboard_rows(blackboard)
-        v = blackboard.latest_verification()
-        if v is not None:
-            parent["verification_conflicts"] = v.conflicts
-            parent["verifier_confidence"] = v.confidence
-            parent["unsupported_rejected"] = v.unsupported
+        _apply_board(parent, blackboard)
 
 
 def _append_handoff(
@@ -2232,6 +2350,8 @@ async def _run_pi_package_node(
     )
     await _broadcast(app, protocol.run_started(
         thread_id, run_id, pid, str(model_s), str(workspace),
+        parent_run_id=parent_run_id, node_kind=node.kind,
+        hide_from_rail=node_hides_from_rail(node),
     ))
     pkg_id = CURATOR_ID if node.role == "curator" else (node.role or node.kind)
     pkg = get_package(pkg_id)
@@ -2322,11 +2442,28 @@ async def _run_agent_node(
         workspace=workspace, provider=str(pid), model=str(model_s),
         excerpt=node.objective, node=node, worker_index=worker_index,
     )
+    hide_rail = node_hides_from_rail(node)
     await _broadcast(app, protocol.run_started(
         thread_id, run_id, pid, str(model_s), str(workspace),
+        parent_run_id=parent_run_id, node_kind=node.kind,
+        hide_from_rail=hide_rail,
     ))
-    _persist_event(
-        app, workspace, thread_id, "system",
+
+    def _persist(kind: str, summary: str, **kw: Any) -> None:
+        payload = kw.get("payload")
+        extra: dict[str, Any] = dict(payload) if isinstance(payload, dict) else {}
+        if hide_rail:
+            extra["hide_from_rail"] = True
+            extra["parent_run_id"] = parent_run_id
+            extra["node_kind"] = node.kind
+        if extra:
+            kw["payload"] = extra
+        _persist_event(
+            app, workspace, thread_id, kind, summary, **kw,
+        )
+
+    _persist(
+        "system",
         f"{node.kind} {node.node_id} on {pid}/{model_s}",
         source="orchestration", actor=str(pid), run_id=run_id,
     )
@@ -2336,10 +2473,26 @@ async def _run_agent_node(
     allow_exec = node.kind == "execute"
     allow_synth = node.kind == "synthesize"
     allow_curate = allow_synth and node.role == "curator"
-    from ..kernel.packages import get_package as _pkg_for_tools
+    from ..kernel.packages import (
+        SLIDESHOW_ID as _SLIDESHOW_ID,
+        get_package as _pkg_for_tools,
+        slideshow_tools_for as _slideshow_tools_for,
+    )
     _hired = _pkg_for_tools(node.role)
+    is_local = (
+        policy.provider_category(str(pid)) == "local"
+        or str(pid) in policy.LOCAL_PROVIDER_IDS
+    )
+    deck_compact = False
     if _hired is not None and node.role != "curator":
         requested = list(node.tools or _hired.tools)
+        if node.role == _SLIDESHOW_ID:
+            deck_tools = list(_slideshow_tools_for(
+                local=is_local, model_hint=str(model_s or ""),
+            ))
+            deck_compact = is_local and tuple(deck_tools) != tuple(_hired.tools)
+            allowed = set(deck_tools)
+            requested = [t for t in requested if t in allowed] or deck_tools
         tool_names = [t for t in requested if t in _hired.tools]
     else:
         tool_names = (
@@ -2352,7 +2505,13 @@ async def _run_agent_node(
             if node.tools or node.graph_access == "read" or allow_exec or allow_synth
             else []
         )
-    tool_specs = rail_default.compile_tool_specs(tool_names) if tool_names else None
+    tool_specs = (
+        rail_default.compile_tool_specs(
+            tool_names,
+            local=deck_compact,
+            skip_strong=node.role != _SLIDESHOW_ID,
+        ) if tool_names else None
+    )
     snap = load_snapshot(workspace, parent_run_id)
     live = load_node_live(workspace, parent_run_id, node.node_id)
     resume_session = str((live or {}).get("session_id") or "") or None
@@ -2378,6 +2537,8 @@ async def _run_agent_node(
     reports_landed = 0
     if node.role == "curator":
         max_turns = 24
+    elif node.role == "slideshow":
+        max_turns = 12
     elif tool_names:
         max_turns = 6
     else:
@@ -2456,6 +2617,7 @@ async def _run_agent_node(
         )
         assistant_blocks: list[dict[str, Any]] = []
         current = ""
+        reasoning_text = ""
         msg_id: str | None = None
         stop: str | None = None
         from . import orchestration_health as health
@@ -2467,6 +2629,28 @@ async def _run_agent_node(
             raise llmgateway.ProviderError(
                 blob.strip()[:400],
                 code="rate-limit" if kind in ("weekly_limit", "rate") else "http",
+            )
+
+        async def _flush_reasoning() -> None:
+            nonlocal reasoning_text
+            rzn = reasoning_text.strip()
+            reasoning_text = ""
+            if not rzn:
+                return
+            rid = protocol.new_message_id()
+            await _broadcast(app, protocol.reasoning(run_id, rid, rzn))
+            _persist(
+                "reasoning", rzn[:280],
+                source="assistant", actor="reasoning",
+                payload={"text": rzn[:24_000]},
+                run_id=run_id,
+            )
+
+        def _persist_assistant(text: str) -> None:
+            _persist(
+                "assistant", text[:2000],
+                source="assistant", actor="assistant", run_id=run_id,
+                payload={"text": text[:24_000]},
             )
 
         async for ev in provider.chat_stream(req):
@@ -2488,21 +2672,21 @@ async def _run_agent_node(
                 )
                 _flush_live(activity=current[-120:].lstrip())
             elif isinstance(ev, llmgateway.ReasoningChunk):
+                reasoning_text += ev.text or ""
                 _touch_child(
                     app, run_id, parent_run_id,
-                    activity="💭 " + (ev.text or "")[-110:].lstrip(),
+                    activity="💭 " + reasoning_text[-110:].lstrip(),
                 )
+                _flush_live(activity="💭 " + reasoning_text[-110:].lstrip())
             elif isinstance(ev, llmgateway.ToolUseChunk):
+                await _flush_reasoning()
                 if msg_id is not None:
                     await _broadcast(app, protocol.text_message_end(run_id, msg_id))
                     msg_id = None
                 if current:
                     assistant_blocks.append({"type": "text", "text": current})
                     text_parts.append(current)
-                    _persist_event(
-                        app, workspace, thread_id, "assistant", current[:2000],
-                        source="assistant", actor="assistant", run_id=run_id,
-                    )
+                    _persist_assistant(current)
                     current = ""
                 assistant_blocks.append({
                     "type": "tool_use", "id": ev.id, "name": ev.name, "input": ev.input,
@@ -2518,8 +2702,8 @@ async def _run_agent_node(
                 ))
                 await _broadcast(app, protocol.tool_call_end(run_id, ev.id))
                 is_ours = ev.name in tools.REGISTRY
-                _persist_event(
-                    app, workspace, thread_id, "tool_use",
+                _persist(
+                    "tool_use",
                     f"{ev.name}({preview})",
                     source="rail" if is_ours else f"agent:{pid}",
                     actor=ev.name,
@@ -2548,14 +2732,12 @@ async def _run_agent_node(
                 _bump_io(app, run_id, parent_run_id, io_mode="idle")
                 _flush_live()
                 break
+        await _flush_reasoning()
         if current:
             _abort_if_outage(current)
             assistant_blocks.append({"type": "text", "text": current})
             text_parts.append(current)
-            _persist_event(
-                app, workspace, thread_id, "assistant", current[:2000],
-                source="assistant", actor="assistant", run_id=run_id,
-            )
+            _persist_assistant(current)
         if msg_id is not None:
             await _broadcast(app, protocol.text_message_end(run_id, msg_id))
         return stop, assistant_blocks
@@ -2614,10 +2796,10 @@ async def _run_agent_node(
                     await _broadcast(app, protocol.tool_call_result(
                         run_id, tid, protocol.new_message_id(), err, False,
                     ))
-                    _persist_event(
-                        app, workspace, thread_id, "tool_result", err[:240],
+                    _persist(
+                        "tool_result", err[:240],
                         source="rail", actor=tname, ref_id=tid, run_id=run_id,
-                        payload={"ok": False},
+                        payload={"ok": False, "content": err[:8_000]},
                     )
                     continue
                 _touch_child(
@@ -2642,10 +2824,10 @@ async def _run_agent_node(
                         run_id, tid, protocol.new_message_id(),
                         payload[:240], True,
                     ))
-                    _persist_event(
-                        app, workspace, thread_id, "tool_result", payload[:240],
+                    _persist(
+                        "tool_result", payload[:240],
                         source="rail", actor=tname, ref_id=tid, run_id=run_id,
-                        payload={"ok": True},
+                        payload={"ok": True, "content": payload[:8_000]},
                     )
                     _touch_child(
                         app, run_id, parent_run_id,
@@ -2667,10 +2849,10 @@ async def _run_agent_node(
                     await _broadcast(app, protocol.tool_call_result(
                         run_id, tid, protocol.new_message_id(), err, False,
                     ))
-                    _persist_event(
-                        app, workspace, thread_id, "tool_result", err[:240],
+                    _persist(
+                        "tool_result", err[:240],
                         source="rail", actor=tname, ref_id=tid, run_id=run_id,
-                        payload={"ok": False},
+                        payload={"ok": False, "content": err[:8_000]},
                     )
                     _touch_child(
                         app, run_id, parent_run_id,
@@ -2704,16 +2886,16 @@ async def _run_agent_node(
             await _broadcast(app, protocol.run_error(
                 run_id, "provider", error, thread_id,
             ))
-            _persist_event(
-                app, workspace, thread_id, "system", error[:400],
+            _persist(
+                "system", error[:400],
                 source="orchestration", actor=str(pid), run_id=run_id,
             )
         else:
             error = raw
             log.exception("node %s crashed", node.node_id)
             await _broadcast(app, protocol.run_error(run_id, "server", error, thread_id))
-            _persist_event(
-                app, workspace, thread_id, "system", error[:400],
+            _persist(
+                "system", error[:400],
                 source="orchestration", actor=str(pid), run_id=run_id,
             )
 
@@ -2731,8 +2913,8 @@ async def _run_agent_node(
             await _broadcast(app, protocol.run_error(
                 run_id, "provider", error, thread_id,
             ))
-            _persist_event(
-                app, workspace, thread_id, "system", error[:400],
+            _persist(
+                "system", error[:400],
                 source="orchestration", actor=str(pid), run_id=run_id,
             )
     if cli_dispatched:
@@ -3228,6 +3410,8 @@ async def execute(
                     blackboard=ck["blackboard"], telemetry={"cancelled": True, "resumed": True},
                     cancelled=True, error="cancelled",
                 )
+            # ``quiet`` is Stop: not auto-resumed on boot, but Start
+            # resumes the same DAG (completed nodes skipped).
             if str(st.get("phase") or "") == "completed":
                 already_done = True
             completed = set(str(x) for x in (st.get("completed") or []) if x)
@@ -3997,14 +4181,20 @@ async def execute(
                 await _broadcast(app, protocol.step_started(
                     parent_run_id, parent["step"],
                 ))
-            raw = await asyncio.gather(
-                *[_run_one(n) for n in batch], return_exceptions=True,
-            )
-            for node, rec in zip(batch, raw):
+
+            async def _record(node: PlanNode, rec: Any) -> None:
+                nonlocal cancelled
                 if isinstance(rec, asyncio.CancelledError):
                     cancelled = True
-                    failed.add(node.node_id)
-                    continue
+                    # Stop leaves in-flight nodes pending so Start
+                    # retries them. Dismiss / crash still fail them.
+                    if not (
+                        parent
+                        and parent.get("user_cancel")
+                        and not parent.get("user_dismiss")
+                    ):
+                        failed.add(node.node_id)
+                    return
                 if isinstance(rec, BaseException):
                     rec = {
                         "node_id": node.node_id, "kind": node.kind, "ok": False,
@@ -4013,6 +4203,98 @@ async def execute(
                     }
                 _ingest(node, rec)
                 await _ingest_handoff(node, rec)
+
+            def _flush_board(*, running: set[str]) -> None:
+                bb.persist(artifact_dir(workspace, parent_run_id) / "blackboard.json")
+                if parent is not None:
+                    _sync_parent_graph(
+                        parent, plan, completed=completed, failed=failed,
+                        running=running, blackboard=bb,
+                    )
+                persist_checkpoint(
+                    workspace, parent_run_id,
+                    phase=(
+                        "cancelled" if parent and parent.get("user_dismiss")
+                        else "quiet" if parent and parent.get("user_cancel")
+                        else "cancelled" if cancelled
+                        else "running"
+                    ),
+                    completed=completed, failed=failed, expansions=expansions,
+                    results=results_by_id,
+                    elapsed_s=elapsed_prior + (time.time() - started),
+                    thread_id=thread_id,
+                    extra=_live_extra(),
+                )
+                try:
+                    if parent is not None and parent.get("user_dismiss"):
+                        pass
+                    else:
+                        stopping = bool(
+                            parent
+                            and parent.get("user_cancel")
+                            and not parent.get("user_dismiss")
+                        )
+                        view = standing_org_view(
+                            plan, completed=completed, failed=failed,
+                            results=results_by_id, blackboard=bb,
+                            running=set() if stopping else running,
+                            extra_rows=(parent or {}).get("blackboard_rows"),
+                            full=stopping,
+                        )
+                        if view.get("nodes"):
+                            orchestrator_fs.save_org(workspace, view)
+                except OSError:
+                    log.debug("standing org save failed", exc_info=True)
+
+            task_of = {asyncio.create_task(_run_one(n)): n for n in batch}
+            pending: set[asyncio.Task[Any]] = set(task_of)
+
+            async def _reap_pending() -> None:
+                leftover = [t for t in pending if not t.done()]
+                for t in leftover:
+                    t.cancel()
+                if leftover:
+                    await asyncio.wait(leftover)
+                for t in list(pending):
+                    node = task_of[t]
+                    try:
+                        rec = t.result()
+                    except BaseException as exc:  # noqa: BLE001
+                        rec = exc
+                    await _record(node, rec)
+                pending.clear()
+
+            try:
+                while pending:
+                    done, pending = await asyncio.wait(
+                        pending, return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for t in done:
+                        node = task_of[t]
+                        try:
+                            rec = t.result()
+                        except BaseException as exc:  # noqa: BLE001
+                            rec = exc
+                        await _record(node, rec)
+                    if cancelled and pending:
+                        await _reap_pending()
+                    _flush_board(running={task_of[t].node_id for t in pending})
+                    if cancelled:
+                        break
+            except asyncio.CancelledError:
+                # Parent Stop/crash: asyncio.wait does not cancel siblings.
+                me = asyncio.current_task()
+                depth = me.cancelling() if me is not None else 0
+                if me is not None:
+                    while me.cancelling():
+                        me.uncancel()
+                try:
+                    await _reap_pending()
+                finally:
+                    if me is not None:
+                        for _ in range(depth):
+                            me.cancel()
+                raise
 
             # Adaptive expansion after a verify wave, before synthesize.
             just_verified = [n for n in batch if n.kind == "verify"]
@@ -4048,30 +4330,7 @@ async def execute(
                         "orchestration %s expand +%d (%s)",
                         parent_run_id, len(added), exp.reason,
                     )
-            bb.persist(artifact_dir(workspace, parent_run_id) / "blackboard.json")
-            if parent is not None:
-                _sync_parent_graph(
-                    parent, plan, completed=completed, failed=failed,
-                    running=set(), blackboard=bb,
-                )
-            persist_checkpoint(
-                workspace, parent_run_id,
-                phase="cancelled" if cancelled else "running",
-                completed=completed, failed=failed, expansions=expansions,
-                results=results_by_id,
-                elapsed_s=elapsed_prior + (time.time() - started),
-                thread_id=thread_id,
-                extra=_live_extra(),
-            )
-            try:
-                view = standing_org_view(
-                    plan, completed=completed, failed=failed,
-                    results=results_by_id, blackboard=bb,
-                )
-                if view.get("nodes"):
-                    orchestrator_fs.save_org(workspace, view)
-            except OSError:
-                log.debug("standing org save failed", exc_info=True)
+                    _flush_board(running=set())
             if cancelled:
                 break
     except asyncio.CancelledError:
@@ -4079,7 +4338,8 @@ async def execute(
         if user_kill:
             cancelled = True
             error = "cancelled"
-            phase = "cancelled"
+            dismissing = bool(parent.get("user_dismiss")) if parent is not None else False
+            phase = "cancelled" if dismissing else "quiet"
         else:
             cancelled = False
             error = "interrupted (process stop)"
@@ -4192,19 +4452,29 @@ async def execute(
         "elapsed_prior_s": elapsed_prior,
         "byok_approved": byok_approved,
     }
+    user_dismiss = bool(parent and parent.get("user_dismiss"))
+    user_stop = bool(parent and parent.get("user_cancel") and not user_dismiss)
+    if cancelled:
+        end_phase = "cancelled" if user_dismiss or not user_stop else "quiet"
+    elif produced and not error:
+        end_phase = "completed"
+    else:
+        end_phase = "interrupted"
     persist_checkpoint(
         workspace, parent_run_id,
-        phase="cancelled" if cancelled else ("completed" if produced and not error else "interrupted"),
+        phase=end_phase,
         completed=completed, failed=failed, expansions=expansions,
         results=results_by_id,
         elapsed_s=float(tel["latency_s"]),
         thread_id=thread_id, extra=_live_extra(),
     )
-    if not cancelled:
+    if not user_dismiss:
         try:
             view = standing_org_view(
                 plan, completed=completed, failed=failed,
                 results=results_by_id, blackboard=bb,
+                extra_rows=(parent or {}).get("blackboard_rows"),
+                full=user_stop,
             )
             if view.get("nodes"):
                 orchestrator_fs.save_org(workspace, view)

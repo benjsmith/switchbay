@@ -1494,10 +1494,15 @@ function PiHarnessPanel({
     <section className="sy-settings-section">
       <h3 className="sy-settings-h">Optional harness · Pi</h3>
       <p className="sy-settings-blurb">
-        Pi is an optional PATH binary for hired specialists (same job as
-        the rail or Grok Build). It is not the chat rail, not a picker
-        row, and not a lockfile pin. Install the <code>pi</code> CLI
-        yourself, or set <code>SWITCHBAY_PI</code>.
+        Turns on the <code>pi</code> CLI as a harness for hired specialist
+        nodes — the same class of coding-agent CLI as Claude Code, Codex,
+        or Grok Build. Switch Bay will not stack Pi on top of a signed-in
+        CLI: those keep using their own harness. Pi is the alternative
+        when a local model or an API key is doing the work instead.
+        The rail stays the chat and HTTP tool loop; Pi only runs the
+        hired package, then hands the result back. Install{" "}
+        <code>pi</code> yourself or set <code>SWITCHBAY_PI</code>. Not a
+        lockfile pin.
       </p>
       <div className="sy-settings-perm-row">
         <span>
@@ -3879,7 +3884,10 @@ function OrchestrationPolicyPanel({ open }: { open: boolean }) {
       <p className="sy-settings-blurb">
         The rail preference (Economy → Maximum) sets how much extra
         quality Auto may buy — cost and latency weights, not a worker
-        count. Agent count is an outcome of the chosen policy. This
+        count. Simple wiki questions retrieve first and synthesize on
+        a fast model; Economy may skip the strong-model check,
+        Maximum spends a few tokens tightening the answer. Agent
+        count is an outcome of the chosen policy. This
         workspace keeps its own recipe weights (which DAG to buy for
         similar tasks) and last-good provider roster. Other vaults
         do not share that memory. It cannot raise hard safety bounds.

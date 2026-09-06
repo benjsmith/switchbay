@@ -97,7 +97,7 @@ export default function HelpModal({ open, onClose }: Props) {
               Settings → Task models.
             </dd>
             <dt><code>/name </code><span className="sy-help-dim">args</span></dt>
-            <dd>A slash command (e.g. <code>/plot</code>, <code>/sketch</code>, <code>/viewer</code>, <code>/rescan</code>, <code>/curate</code>, <code>/walkthrough</code>). Type <code>/</code> to autocomplete the list.</dd>
+            <dd>A slash command (e.g. <code>/plot</code>, <code>/work</code>, <code>/code</code>, <code>/curate</code>, <code>/walkthrough</code>). Type <code>/</code> to autocomplete the list. <code>/curate</code>, <code>/work</code>, and <code>/code</code> seat a standing desk (Agents → Desks). Asking what the wiki already knows does not. <code>/steer</code> is a silent alias of <code>/work</code>.</dd>
           </dl>
 
           <h4>The Table tab — DuckDB</h4>
@@ -173,6 +173,8 @@ export default function HelpModal({ open, onClose }: Props) {
             <dd>One conversation (or one terminal) in the Rail. Switch threads from the bar under the Rail header; each keeps its own context.</dd>
             <dt>run</dt>
             <dd>One dispatch of an agent inside a thread — what the Agents panel at the bottom tracks live.</dd>
+            <dt>desk</dt>
+            <dd>A reused chief for a kind of work (Curate, Work, Code, Deck, Auto). Working while a wave is live, quiet after Stop, dismissed when you drop it. Start / Edit / Dismiss / Schedule live on Agents → Desks.</dd>
             <dt>sources / provenance</dt>
             <dd>Where a wiki page came from (<code>extracted_from</code>). The Browser's bottom pane has a Sources view of external origins; extracted pages show a "from …" chip.</dd>
             <dt>watch folder</dt>

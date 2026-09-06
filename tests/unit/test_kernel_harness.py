@@ -283,6 +283,182 @@ def test_pi_argv_mlx_provider(tmp_path: Path):
     assert env["SWITCHBAY_MLX_MODEL"] == "default_model"
 
 
+def test_spawn_env_path_includes_homebrew(tmp_path: Path, monkeypatch):
+    from switchbay.kernel.harness_pi import enrich_path, shebang_wants_node
+    brew = tmp_path / "opt" / "homebrew" / "bin"
+    brew.mkdir(parents=True)
+    env = {"PATH": "/usr/bin:/bin"}
+    enrich_path(env, extra_dirs=(str(brew),))
+    assert str(brew) in env["PATH"].split(":")
+    assert env["PATH"].startswith(str(brew))
+    script = tmp_path / "pi"
+    script.write_text("#!/usr/bin/env node\nconsole.log(1)\n", encoding="utf-8")
+    assert shebang_wants_node(str(script)) is True
+    bin_py = tmp_path / "python"
+    bin_py.write_bytes(b"\x7fELFnotashebang")
+    assert shebang_wants_node(str(bin_py)) is False
+
+
+def test_cancel_ce_runs_sets_user_cancel(tmp_path: Path):
+    from switchbay.daemon import _cancel_ce_runs
+
+    class _Task:
+        def __init__(self) -> None:
+            self.cancelled = False
+        def done(self) -> bool:
+            return False
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    task = _Task()
+    rec = {
+        "run_id": "run-1",
+        "command": "code",
+        "task": task,
+        "workspace": str(tmp_path),
+        "input_excerpt": "[code · background] plan",
+    }
+    child = {
+        "run_id": "run-1-w1",
+        "parent_run_id": "run-1",
+        "command": "",
+        "task": _Task(),
+        "workspace": str(tmp_path),
+    }
+    app = {"runs": {"run-1": rec, "run-1-w1": child}}
+    n = _cancel_ce_runs(app, "code", workspace=tmp_path)
+    assert n >= 1
+    assert rec["user_cancel"] is True
+    assert child["user_cancel"] is True
+    assert task.cancelled is True
+
+
+def test_desk_slash_stop_is_quiet_dismiss_is_dismiss():
+    from switchbay.daemon import _desk_slash_verb, _desk_stopped_notice
+    assert _desk_slash_verb("stop") == "quiet"
+    assert _desk_slash_verb("cancel") == "quiet"
+    assert _desk_slash_verb("halt") == "quiet"
+    assert _desk_slash_verb("dismiss") == "dismiss"
+    assert _desk_slash_verb("fire") == "dismiss"
+    assert _desk_slash_verb("staff the plan") is None
+    assert _desk_slash_verb("") is None
+    assert "quiet" in _desk_stopped_notice("projects").lower()
+    assert "dismiss" in _desk_stopped_notice("projects").lower()
+    assert "/code dismiss" in _desk_stopped_notice("code")
+    assert "quiet" in _desk_stopped_notice("curation").lower()
+    assert "/curate dismiss" in _desk_stopped_notice("curation")
+    assert "deck" in _desk_stopped_notice("deck").lower()
+
+
+def test_auto_dismiss_marks_parent_and_child_dismissed(tmp_path: Path):
+    from switchbay.daemon import _desk_spec, _dismiss_desk
+    from switchbay.kernel import DESK_AUTO, STATE_DISMISSED, get, seat
+
+    class _Task:
+        def __init__(self) -> None:
+            self.cancelled = False
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    parent_t, child_t = _Task(), _Task()
+    seat(tmp_path, DESK_AUTO, chief_provider="x", chief_model="y", run_id="run-auto")
+    spec = _desk_spec("auto")
+    assert spec is not None
+    app = {
+        "runs": {
+            "run-auto": {"run_id": "run-auto", "task": parent_t},
+            "run-auto-w0": {
+                "run_id": "run-auto-w0",
+                "parent_run_id": "run-auto",
+                "task": child_t,
+            },
+        },
+    }
+    _dismiss_desk(app, spec, tmp_path)
+    rec = get(tmp_path, DESK_AUTO)
+    assert rec is not None
+    assert rec.state == STATE_DISMISSED
+    assert parent_t.cancelled is True
+    assert child_t.cancelled is True
+    assert all(r.get("user_dismiss") for r in app["runs"].values())
+    assert all(r.get("user_cancel") for r in app["runs"].values())
+
+
+def test_quiet_auto_cancels_run_and_children(tmp_path: Path):
+    from switchbay.daemon import _quiet_desk, _desk_spec
+    from switchbay.kernel import DESK_AUTO, STATE_QUIET, get, seat
+
+    class _Task:
+        def __init__(self) -> None:
+            self.cancelled = False
+        def cancel(self) -> None:
+            self.cancelled = True
+
+    parent_t, child_t = _Task(), _Task()
+    seat(tmp_path, DESK_AUTO, chief_provider="x", chief_model="y", run_id="run-auto")
+    spec = _desk_spec("auto")
+    assert spec is not None
+    assert spec["cancel"] == ()
+    app = {
+        "runs": {
+            "run-auto": {"run_id": "run-auto", "task": parent_t},
+            "run-auto-w0": {
+                "run_id": "run-auto-w0",
+                "parent_run_id": "run-auto",
+                "task": child_t,
+            },
+        },
+    }
+    n = _quiet_desk(app, spec, tmp_path)
+    rec = get(tmp_path, DESK_AUTO)
+    assert rec is not None
+    assert rec.state == STATE_QUIET
+    assert rec.run_id == "run-auto"
+    assert n >= 2
+    assert parent_t.cancelled is True
+    assert child_t.cancelled is True
+    assert app["runs"]["run-auto"]["user_cancel"] is True
+    assert app["runs"]["run-auto-w0"]["user_cancel"] is True
+
+
+def test_quiet_desk_does_not_dismiss(tmp_path: Path):
+    from switchbay.daemon import _quiet_desk, _dismiss_desk, _desk_spec
+    from switchbay.kernel import DESK_CODE, STATE_DISMISSED, STATE_QUIET, get, seat
+
+    seat(tmp_path, DESK_CODE, chief_provider="x", chief_model="y", run_id="run-1")
+    spec = _desk_spec("code")
+    assert spec is not None
+    app = {"runs": {}}
+    _quiet_desk(app, spec, tmp_path)
+    rec = get(tmp_path, DESK_CODE)
+    assert rec is not None
+    assert rec.state == STATE_QUIET
+    assert rec.run_id == "run-1"
+    _dismiss_desk(app, spec, tmp_path)
+    rec = get(tmp_path, DESK_CODE)
+    assert rec is not None
+    assert rec.state == STATE_DISMISSED
+
+
+def test_desk_slash_aliases_map_to_work():
+    from switchbay.daemon import _desk_spec, _desk_spec_from_id
+    spec = _desk_spec("steer")
+    assert spec is not None
+    assert spec["command"] == "work"
+    assert spec["slash"] == "work"
+    assert spec["task_kind"] == "projects"
+    assert _desk_spec("work")["desk_id"] == "projects"
+    assert _desk_spec_from_id("projects")["slash"] == "work"
+    assert _desk_spec("code")["command"] == "code"
+    deck = _desk_spec("deck")
+    assert deck is not None
+    assert deck["desk_id"] == "deck"
+    assert deck["task_kind"] == "deck"
+    assert deck["slash"] is None
+    assert _desk_spec_from_id("deck")["command"] == "deck"
+    assert _desk_spec("curate")["task_kind"] == "curation"
+
+
 @pytest.mark.asyncio
 async def test_pi_cancel_reaps_process(tmp_path: Path, monkeypatch):
     import os

@@ -363,12 +363,19 @@ def new_message_id() -> str:
 
 def run_started(
     thread_id: str, run_id: str, provider: str, model: str, workspace: str,
+    *,
+    parent_run_id: str | None = None,
+    node_kind: str | None = None,
+    hide_from_rail: bool = False,
 ) -> dict[str, Any]:
     # `workspace` lets the rail ignore live events for runs that belong
     # to another workspace (the rail is strictly per-workspace; the
     # Agent Dashboard is the cross-workspace surface). Later frames of
     # a foreign run are dropped by runId (foreignRunsRef).
-    return {
+    # `hide_from_rail` marks DAG workers whose contract is structured
+    # findings JSON — Agent Space still shows them; the parent rail
+    # does not dump that JSON as chat.
+    ev: dict[str, Any] = {
         "type": "RUN_STARTED",
         "threadId": thread_id,
         "runId": run_id,
@@ -376,6 +383,13 @@ def run_started(
         "model": model,
         "workspace": workspace,
     }
+    if parent_run_id:
+        ev["parent_run_id"] = parent_run_id
+    if node_kind:
+        ev["node_kind"] = node_kind
+    if hide_from_rail:
+        ev["hide_from_rail"] = True
+    return ev
 
 
 def run_finished(

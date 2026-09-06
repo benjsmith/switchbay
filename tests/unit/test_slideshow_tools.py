@@ -22,17 +22,32 @@ def test_slideshow_tools_replace_sketch_decks():
 
 def test_create_slideshow_writes_package(tmp_path: Path):
     out = tools.REGISTRY["create_slideshow"].handler(tmp_path, {
-        "title": "Demo talk",
+        "title": "A sentence used to be one vector",
+        "slug": "demo-talk",
         "slides": [
-            {"layout": "title", "heading": "Hello"},
-            {"layout": "bullets", "heading": "Points", "bullets": ["one"]},
+            {
+                "layout": "title",
+                "heading": "A sentence used to be one vector",
+                "lede": "That bottleneck is why attention exists.",
+            },
+            {
+                "layout": "quote",
+                "heading": "2014",
+                "quote": "We conjecture that the use of a fixed-length vector is a bottleneck.",
+                "quote_attr": "Bahdanau, Cho & Bengio",
+            },
+            {
+                "layout": "close",
+                "heading": "The kernel changed.",
+                "lede": "The math of attention did not change in 2022.",
+            },
         ],
     })
-    assert out["ok"]
+    assert out["ok"], out
     assert out["slug"] == "demo-talk"
     html = (tmp_path / "slideshows" / "demo-talk" / "index.html").read_text(
         encoding="utf-8",
     )
-    assert "Hello" in html
+    assert "That bottleneck is why attention exists." in html
     assert "@page{size:13.333in 7.5in;margin:0}" in html
     assert "page-break-after:always" in html

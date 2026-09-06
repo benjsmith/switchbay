@@ -44,6 +44,17 @@ def test_run_started_always_carries_workspace():
     )
     assert ev["workspace"] == "/tmp/hedge-desk"
     assert ev["runId"] == "run-1"
+    assert "hide_from_rail" not in ev
+
+
+def test_run_started_marks_hidden_dag_workers():
+    ev = protocol.run_started(
+        "tid-1", "run-1-inv-0", "grok-build", "grok-4.6", "/tmp/hedge-desk",
+        parent_run_id="run-1", node_kind="investigate", hide_from_rail=True,
+    )
+    assert ev["parent_run_id"] == "run-1"
+    assert ev["node_kind"] == "investigate"
+    assert ev["hide_from_rail"] is True
 
 
 def test_is_focused_workspace_compares_resolved_paths(tmp_path: Path):

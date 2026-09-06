@@ -36,14 +36,17 @@ const SlideCard = Type.Object({
 
 const Slide = Type.Object({
   heading: S("Slide heading (required)"),
-  layout: OptS("title | media | split | cards | bullets | close"),
+  layout: OptS("title | quote | stats | chart | compare | timeline | table | cards | bullets | split | media | close"),
   id: OptS("Optional slide id"),
   eyebrow: OptS("Small kicker above the heading"),
-  lede: OptS("One-sentence lede"),
+  lede: OptS("One-sentence thesis or lede"),
   bullets: Type.Optional(Type.Array(Type.String(), { description: "Bullet lines" })),
   cards: Type.Optional(Type.Array(SlideCard, { description: "Card objects" })),
   media: OptS("Workspace-relative media path"),
   media_kind: OptS("image | video"),
+  figure: OptS("Wiki figure stem to embed"),
+  image_prompt: OptS("Generate a figure from this prompt"),
+  wiki_table: OptS("wiki/tables/tbl-* stem; inlined as a table"),
   cite: OptS("vault/ or wiki/ citation path"),
   notes: OptS("Speaker notes"),
 });
@@ -202,7 +205,7 @@ const TOOLS: ToolSpec[] = [
   {
     name: "create_slideshow",
     description:
-      "Write an HTML slideshow under slideshows/<slug>/. title and slides[] required; every slide needs heading.",
+      "Write an HTML slideshow under slideshows/<slug>/. title and slides[] required; every slide needs heading; title needs a lede; inline wiki_table or a figure; close is the takeaway not wiki metadata.",
     parameters: Type.Object({
       title: S("Deck title"),
       slides: Type.Array(Slide, { description: "6–8 visual slides; each object needs heading" }),

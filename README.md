@@ -27,6 +27,8 @@ and nothing leaves unless you send it.
 - **[Auto orchestration](docs/concepts-and-data-flow.md#data-flow-3--auto-orchestration-and-fan-out)**
   — chooses one Run or an adaptive multi-agent DAG for complex, long-running
   work; independent workers can use different available models and providers.
+  Named desks (`/curate`, `/work`, `/code`, one Deck for HTML slideshows)
+  reuse a chief across waves; wiki lookup questions do not seat.
 - **Two cockpits** — **Power** mode (3-column: browser · tabs · rail) and
   **Zen** mode (think *at* the graph). Same data, your choice. Optional
   **VS Code** install (no always-on daemon): [`docs/vscode.md`](docs/vscode.md).

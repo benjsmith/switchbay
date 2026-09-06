@@ -1,22 +1,29 @@
 """Tiny orchestrator kernel: hire, desk lifetime, harness plugs.
 
 The kernel is not the rail chat partner. It seats a chief on the rail
-picker, prices extra specialists, and stands a desk down only on Stop.
+picker, prices extra specialists, and quiets a desk when a wave ends
+or the user stops it. Dismiss is explicit.
 """
 
 from .desk import (
     DESK_AUTO,
     DESK_CODE,
     DESK_CURATE,
+    DESK_DECK,
+    DESK_INFO,
     DESK_PROJECTS,
     STATE_DISMISSED,
     STATE_QUIET,
     STATE_WORKING,
     DeskRecord,
+    choose_desk,
     dismiss,
     dismiss_run,
     get,
+    list_standing,
+    looks_like_deck,
     quiet,
+    quiet_run,
     seat,
     set_working,
     window_ended,
@@ -24,7 +31,8 @@ from .desk import (
 from .harness import NodeRequest, NodeResult, pi_available, pick_harness, run_node
 from .hire import (
     HireDecision, HireRequest, decide_hire, pick_family_hires,
-    pick_critic_model, pick_kernel_model, pick_worker_model,
+    pick_critic_model, pick_fast_model, pick_kernel_model, pick_worker_model,
+    strong_check_mode,
 )
 from .packages import (
     CODE_EDIT_ID, CODE_EXPLORE_ID, CODE_PLAN_ID, CODE_REVIEW_ID,
@@ -53,7 +61,11 @@ __all__ = [
     "DESK_AUTO",
     "DESK_CODE",
     "DESK_CURATE",
+    "DESK_DECK",
+    "DESK_INFO",
     "DESK_PROJECTS",
+    "choose_desk",
+    "looks_like_deck",
     "STATE_DISMISSED",
     "STATE_QUIET",
     "STATE_WORKING",
@@ -72,11 +84,15 @@ __all__ = [
     "dismiss_run",
     "get",
     "get_package",
+    "list_standing",
     "pi_available",
     "pick_harness",
+    "pick_fast_model",
     "pick_kernel_model",
     "pick_worker_model",
+    "strong_check_mode",
     "quiet",
+    "quiet_run",
     "run_node",
     "seat",
     "set_working",

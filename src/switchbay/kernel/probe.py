@@ -97,9 +97,10 @@ JOBS: dict[str, dict[str, str]] = {
             "Using ce_query (verb=introspect, then sql or cypher), find the "
             "main vault-backed themes in this workspace. Read source excerpts "
             "with read_source. Call create_slideshow with title "
-            "'Vault briefing', 6–8 slides (title, bullets or cards, close), "
-            "and cite vault/wiki paths. Do not invent numbers. If retrieval "
-            "is empty, say so."
+            "'Vault briefing', 6–8 slides that tell a story: title+lede, "
+            "evidence (inline a wiki table via wiki_table or a figure), "
+            "and a prose close. Cite vault/wiki paths. Do not invent numbers. "
+            "If retrieval is empty, say so."
         ),
     },
 }

@@ -15,6 +15,18 @@ def test_walkthrough_verb_registered() -> None:
     assert "tour" in v.aliases or "guide" in v.aliases
 
 
+def test_work_and_code_verbs_registered() -> None:
+    names = {v.name for v in verbs.all_verbs()}
+    assert "work" in names
+    assert "code" in names
+    work = next(x for x in verbs.all_verbs() if x.name == "work")
+    assert "steer" in work.aliases
+    assert "steering" in work.aliases
+    assert "project" not in work.aliases
+    code = next(x for x in verbs.all_verbs() if x.name == "code")
+    assert "coding" in code.aliases
+
+
 def test_marker_path_under_config(tmp_path: Path, monkeypatch) -> None:
     from switchbay import workspaces
 

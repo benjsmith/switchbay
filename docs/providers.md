@@ -12,8 +12,10 @@ so Copilot / Anthropic / xAI / local models can curate without a
 CE-aware sandbox. A CLI with `shell` + `file_write` can still run
 the skill's own bash allowlist (see `llmgateway.can_execute`).
 
-Last updated **2026-08-17**. Remaining Muse Code work waits on a live
-`muse` install.
+Last updated **2026-09-06**. Remaining Muse Code work waits on a live
+`muse` install. `/curate` and Deck run through the host tool loop on
+any provider with `tools: true` (Copilot, MLX, llama.cpp). Ollama is
+chat-only (`tools: false`) and cannot curate.
 
 ## Status key
 
@@ -31,7 +33,7 @@ Last updated **2026-08-17**. Remaining Muse Code work waits on a live
 | **Grok Build** (`grok-build`) | First-class | `grok mcp add` (project) | PreToolUse + `bypassPermissions` | Live `grok models` list (grok-4.6 as of CLI 1.0.3). Hook **fails open** — every error path emits deny. |
 | **OpenAI Codex** (`openai-codex`) | Usable | inline `-c mcp_servers…` | no | Upstream has no PreToolUse. Workspace-write sandbox only. |
 | **Muse Code** (`muse-code`) | Preview | **no** | **no** | See [Muse Code](#muse-code) below. |
-| **GitHub Copilot** (`github_copilot`) | Usable | n/a (HTTP) | n/a | Device-flow + Enterprise SSO. Chat completions or Responses per model catalog. No shell. |
+| **GitHub Copilot** (`github_copilot`) | Usable | n/a (HTTP) | n/a | Device-flow + Enterprise SSO. Chat completions or Responses per model catalog. HTTP tools; host executes `ce_*` / `create_slideshow`. No shell. |
 
 ## Hosted APIs (BYOK)
 
@@ -49,7 +51,7 @@ Last updated **2026-08-17**. Remaining Muse Code work waits on a live
 |---|---|---|
 | **llama.cpp** (`llamacpp`) | First-class | Managed `llama-server`, HF GGUF install. Fail-soft if nothing is installed. |
 | **MLX** (`mlx`) | First-class | Apple silicon only; hidden elsewhere. |
-| **Ollama** (`ollama`) | Usable | Uses whatever `ollama` is on PATH. |
+| **Ollama** (`ollama`) | Usable | Uses whatever `ollama` is on PATH. Chat only (`tools: false`) — will not drive `/curate` or Deck. Prefer MLX or llama.cpp for those desks. |
 
 ## Muse Code
 
@@ -86,7 +88,7 @@ A **harness** is how one hired node runs. It is not a model vendor in the picker
 |---|---|---|
 | **Rail / llmgateway** | First-class | Existing ChatRequest + tool loop. |
 | **Grok Build** | First-class | Same specialist job via the grok-build provider (MCP `ce_*`). |
-| **Pi** (`pi --mode rpc`) | Preview | Optional PATH binary (or `SWITCHBAY_PI` / repo `.local/pi-spike`). Not a lockfile pin. Settings → Optional harness · Pi; admin flag `pi_harness` (on in open, off in enterprise). Pack at `src/switchbay/kernel/pi_packages/curator/` calls `python -m switchbay.ce_cli`. `--no-builtin-tools --no-skills`. Model calls use HTTP providers (xAI API), **not** `grok -p`. Never nest Pi under Grok Build. Never the rail. |
+| **Pi** (`pi --mode rpc`) | Preview | Optional PATH binary (or `SWITCHBAY_PI` / repo `.local/pi-spike`). Not a lockfile pin. Settings → Optional harness · Pi; admin flag `pi_harness` (on in open, off in enterprise). Same class as Claude Code / Codex / Grok Build — never stacked under a signed-in coding CLI; used when a local model or API key is doing the work. Pack at `src/switchbay/kernel/pi_packages/curator/` calls `python -m switchbay.ce_cli`. `--no-builtin-tools --no-skills`. Model calls use HTTP providers (xAI API), **not** `grok -p`. Never the rail. |
 
 ## How to read the picker
 

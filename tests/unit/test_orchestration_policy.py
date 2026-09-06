@@ -24,6 +24,35 @@ def test_simple_prompt_stays_n1():
     assert d.arm_id in ("single", "single_strong")
 
 
+WIKI_WEB_INGEST = (
+    "Search this workspace's knowledge and the open web for Mamba vs Transformer "
+    "tradeoffs, fetch one paper-quality URL into the vault, cite vault/ and wiki/ paths."
+)
+
+
+def test_wiki_web_ingest_is_research():
+    feat = policy.extract_features(WIKI_WEB_INGEST, preference=1.0)
+    assert feat.research is True
+    assert feat.graph is True
+
+
+def test_wiki_web_ingest_at_maximum_is_not_a_single_rail_turn():
+    """Maximum + wiki/web/vault-write is a DAG, not grok-build chat."""
+    feat = policy.extract_features(
+        WIKI_WEB_INGEST, preference=1.0, provider_diversity=3,
+    )
+    d = policy.decide(feat, state=None)
+    assert d.strategy != "single"
+    assert d.n_investigators >= 2 or d.include_verify
+
+
+def test_vs_tradeoff_counts_as_research():
+    feat = policy.extract_features(
+        "Mamba vs Transformers tradeoffs in this wiki", preference=0.6,
+    )
+    assert feat.research is True
+
+
 def test_maximum_broad_curation_uses_multistage_policy():
     """Wiki CURATE is one CE orchestrator, not Switch Bay investigators."""
     feat = policy.extract_features(

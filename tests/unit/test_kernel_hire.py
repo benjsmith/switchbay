@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from switchbay.kernel import (
-    HireRequest, decide_hire, pick_critic_model, pick_harness,
+    HireRequest, decide_hire, pick_critic_model, pick_fast_model, pick_harness,
     pick_kernel_model, pick_worker_model,
 )
 from switchbay.kernel.packages import CURATOR_ID, CURATOR_TOOLS, RESEARCH_ID
@@ -192,6 +192,14 @@ def test_research_desk_prior_hires(tmp_path: Path):
     )
     assert d.accepted is True
     assert d.package_id == RESEARCH_ID
+
+
+def test_fast_model_is_http_flash_not_cli(tmp_path: Path):
+    pair = pick_fast_model(workspace=tmp_path, available=_avail(), denied=[])
+    assert pair is not None
+    assert pair[0] != "grok-build"
+    from switchbay.kernel.hire import is_fast_class_model
+    assert is_fast_class_model(pair[1])
 
 
 def test_worker_economy_prefers_cheap(tmp_path: Path):

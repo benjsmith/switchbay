@@ -387,20 +387,28 @@ export default function AgentSpace({
     }
     const hasWorkers = [...liveKinds].some((k) => k !== "chief");
     if (hasWorkers) {
+      const rows = chief.blackboard_rows ?? [];
+      const bbN = Math.max(chief.blackboard_n ?? 0, rows.length);
+      // The board is material, not a worker. Inheriting the chief's
+      // running status + last_chunk_at made it pulse whenever anyone
+      // streamed tokens, which read as "the board is filling" while
+      // the click-open panel stayed empty.
       nodes.push(baseNode({
         id: BLACKBOARD_ID,
         runId: null,
         label: "blackboard",
         kind: "blackboard",
-        status: idle ? "ready" : (chief.status || "running"),
+        status: idle
+          ? (bbN > 0 ? "idle" : "ready")
+          : (bbN > 0 ? "active" : "ready"),
         // "0 candidates · 0 rows" reads as a broken counter. Say empty
         // when it is empty; count only once there is something to count.
-        activity: (chief.blackboard_n ?? 0) > 0
-          ? `${chief.blackboard_n} rows · ${chief.candidate_findings_n ?? 0} candidates`
+        activity: bbN > 0
+          ? `${bbN} rows · ${chief.candidate_findings_n ?? 0} candidates`
           : "empty — click to open",
         model: "",
         provider: "",
-        lastChunkAt: chief.last_chunk_at ?? 0,
+        lastChunkAt: 0,
         depth: kindDepth("blackboard"),
       }));
       byId.add(BLACKBOARD_ID);
@@ -430,11 +438,13 @@ export default function AgentSpace({
       const idx = siblings.findIndex((s) => s.id === n.id);
       const spread = siblings.length <= 1 ? 0 : (idx / (siblings.length - 1) - 0.5);
       // Mix embedding (what it's processing) with a stable DAG slot
-      // so siblings don't sit on top of each other.
-      const tx = (n.kind === "chief" || n.kind === "blackboard")
+      // so siblings don't sit on top of each other. Clamp so a wide
+      // sibling fan cannot draw off the canvas.
+      const clamp = (v: number) => Math.max(-0.95, Math.min(0.95, v));
+      const tx = clamp((n.kind === "chief" || n.kind === "blackboard")
         ? 0
-        : (0.22 * proj.x + 0.78 * spread * 2.35);
-      const ty = n.kind === "chief" ? -0.82 : (-0.72 + (1.55 * n.depth) / maxD);
+        : (0.22 * proj.x + 0.78 * spread * 1.55));
+      const ty = clamp(n.kind === "chief" ? -0.82 : (-0.72 + (1.55 * n.depth) / maxD));
       const prev = map.get(n.id);
       map.set(n.id, {
         ...n,
@@ -615,8 +625,8 @@ export default function AgentSpace({
     let raf = 0;
     let last = performance.now();
     const toXY = (nx: number, ny: number, w: number, h: number) => ({
-      x: w * (0.5 + nx * 0.42),
-      y: h * (0.5 + ny * 0.42),
+      x: w * (0.5 + Math.max(-1, Math.min(1, nx)) * 0.38),
+      y: h * (0.5 + Math.max(-1, Math.min(1, ny)) * 0.38),
     });
 
     const loop = (now: number) => {
@@ -712,7 +722,7 @@ export default function AgentSpace({
           ctx.strokeStyle = isBb ? col.muted : col.text;
           ctx.stroke();
         }
-        if (live && !isChief && fresh) {
+        if (live && !isChief && !isBb && fresh) {
           const reading = n.ioMode === "read";
           const halo = reading ? READ_HALO : WRITE_HALO;
           const amp = 0.22 + Math.min(0.45, (n.tokenRate || 0) / 80);
@@ -866,6 +876,7 @@ export default function AgentSpace({
 
   const board = [...messages].slice(-40).reverse();
   const bbRows = chief.blackboard_rows ?? [];
+  const bbN = Math.max(chief.blackboard_n ?? 0, bbRows.length);
 
   return (
     <div className="sy-agent-space">
@@ -924,9 +935,9 @@ export default function AgentSpace({
               </p>
               <p className="sy-agent-space-bb">
                 {bbRows.length > 0
-                  ? `${chief.blackboard_n ?? bbRows.length} rows`
+                  ? `${bbN} rows`
                     + ` · ${chief.candidate_findings_n ?? 0} candidates`
-                    + (typeof chief.unique_sources === "number"
+                    + (typeof chief.unique_sources === "number" && chief.unique_sources > 0
                       ? ` · ${chief.unique_sources} sources` : "")
                   : "nothing posted yet"}
               </p>
@@ -952,7 +963,8 @@ export default function AgentSpace({
                 </ol>
               ) : (
                 <p className="sy-agent-space-bb-empty">
-                  Workers post here as they hand back. A run whose only
+                  Workers post here when they finish a turn — tool
+                  traffic on the DAG is not a finding. A run whose only
                   worker is a synthesizer never writes findings, so an
                   empty board here is the truth, not a stalled counter.
                 </p>
@@ -999,11 +1011,12 @@ export default function AgentSpace({
                   </li>
                 ))}
               </ul>
-              {(chief.blackboard_n != null || chief.candidate_findings_n != null) && (
+              {bbN > 0 && (
                 <p className="sy-agent-space-bb">
                   blackboard {chief.candidate_findings_n ?? 0} candidates
-                  {typeof chief.blackboard_n === "number" ? ` · ${chief.blackboard_n} rows` : ""}
-                  {typeof chief.unique_sources === "number" ? ` · ${chief.unique_sources} sources` : ""}
+                  {` · ${bbN} rows`}
+                  {typeof chief.unique_sources === "number" && chief.unique_sources > 0
+                    ? ` · ${chief.unique_sources} sources` : ""}
                 </p>
               )}
             </>

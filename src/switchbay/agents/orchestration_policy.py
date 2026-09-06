@@ -38,6 +38,7 @@ PREF_MAXIMUM = 1.0
 
 STRATEGIES = (
     "single",
+    "fast_lookup",
     "parallel_investigate",
     "investigate_verify_synthesize",
 )
@@ -74,7 +75,17 @@ BYOK_CATEGORIES = frozenset({"byok"})
 _RESEARCH_RE = re.compile(
     r"\b(research|investigat\w*|evidence|compar(e|ison)|analy[sz]|"
     r"why\b|conflict|forecast|uncertain|debate|verif\w*|source|"
-    r"contradict|ambiguous|adversarial)\b",
+    r"contradict|ambiguous|adversarial|"
+    r"vs\.?|versus|trade-?offs?)\b",
+    re.I,
+)
+# Wiki + open web + vault write is a research desk, not a chat turn.
+_WEB_INGEST_RE = re.compile(
+    r"\b("
+    r"open web|web search|search the web|the internet|"
+    r"fetch (a |one |the )?(url|paper|pdf|source)|"
+    r"into the vault|add to (the )?vault|ingest"
+    r")\b",
     re.I,
 )
 _CODE_RE = re.compile(
@@ -85,6 +96,19 @@ _CODE_RE = re.compile(
 _GRAPH_RE = re.compile(
     r"\b(wiki|graph|vault|knowledge|what do (we|i) know|wikilink|"
     r"neighbors?|page)\b",
+    re.I,
+)
+# Factual / "what's in the wiki" questions that a retrieve+synth
+# pass can answer without seating a DAG.
+_LOOKUP_RE = re.compile(
+    r"\b("
+    r"what (is|are|do|does|did|was|were)|"
+    r"who (is|are|was|were)|"
+    r"when (did|was|is|were)|"
+    r"where (is|are|was)|"
+    r"how (does|do|did|is|are)|"
+    r"explain|define|tell me about"
+    r")\b",
     re.I,
 )
 _LOW_IND_RE = re.compile(
@@ -134,6 +158,7 @@ class TaskFeatures:
     finance: bool = False
     science: bool = False
     experiment: bool = False
+    lookup: bool = False
 
     def bucket(self) -> str:
         """Coarse, stable context key for the bandit."""
@@ -217,7 +242,7 @@ def extract_features(
     n_q = len(re.findall(r"\?", t))
     n_list = len(_MULTI_RE.findall(t))
     n_sub = max(1, n_q + max(0, n_list // 2))
-    research = bool(_RESEARCH_RE.search(t))
+    research = bool(_RESEARCH_RE.search(t) or _WEB_INGEST_RE.search(t))
     code = bool(_CODE_RE.search(t))
     graph = bool(_GRAPH_RE.search(t)) if graph_available else False
     finance = bool(_FINANCE_RE.search(t))
@@ -226,6 +251,10 @@ def extract_features(
         science and bool(re.search(r"\b(run|execute|measure)\b", t, re.I))
     )
     low = bool(_LOW_IND_RE.search(t))
+    lookup = bool(_LOOKUP_RE.search(t) or graph)
+    if low and not graph:
+        # Rewrites / summaries of pasted text are not wiki lookups.
+        lookup = False
     cons = 0.55 if _CONSEQ_RE.search(t) else (
         0.5 if finance or science else (0.35 if research else 0.1)
     )
@@ -256,6 +285,7 @@ def extract_features(
         finance=finance,
         science=science,
         experiment=experiment,
+        lookup=lookup,
     )
 
 
@@ -272,13 +302,32 @@ def apply_task_context(
     """
     if task_kind == "curation":
         features.graph = True
+        features.lookup = False
         if not constrained:
             features.n_subquestions = 1
-    if task_kind in {"projects", "code"}:
+    if task_kind in {"projects", "code", "deck"}:
         features.graph = True
+        features.lookup = False
         if not constrained:
             features.n_subquestions = max(features.n_subquestions, 1)
     return features
+
+
+def is_fast_lookup_task(features: TaskFeatures) -> bool:
+    """Wiki/factual questions that retrieve+fast-synth can answer.
+
+    Research, code, finance, science, and multi-part work stay on the
+    DAG. Rewrite/summarize prompts are not lookups unless they also
+    name the wiki.
+    """
+    if (
+        features.research or features.finance or features.science
+        or features.experiment or features.code
+    ):
+        return False
+    if features.n_subquestions > 1 or features.difficulty >= 0.3:
+        return False
+    return bool(features.lookup)
 
 
 def estimate_independence(features: TaskFeatures) -> str:
@@ -400,7 +449,11 @@ def decide(
         f"learned {best_arm} for similar tasks; {prior.reason}"
     )
     # Do not explore extra computation on easy work.
-    if chosen.arm_id == "single" and features.difficulty < 0.4 and not features.research:
+    if (
+        chosen.arm_id in ("single", "fast_lookup")
+        and features.difficulty < 0.4
+        and not features.research
+    ):
         return chosen
     if rng.random() < _epsilon(features, st):
         neighbors = [
@@ -645,7 +698,9 @@ def model_strength(model: str | None) -> float:
     score = 0.48
     cheap = any(
         s in token
-        for s in ("mini", "nano", "haiku", "flash", "small", "tiny", "lite")
+        for s in (
+            "mini", "nano", "haiku", "flash", "small", "tiny", "lite", "luna",
+        )
     )
     size = re.search(r"(\d+)\s*b\b", token)
     if size:

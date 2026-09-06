@@ -10,11 +10,13 @@ from switchbay.kernel import (
     CODE_EDIT_ID, CODE_EXPLORE_ID, CODE_PLAN_ID, CODE_REVIEW_ID,
     CODING_FAMILY, DESK_PROJECTS, HireRequest, ORG_SYSTEMS_ID,
     PORTFOLIO_BALANCE_ID, PROJECT_COMMS_ID, PROJECT_PLAN_ID,
-    PROJECT_REVIEW_ID, PROJECT_SENSE_ID, PROJECTS_FAMILY,
+    PROJECT_REVIEW_ID, PROJECT_SENSE_ID, PROJECTS_FAMILY, SLIDESHOW_ID,
     decide_hire, family_ids, get_package, packages_for_desk,
     pick_family_hires, seat,
 )
-from switchbay.kernel.packages import WRITES_NONE
+from switchbay.kernel.packages import (
+    SLIDESHOW_TOOLS, SLIDESHOW_TOOLS_COMPACT, WRITES_NONE, slideshow_tools_for,
+)
 from switchbay.kernel.hire import match_projects_packages
 
 
@@ -69,6 +71,7 @@ def test_projects_family_write_isolation():
     desk = packages_for_desk("projects")
     assert desk == PROJECTS_FAMILY
     assert PROJECT_SENSE_ID in desk and ORG_SYSTEMS_ID in desk
+    assert packages_for_desk("deck") == (SLIDESHOW_ID,)
 
 
 def test_no_human_job_titles_as_packages():
@@ -105,7 +108,7 @@ def test_match_projects_routes_jobs_not_titles():
     assert match_projects_packages("what is going on") == [PROJECT_SENSE_ID]
 
 
-def test_steer_desk_economy_hires_complementary_kinds(tmp_path: Path):
+def test_work_desk_economy_hires_complementary_kinds(tmp_path: Path):
     """One package cannot hold every write-authority. Economy still
     staffs several *different* kinds, on cheap workers."""
     hires = pick_family_hires(
@@ -131,7 +134,7 @@ def test_steer_desk_economy_hires_complementary_kinds(tmp_path: Path):
             assert h.provider in {"mlx", "gemini"}
 
 
-def test_steer_desk_staffs_core_on_empty(tmp_path: Path):
+def test_work_desk_staffs_core_on_empty(tmp_path: Path):
     hires = pick_family_hires(
         "",
         preference=0.0,
@@ -149,9 +152,9 @@ def test_steer_desk_staffs_core_on_empty(tmp_path: Path):
 
 
 def test_staff_desk_ignores_canned_prompt_hints(tmp_path: Path):
-    """Daemon /steer empty prompt contains 'drift' — must not hire only review."""
+    """Daemon /work empty prompt contains 'drift' — must not hire only review."""
     prompt = (
-        "Staff the steer desk: ground from evidence, keep the plan of record, "
+        "Staff the work desk: ground from evidence, keep the plan of record, "
         "send only due messages, check drift. Do not invent status."
     )
     hires = pick_family_hires(
@@ -317,6 +320,98 @@ def test_family_dag_review_waits_for_writers(tmp_path: Path):
     assert "pkg-code-explore" in edit.dependencies
     assert "pkg-code-edit" in review.dependencies
     assert validate_plan(plan) == []
+
+
+def test_deck_plan_is_slideshow_package_not_ivs():
+    decision = policy.PolicyDecision(
+        strategy="single",
+        n_investigators=1,
+        include_verify=False,
+        include_reduce=False,
+        independence="medium",
+        allow_expand=False,
+        ladder_bias="cheap",
+        reason="deck",
+        preference=0.0,
+    )
+    plan = plan_from_decision(
+        "make a slideshow about attention",
+        decision,
+        [],
+        task_kind="deck",
+    )
+    assert plan.strategy == "deck"
+    assert len(plan.nodes) == 1
+    assert plan.nodes[0].role == SLIDESHOW_ID
+    assert "create_slideshow" in plan.nodes[0].tools
+    assert validate_plan(plan) == []
+
+
+def test_slideshow_tools_keep_create_slideshow_on_small_local():
+    compact = slideshow_tools_for(local=True, model_hint="Qwen3-4B")
+    assert compact == SLIDESHOW_TOOLS_COMPACT
+    assert compact[0] == "create_slideshow"
+    assert "ce_graph_retrieve" not in compact
+    full = slideshow_tools_for(local=True, model_hint="Qwen3.8-27B")
+    assert full == SLIDESHOW_TOOLS
+    assert "create_slideshow" in full
+    assert "ce_graph_retrieve" in full
+    http = slideshow_tools_for(local=False, model_hint="gpt-5.4")
+    assert http == SLIDESHOW_TOOLS
+
+
+def test_deck_plan_keeps_create_slideshow_on_ram16():
+    decision = policy.PolicyDecision(
+        strategy="single",
+        n_investigators=1,
+        include_verify=False,
+        include_reduce=False,
+        independence="medium",
+        allow_expand=False,
+        ladder_bias="cheap",
+        reason="deck",
+        preference=0.0,
+    )
+    small = plan_from_decision(
+        "make a slideshow about attention",
+        decision, [],
+        task_kind="deck",
+        curator_provider="mlx",
+        curator_model="Qwen3-4B",
+    )
+    assert "create_slideshow" in small.nodes[0].tools
+    assert "ce_graph_retrieve" not in small.nodes[0].tools
+    big = plan_from_decision(
+        "make a slideshow about attention",
+        decision, [],
+        task_kind="deck",
+        curator_provider="mlx",
+        curator_model="Qwen3.8-27B",
+    )
+    assert "create_slideshow" in big.nodes[0].tools
+    assert "ce_graph_retrieve" in big.nodes[0].tools
+    copilot = plan_from_decision(
+        "make a slideshow about attention",
+        decision, [],
+        task_kind="deck",
+        curator_provider="github_copilot",
+        curator_model="gpt-5.4",
+    )
+    assert "create_slideshow" in copilot.nodes[0].tools
+    assert "ce_query" in copilot.nodes[0].tools
+
+
+def test_deck_compact_fits_ram16_budget():
+    from switchbay.agents import rail_default
+    from switchbay.agents.local_rungs import resolve_local_rung
+    names = slideshow_tools_for(local=True, model_hint="Qwen3-4B")
+    rung = resolve_local_rung(16, model_hint="Qwen3-4B")
+    _sys, specs, _m, stats = rail_default.assemble_local_prompt(
+        only_tools=names, rung=rung,
+        messages=[{"role": "user", "content": "make slides from the wiki"}],
+    )
+    assert "create_slideshow" in {t["name"] for t in specs}
+    assert stats["total"] <= rung.prompt_budget
 
 
 def test_projects_desk_seats(tmp_path: Path):

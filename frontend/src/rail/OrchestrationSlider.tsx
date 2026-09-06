@@ -4,9 +4,12 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
  * Cost/performance preference for Auto orchestration.
  * Economy ← Balanced → Maximum.
  *
- * This control sets how much independent fan-out Auto may buy and how
- * readily it recruits the strongest/most expensive allowed models.
- * Agent count is still an *output* of the policy, not a direct N.
+ * This control sets how much extra quality Auto may buy — cost and
+ * latency weights, not a worker count. On simple wiki questions it
+ * is how involved the strongest model is (Economy may skip the check
+ * after a flash/luna synthesizer; Maximum spends a few tokens
+ * tightening the answer). On hard work it is fan-out and stronger
+ * models. Agent count is still an *output* of the policy, not N.
  * Explicit N still exists as `/route` / `n≥2` on the wire.
  */
 
@@ -64,7 +67,7 @@ export function useOrchestrationControl(): { node: ReactNode; opts: OrchOpts } {
   const node = (
     <div
       className="sy-orch"
-      title="How much fan-out Auto may buy, and how easily it recruits the strongest allowed models."
+      title="How much extra quality Auto may buy. Simple wiki questions: a tiny kernel check (Economy may skip it). Hard work: fan-out and stronger models. Agent count is an outcome, not N."
     >
       <span className="sy-orch-end">Economy</span>
       <input

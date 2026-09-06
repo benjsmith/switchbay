@@ -4093,6 +4093,14 @@ a.sy-source-cite { color: var(--accent); }
   border-color: var(--accent);
 }
 .sy-schedules-panel { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.sy-desks-subh {
+  margin: 12px 0 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
 .sy-schedules-toolbar { display: flex; gap: 8px; }
 .sy-schedules-freq-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .sy-schedules-btn {
@@ -4975,15 +4983,19 @@ a.sy-source-cite { color: var(--accent); }
   margin: 4px 0 8px 30px;
   padding: 8px 10px;
   background: var(--bg);
-  border-left: 2px solid var(--line);
+  border: 1px solid var(--line);
+  border-left: 2px solid var(--accent, var(--line));
+  border-radius: 4px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
   font-size: 11.5px;
-  /* Tall enough to read a full reasoning + reply without constant
-     scrolling; still capped so one run doesn't own the whole tab. */
+  /* Same footprint as before: a pane, not the whole tab. Full tool
+     args / reasoning / replies scroll inside it. */
   max-height: min(70vh, 720px);
   overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 .sy-agents-transcript--loading,
 .sy-agents-transcript--empty {
@@ -4997,12 +5009,45 @@ a.sy-source-cite { color: var(--accent); }
 }
 .sy-agents-transcript--err { color: var(--type-fact); }
 .sy-agents-tx {
+  display: block;
+  padding: 3px 0;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.sy-agents-tx-tool-sum {
   display: flex;
   align-items: baseline;
-  gap: 8px;
-  padding: 2px 0;
-  line-height: 1.45;
-  word-break: break-word;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  cursor: pointer;
+  list-style: none;
+}
+.sy-agents-tx-tool-sum::-webkit-details-marker { display: none; }
+.sy-agents-tx-tool-sum::marker { content: ""; }
+.sy-agents-tx-body {
+  margin: 3px 0 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+}
+.sy-agents-tx-detail {
+  margin: 4px 0 8px;
+  padding: 6px 10px;
+  background: var(--bg-soft, var(--bg));
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  max-height: min(36vh, 320px);
+  overflow: auto;
+}
+.sy-agents-tx-live {
+  color: var(--accent);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.sy-agents-tx--live .sy-agents-tx-body {
+  color: var(--text-muted);
+  font-family: var(--font-mono, ui-monospace, monospace);
 }
 .sy-agents-tx-tag {
   flex-shrink: 0;
@@ -5033,6 +5078,8 @@ a.sy-source-cite { color: var(--accent); }
   color: var(--text-muted);
   flex: 1 1 auto;
   min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 /* ── DuckDB tab (duckdb-wasm, fully local) ───────────────────────── */

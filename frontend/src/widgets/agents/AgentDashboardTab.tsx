@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ReasoningRow } from "../../rail/Rail";
+import { prettyJson, ReasoningRow } from "../../rail/Rail";
 import SkillsPanel from "./SkillsPanel";
-import SchedulesPanel from "../schedules/SchedulesPanel";
+import DesksPanel from "./DesksPanel";
 import AgentSpace, {
   CHIEF_ID,
   isOrchestrationRun,
@@ -207,6 +207,11 @@ function isLiveRun(r: Run): boolean {
   return !r.status || LIVE_RUN_STATUSES.has(r.status);
 }
 
+function isCancelledRun(r: { status?: string }): boolean {
+  const s = (r.status || "").toLowerCase();
+  return s === "cancelled" || s === "canceled";
+}
+
 /** Solo top-level live agent run → auto-expand for inspectability. */
 function soloAutoExpandId(runs: Run[]): string | null {
   const tops = runs.filter(
@@ -226,15 +231,6 @@ export default function AgentDashboardTab() {
   const [providers, setProviders] = useState<Provider[] | null>(null);
   const [modelTick, setModelTick] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const [interrupted, setInterrupted] = useState<{
-    orchestration_id: string;
-    objective?: string;
-    elapsed_s?: number;
-    completed?: string[];
-    phase?: string;
-    resume_at?: number | null;
-    stop_reason?: string;
-  }[]>([]);
 
   // Running-runs poll loop. We keep this separate from the static
   // panels' reloadAll so it ticks fast (every 2s) without re-fetching
@@ -247,13 +243,6 @@ export default function AgentDashboardTab() {
         const r = await fetch("/api/runs/active");
         if (!r.ok) return;
         const body = (await r.json()) as { runs: Run[] };
-        try {
-          const ir = await fetch("/api/orchestration/interrupted");
-          if (ir.ok && !cancelled) {
-            const ib = (await ir.json()) as { runs?: { orchestration_id: string; objective?: string; elapsed_s?: number; completed?: string[]; phase?: string; resume_at?: number | null; stop_reason?: string }[] };
-            setInterrupted(ib.runs ?? []);
-          }
-        } catch { /* older daemon */ }
         if (!cancelled) {
           const list = body.runs ?? [];
           // Detect runs that left the active registry → "Recently finished".
@@ -261,6 +250,7 @@ export default function AgentDashboardTab() {
           const departed: Run[] = [];
           for (const [id, prev] of prevRunsRef.current) {
             if (!nextMap.has(id) && prev.provider !== "pty") {
+              if (isCancelledRun(prev)) continue;
               departed.push({
                 ...prev,
                 status: "done",
@@ -354,6 +344,7 @@ export default function AgentDashboardTab() {
       blackboard_n?: number;
       candidate_findings_n?: number;
       unique_sources?: number;
+      blackboard_rows?: BlackboardRow[];
       updated_at?: number;
     } | null;
     workspace?: string;
@@ -399,7 +390,9 @@ export default function AgentDashboardTab() {
     if (pool.length === 0) return [];
     const groups = groupRuns(pool);
     const orch = groups.filter(
-      (g) => isOrchestrationRun(g.parent, g.workers.length) && g.parent.provider !== "pty",
+      (g) => isOrchestrationRun(g.parent, g.workers.length)
+        && g.parent.provider !== "pty"
+        && !isCancelledRun(g.parent),
     );
     return orch
       .map((g) => {
@@ -435,6 +428,7 @@ export default function AgentDashboardTab() {
       blackboard_n: org.blackboard_n,
       candidate_findings_n: org.candidate_findings_n,
       unique_sources: org.unique_sources,
+      blackboard_rows: org.blackboard_rows,
       workspace: deskOrg?.workspace,
       workspace_name: deskOrg?.workspace_name,
     };
@@ -578,14 +572,14 @@ export default function AgentDashboardTab() {
         primary
         subtitle="this workspace · live · refreshes every 2s · click activity or ▸ for transcript"
       >
-        {runs === null ? <Loading /> : focusedRuns.length === 0 ? (
+        {runs === null ? <Loading /> : focusedRuns.filter((r) => !isCancelledRun(r)).length === 0 ? (
           <Empty>
             No active runs in this workspace. Type something in the rail
             to kick one off, or open another desk from the list above.
           </Empty>
         ) : (
           <ul className="sy-agents-list">
-            {groupRuns(focusedRuns).map((g) => (
+            {groupRuns(focusedRuns.filter((r) => !isCancelledRun(r))).map((g) => (
               <RunGroup
                 key={g.parent.run_id}
                 parent={g.parent}
@@ -594,7 +588,7 @@ export default function AgentDashboardTab() {
                 onBackground={onBackgroundRun}
                 forceOpenId={pendingExpand}
                 onForceOpenAck={() => setPendingExpand(null)}
-                autoExpandId={soloAutoExpandId(focusedRuns)}
+                autoExpandId={soloAutoExpandId(focusedRuns.filter((r) => !isCancelledRun(r)))}
                 focusedWs={focusedWs}
                 onInspect={(run) => {
                   setSpaceRootId(run.parent_run_id || run.run_id);
@@ -607,51 +601,12 @@ export default function AgentDashboardTab() {
         )}
       </Section>
 
-      {interrupted.length > 0 && (
-        <Section
-          title="Interrupted"
-          count={interrupted.length}
-          subtitle="crash, restart, or waiting on provider limits — resume skips finished nodes"
-        >
-          <ul className="sy-agents-list">
-            {interrupted.map((row) => (
-              <li key={row.orchestration_id} className="sy-agents-run-wrap">
-                <div className="sy-agents-row sy-agents-run">
-                  <code className="sy-agents-name">{row.orchestration_id}</code>
-                  <span className="sy-agents-run-input" title={row.objective}>
-                    {row.objective || "orchestration"}
-                  </span>
-                  <span className="sy-agents-run-reason">
-                    {row.phase === "waiting_limits"
-                      ? "waiting for provider limits"
-                      : `${(row.completed ?? []).length} node${(row.completed ?? []).length === 1 ? "" : "s"} done`}
-                  </span>
-                  <button
-                    type="button"
-                    className="sy-agents-row-btn"
-                    onClick={() => {
-                      void fetch(
-                        `/api/orchestration/${encodeURIComponent(row.orchestration_id)}/resume`,
-                        { method: "POST" },
-                      );
-                    }}
-                    title="Resume without re-running finished nodes"
-                  >
-                    resume
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      )}
-
       <Section
-        title="Schedules"
+        title="Desks"
         count={undefined}
-        subtitle="start / pause / stop · this workspace or all wikis"
+        subtitle="standing · quiet or working · start / edit / dismiss / schedule"
       >
-        <SchedulesPanel compact />
+        <DesksPanel focusedWs={focusedWs} />
       </Section>
 
       <Section title="Tools" count={tools?.length}>
@@ -1181,7 +1136,8 @@ function ModelAccessPanel({ refreshTick = 0 }: { refreshTick?: number }) {
       <p className="sy-orch-models-hint">
         Auto may use checked models in this workspace. Non-local
         catalogs are preferred when available; the effort slider buys
-        fan-out and stronger models. Local stays a fallback.
+        quality — a kernel check on simple wiki answers, fan-out and
+        stronger models on hard work. Local stays a fallback.
       </p>
       {hint && <p className="sy-orch-models-hint">{hint}</p>}
       {rows === null && (
@@ -1293,7 +1249,7 @@ type RunEvent = {
 };
 
 const TRANSCRIPT_POLL_MS = 2000;
-const TRANSCRIPT_LIMIT = 200;
+const TRANSCRIPT_LIMIT = 800;
 
 
 type RunGroup = { parent: Run; workers: Run[] };
@@ -1348,10 +1304,12 @@ function RunGroup(props: {
     parent, workers, onCancel, onBackground,
     forceOpenId, onForceOpenAck, autoExpandId, focusedWs, onInspect,
   } = props;
+  const strategy = parent.orchestration_strategy
   const isFanout = (
     (typeof parent.fanout_n === "number" && parent.fanout_n > 1)
-    || (typeof parent.orchestration_strategy === "string"
-      && parent.orchestration_strategy !== "single")
+    || (typeof strategy === "string"
+      && strategy !== "single"
+      && strategy !== "fast_lookup")
   );
   const hasWorkers = workers.length > 0;
   // Default expanded for fan-out parents so the user can see what
@@ -1714,6 +1672,8 @@ export function RunTranscript(
 ) {
   const [events, setEvents] = useState<RunEvent[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const stickRef = useRef(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -1741,22 +1701,34 @@ export function RunTranscript(
     return () => { cancelled = true; window.clearInterval(id); };
   }, [runId, live]);
 
+  useEffect(() => {
+    const el = boxRef.current;
+    if (!el || !stickRef.current) return;
+    el.scrollTop = el.scrollHeight;
+  }, [events, liveSnapshot?.activity]);
+
+  const onScroll = () => {
+    const el = boxRef.current;
+    if (!el) return;
+    stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  };
+
   if (events === null) {
     return <div className="sy-agents-transcript sy-agents-transcript--loading">Loading transcript…</div>;
   }
   if (error && events.length === 0) {
     return <div className="sy-agents-transcript sy-agents-transcript--err">{error}</div>;
   }
+  const liveAct = (liveSnapshot?.currentTool
+    ? `⚙ ${liveSnapshot.currentTool}`
+    : liveSnapshot?.activity || "").trim();
   if (events.length === 0) {
     // Shell (interactive-pty) runs stream their output to the rail's
     // xterm surface, not the rail event log — so this transcript is
     // always empty for them. Say where the output actually is instead
     // of "Waiting for the first chunk…" (which never arrives).
     const tools = liveSnapshot?.toolCount ?? 0;
-    const act = (liveSnapshot?.currentTool
-      ? `⚙ ${liveSnapshot.currentTool}`
-      : liveSnapshot?.activity || "").trim();
-    if (!isPty && live && (tools > 0 || act)) {
+    if (!isPty && live && (tools > 0 || liveAct)) {
       return (
         <div className="sy-agents-transcript sy-agents-transcript--live">
           {tools > 0 && (
@@ -1766,7 +1738,7 @@ export function RunTranscript(
               {liveSnapshot?.model ? `/${liveSnapshot.model}` : ""}
             </div>
           )}
-          {act && <div className="sy-agents-tx-summary">{act}</div>}
+          {liveAct && <div className="sy-agents-tx-body">{liveAct}</div>}
           <div className="sy-agents-subtitle">
             Live snapshot — persisted steps appear here as they land.
           </div>
@@ -1781,35 +1753,154 @@ export function RunTranscript(
       </div>
     );
   }
+  const rows = pairTranscript(events);
   return (
-    <div className="sy-agents-transcript">
-      {events.map((ev) => <TranscriptEvent key={ev.event_id} ev={ev} />)}
+    <div
+      ref={boxRef}
+      className="sy-agents-transcript"
+      onScroll={onScroll}
+    >
+      {rows.map((row) =>
+        row.kind === "tool" ? (
+          <TranscriptTool key={row.use.event_id} use={row.use} result={row.result} />
+        ) : (
+          <TranscriptEvent key={row.ev.event_id} ev={row.ev} />
+        ),
+      )}
+      {live && liveAct && (
+        <div className="sy-agents-tx sy-agents-tx--live">
+          <span className="sy-agents-tx-tag">live</span>
+          <div className="sy-agents-tx-body">{liveAct}</div>
+        </div>
+      )}
     </div>
   );
 }
 
+type TranscriptRow =
+  | { kind: "tool"; use: RunEvent; result?: RunEvent }
+  | { kind: "event"; ev: RunEvent };
 
-function reasoningText(ev: RunEvent): string {
-  const p = ev.payload;
-  if (p && typeof p === "object" && "text" in p) {
-    const t = (p as { text?: unknown }).text;
-    if (typeof t === "string" && t.trim()) return t;
+function pairTranscript(events: RunEvent[]): TranscriptRow[] {
+  const byRef = new Map<string, RunEvent>();
+  for (const ev of events) {
+    if (ev.kind === "tool_result" && ev.ref_id) byRef.set(ev.ref_id, ev);
   }
+  const out: TranscriptRow[] = [];
+  for (const ev of events) {
+    if (ev.kind === "tool_result") continue;
+    if (ev.kind === "tool_use") {
+      out.push({
+        kind: "tool",
+        use: ev,
+        result: ev.ref_id ? byRef.get(ev.ref_id) : undefined,
+      });
+      continue;
+    }
+    out.push({ kind: "event", ev });
+  }
+  return out;
+}
+
+function payloadRecord(payload: unknown): Record<string, unknown> | null {
+  return payload && typeof payload === "object" && !Array.isArray(payload)
+    ? payload as Record<string, unknown>
+    : null;
+}
+
+function eventText(ev: RunEvent): string {
+  const p = payloadRecord(ev.payload);
+  const t = p && typeof p.text === "string" ? p.text : "";
+  return (t.trim() ? t : ev.summary) || "";
+}
+
+function toolInput(ev: RunEvent): Record<string, unknown> {
+  const p = payloadRecord(ev.payload);
+  const inp = p?.input;
+  return inp && typeof inp === "object" && !Array.isArray(inp)
+    ? inp as Record<string, unknown>
+    : {};
+}
+
+function toolResultBody(ev: RunEvent | undefined): string {
+  if (!ev) return "";
+  const p = payloadRecord(ev.payload);
+  if (p && typeof p.content === "string" && p.content.trim()) return p.content;
   return ev.summary || "";
+}
+
+function displayToolName(name: string, input: Record<string, unknown>): string {
+  const nested = input.tool_name;
+  if ((name === "use_tool" || name === "mcp_tool") && typeof nested === "string") {
+    const stripped = nested
+      .replace(/^mcp__[^_]+__/, "")
+      .replace(/^switchbay_[a-f0-9]+__/i, "");
+    return stripped || nested;
+  }
+  return name || "tool";
+}
+
+function TranscriptTool({ use, result }: { use: RunEvent; result?: RunEvent }) {
+  const input = toolInput(use);
+  const name = displayToolName((use.actor || "").trim(), input);
+  const summary = (use.summary || "").trim();
+  if (!name && (!summary || summary === "()")) return null;
+  const ok = result ? isOkResult(result.payload) : true;
+  const resultText = toolResultBody(result);
+  const running = !result;
+  return (
+    <details className="sy-agents-tx sy-agents-tx--tool" data-ok={ok ? "true" : "false"}>
+      <summary className="sy-agents-tx-tool-sum">
+        <span className="sy-agents-tx-tag sy-agents-tx-tag--tool">tool</span>
+        <code>{name}</code>
+        {running && <span className="sy-agents-tx-live">running</span>}
+        {!running && (
+          <span className="sy-agents-tx-tag sy-agents-tx-tag--result">{ok ? "✓" : "✗"}</span>
+        )}
+        {summary && summary !== "()" && (
+          <span className="sy-agents-tx-summary">{summary}</span>
+        )}
+      </summary>
+      <div className="sy-agents-tx-detail">
+        <div className="sy-rail-tool-section">input</div>
+        <pre className="sy-rail-tool-json">{prettyJson(input)}</pre>
+        {resultText ? (
+          <>
+            <div className="sy-rail-tool-section">result</div>
+            <pre className="sy-rail-tool-json">{resultText}</pre>
+          </>
+        ) : (
+          <p className="sy-rail-tool-help">
+            {running
+              ? "Still running — result lands here when the tool returns."
+              : "The CLI handled this inline; there is no structured result."}
+          </p>
+        )}
+      </div>
+    </details>
+  );
 }
 
 function TranscriptEvent({ ev }: { ev: RunEvent }) {
   const cls = `sy-agents-tx sy-agents-tx--${ev.kind.replace(/_/g, "-")}`;
   if (ev.kind === "user") {
-    return <div className={cls}><span className="sy-agents-tx-tag">user</span> {ev.summary}</div>;
+    return (
+      <div className={cls}>
+        <span className="sy-agents-tx-tag">user</span>
+        <div className="sy-agents-tx-body">{eventText(ev)}</div>
+      </div>
+    );
   }
   if (ev.kind === "assistant") {
-    return <div className={cls}><span className="sy-agents-tx-tag">assistant</span> {ev.summary}</div>;
+    return (
+      <div className={cls}>
+        <span className="sy-agents-tx-tag">assistant</span>
+        <div className="sy-agents-tx-body">{eventText(ev)}</div>
+      </div>
+    );
   }
   if (ev.kind === "reasoning") {
-    // Full chain-of-thought lives in payload.text (summary is truncated
-    // for the rail index). Same collapsible pattern as the Power rail.
-    const text = reasoningText(ev);
+    const text = eventText(ev);
     if (!text.trim()) return null;
     return (
       <div className={cls + " sy-agents-tx--reasoning-wrap"}>
@@ -1817,34 +1908,10 @@ function TranscriptEvent({ ev }: { ev: RunEvent }) {
       </div>
     );
   }
-  if (ev.kind === "tool_use") {
-    const name = (ev.actor || "").trim();
-    const summary = (ev.summary || "").trim();
-    // Grok used to emit nameless tool_call events; don't render empty TOOL ().
-    if (!name && (!summary || summary === "()")) return null;
-    return (
-      <div className={cls}>
-        <span className="sy-agents-tx-tag sy-agents-tx-tag--tool">tool</span>
-        <code>{name || "tool"}</code>
-        {summary && summary !== "()" && (
-          <span className="sy-agents-tx-summary">{summary}</span>
-        )}
-      </div>
-    );
-  }
-  if (ev.kind === "tool_result") {
-    const ok = isOkResult(ev.payload);
-    return (
-      <div className={cls} data-ok={ok}>
-        <span className="sy-agents-tx-tag sy-agents-tx-tag--result">{ok ? "✓" : "✗"}</span>
-        <code>{ev.actor ?? "?"}</code>
-        <span className="sy-agents-tx-summary">{ev.summary}</span>
-      </div>
-    );
-  }
   return (
     <div className={cls}>
-      <span className="sy-agents-tx-tag">{ev.kind}</span> {ev.summary}
+      <span className="sy-agents-tx-tag">{ev.kind}</span>
+      <div className="sy-agents-tx-body">{eventText(ev)}</div>
     </div>
   );
 }

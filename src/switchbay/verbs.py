@@ -452,7 +452,8 @@ register(Verb(
         "Optional mode picks a curator pass: `/curate figures`, "
         "`/curate tables`, `/curate sources`, `/curate repair`, "
         "`/curate analyses`, `/curate sweep`. Without a mode, runs "
-        "the standard sweep over the active workspace."
+        "the standard sweep over the active workspace. "
+        "`/curate stop` quiets the DAG; `/curate dismiss` tears it down."
     ),
     handler=_action_stub,
 ))
@@ -667,6 +668,33 @@ register(Verb(
         "Captures in the thread inherit the project; /project none "
         "unbinds; bare /project shows the binding. Same set as the "
         "ThreadBar picker (CE's project registry)."
+    ),
+    handler=_action_stub,
+))
+
+
+register(Verb(
+    name="work",
+    aliases=["working", "steer", "steering"],
+    description=(
+        "Seat the work desk (projects + portfolio). Grounds from "
+        "evidence, keeps the plan of record, sends due messages. "
+        "Not /project (thread binding) and not mid-turn steer. "
+        "Bare /work staffs the desk; /work stop quiets it; "
+        "/work dismiss tears it down."
+    ),
+    handler=_action_stub,
+))
+
+
+register(Verb(
+    name="code",
+    aliases=["coding"],
+    description=(
+        "Seat the code desk (explore / plan / edit / review). "
+        "Bare /code staffs the desk; /code stop quiets it; "
+        "/code dismiss tears it down. "
+        "Hired packages stay isolated from the rail's write tools."
     ),
     handler=_action_stub,
 ))

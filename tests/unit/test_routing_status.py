@@ -38,7 +38,10 @@ def test_http_and_local_with_tools_can_curate():
     """ce_run tools let Copilot / MLX drive CE without a shell."""
     assert llmgateway.can_curate("github_copilot")
     assert llmgateway.can_curate("mlx")
+    assert llmgateway.can_curate("llamacpp")
     assert llmgateway.can_curate("claude-code")
+    # Enterprise lists Ollama, but the gateway does not send tool schemas.
+    assert not llmgateway.can_curate("ollama")
 
 
 # ── weak-model heuristic ───────────────────────────────────────────
@@ -47,6 +50,7 @@ def test_http_and_local_with_tools_can_curate():
 @pytest.mark.parametrize("model", [
     "claude-haiku-4-5-20251001", "gpt-5.4-mini", "grok-composer-2.5-fast",
     "gemini-2.5-flash", "qwen25_coder_7b", "some-8b-instruct", "model-nano",
+    "gpt-5.6-luna",
 ])
 def test_weak_models_flagged(model):
     assert routing_status.is_weak_model(model)

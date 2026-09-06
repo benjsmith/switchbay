@@ -64,19 +64,29 @@ export default function SchedulesPanel({ compact }: { compact?: boolean }) {
     return () => window.clearInterval(id);
   }, [reload]);
 
-  const startNew = () => {
+  const startNew = (seed?: Partial<Schedule>) => {
     setEditing("new");
     setDraft({
-      title: "Overnight desk",
-      prompt: "/curate",
-      frequency: "daily",
-      every_hours: 24,
-      enabled: true,
-      preference: 1,
-      scope: "workspace",
-      workspace: workspaces[0]?.path ?? null,
+      title: seed?.title || "Desk",
+      prompt: seed?.prompt || "/curate",
+      frequency: seed?.frequency || "daily",
+      every_hours: seed?.every_hours ?? 24,
+      enabled: seed?.enabled ?? true,
+      preference: seed?.preference ?? 1,
+      scope: seed?.scope || "workspace",
+      workspace: seed?.workspace ?? workspaces[0]?.path ?? null,
     });
   };
+
+  useEffect(() => {
+    const onSeed = (ev: Event) => {
+      const detail = (ev as CustomEvent<Partial<Schedule>>).detail;
+      if (!detail) return;
+      startNew(detail);
+    };
+    window.addEventListener("sy:schedule-new", onSeed);
+    return () => window.removeEventListener("sy:schedule-new", onSeed);
+  }, [workspaces]);
 
   const startEdit = (s: Schedule) => {
     setEditing(s.id);
@@ -133,7 +143,7 @@ export default function SchedulesPanel({ compact }: { compact?: boolean }) {
   };
 
   const remove = async (id: string) => {
-    if (!window.confirm("Delete this schedule?")) return;
+    if (!window.confirm("Dismiss this schedule?")) return;
     const r = await fetch(`/api/schedules/${encodeURIComponent(id)}`, { method: "DELETE" });
     if (!r.ok) {
       setError(`HTTP ${r.status}`);
@@ -167,23 +177,23 @@ export default function SchedulesPanel({ compact }: { compact?: boolean }) {
         <div className="sy-schedules-header">
           <h2>Schedules</h2>
           <span className="sy-spacer" />
-          <button type="button" className="sy-schedules-add" onClick={startNew} title="Add schedule">+</button>
+          <button type="button" className="sy-schedules-add" onClick={() => startNew()} title="Add schedule">+</button>
         </div>
       )}
       <p className="sy-schedules-blurb">
-        Recurring Auto prompts. <strong>This workspace</strong> fires only
-        there; <strong>all workspaces</strong> runs the same prompt in every
-        registered wiki (a global <code>/curate</code>). Off stops the next
-        tick; Stop also cancels a live run.
+        Recurring Auto prompts. <strong>Start</strong> runs now (and turns
+        the schedule on). <strong>On/Off</strong> is only whether future
+        ticks fire. <strong>Stop</strong> cancels a live run.
+        This workspace vs all wikis is the scope of each row.
       </p>
       {compact && (
         <div className="sy-schedules-toolbar">
-          <button type="button" className="sy-agents-row-btn" onClick={startNew}>+ schedule</button>
+          <button type="button" className="sy-agents-row-btn" onClick={() => startNew()}>+ schedule</button>
         </div>
       )}
       {error && <p className="sy-schedules-error">{error}</p>}
       {items.length === 0 && editing !== "new" && (
-        <p className="sy-schedules-empty">No schedules yet. Add one to start or stop overnight desks.</p>
+        <p className="sy-schedules-empty">No recurring desks yet.</p>
       )}
       <ul className="sy-schedules-list">
         {editing === "new" && (
@@ -225,24 +235,36 @@ export default function SchedulesPanel({ compact }: { compact?: boolean }) {
                   <button
                     type="button"
                     className="sy-schedules-btn"
-                    onClick={() => void patchEnabled(s, s.enabled === false)}
-                    title={s.enabled === false ? "Enable this schedule" : "Disable — will not fire again until you turn it on"}
+                    onClick={() => {
+                      void (async () => {
+                        if (s.enabled === false) await patchEnabled(s, true);
+                        await runNow(s.id);
+                      })();
+                    }}
+                    title="Run this desk now (also turns the schedule on)"
                   >
-                    {s.enabled === false ? "Start" : "Pause"}
+                    Start
                   </button>
-                  {(s.running_run_id || s.enabled !== false) && (
+                  <button
+                    type="button"
+                    className="sy-schedules-btn"
+                    onClick={() => void patchEnabled(s, s.enabled === false)}
+                    title={s.enabled === false ? "Fire on the next tick" : "Skip future ticks until you turn it on"}
+                  >
+                    {s.enabled === false ? "Off" : "On"}
+                  </button>
+                  {s.running_run_id ? (
                     <button
                       type="button"
                       className="sy-schedules-btn"
                       onClick={() => void stop(s)}
-                      title="Disable and cancel a live run from this schedule"
+                      title="Cancel the live run from this schedule"
                     >
                       Stop
                     </button>
-                  )}
-                  <button type="button" className="sy-schedules-btn" onClick={() => void runNow(s.id)}>Run</button>
+                  ) : null}
                   <button type="button" className="sy-schedules-btn" onClick={() => startEdit(s)}>Edit</button>
-                  <button type="button" className="sy-schedules-btn" onClick={() => void remove(s.id)}>Delete</button>
+                  <button type="button" className="sy-schedules-btn" onClick={() => void remove(s.id)}>Dismiss</button>
                 </div>
                 <pre className="sy-schedules-prompt">{(s.prompt || "").slice(0, 280) || "(empty prompt)"}</pre>
                 <div className="sy-schedules-meta">

@@ -24,6 +24,13 @@ PACK_ROOT = Path(__file__).resolve().parent / "pi_packages"
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SPIKE_PI = REPO_ROOT / ".local" / "pi-spike" / "node_modules" / ".bin" / "pi"
 
+# launchd PATH is often /usr/bin:/bin. Pi's shebang is `env node`.
+_NODE_PATH_DIRS = (
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    "/opt/local/bin",
+)
+
 # Switch Bay provider id → Pi --provider id
 _PI_PROVIDER = {
     "xai": "xai",
@@ -99,6 +106,43 @@ def _inject_provider_key(env: dict[str, str], req: NodeRequest) -> None:
             env[env_name] = key
 
 
+def enrich_path(env: dict[str, str], *, extra_dirs: tuple[str, ...] = ()) -> None:
+    """Prepend Homebrew / local bins so `env node` works under launchd."""
+    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
+    seen = set(parts)
+    prefix: list[str] = []
+    home_local = str(Path.home() / ".local" / "bin")
+    for d in (*extra_dirs, *_NODE_PATH_DIRS, home_local):
+        if d and d not in seen and Path(d).is_dir():
+            prefix.append(d)
+            seen.add(d)
+    if prefix:
+        env["PATH"] = os.pathsep.join(prefix + parts)
+
+
+def resolve_node(env: dict[str, str]) -> str | None:
+    found = shutil.which("node", path=env.get("PATH") or os.defpath)
+    if found:
+        return found
+    for d in _NODE_PATH_DIRS:
+        cand = Path(d) / "node"
+        if cand.is_file() and os.access(cand, os.X_OK):
+            return str(cand)
+    return None
+
+
+def shebang_wants_node(binary: str) -> bool:
+    try:
+        with open(binary, "rb") as f:
+            head = f.read(160)
+    except OSError:
+        return False
+    if not head.startswith(b"#!"):
+        return False
+    line = head.split(b"\n", 1)[0].decode("ascii", "replace").lower()
+    return "node" in line
+
+
 def spawn_env(req: NodeRequest) -> dict[str, str]:
     env = os.environ.copy()
     env["PI_TELEMETRY"] = "0"
@@ -113,6 +157,11 @@ def spawn_env(req: NodeRequest) -> dict[str, str]:
     tools = package_tool_names(req.package_id, req.tools)
     env["SWITCHBAY_PACKAGE_ID"] = req.package_id
     env["SWITCHBAY_PACKAGE_TOOLS"] = ",".join(tools)
+    extra: list[str] = []
+    binary = pi_binary()
+    if binary:
+        extra.append(str(Path(binary).resolve().parent))
+    enrich_path(env, extra_dirs=tuple(extra))
     _inject_provider_key(env, req)
     if req.provider_id == "mlx":
         url, model = mlx_endpoint(req)
@@ -228,6 +277,10 @@ class PiHarness:
             )
         argv = pi_argv(req, binary=binary, ext=ext)
         env = spawn_env(req)
+        if shebang_wants_node(binary):
+            node = resolve_node(env)
+            if node:
+                argv = [node, *argv]
         timeout = float((req.extra or {}).get("timeout_sec") or 600.0)
         try:
             proc = await asyncio.create_subprocess_exec(

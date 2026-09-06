@@ -780,3 +780,90 @@ def read_source(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     result["content"] = content
     result["truncated"] = truncated
     return result
+
+
+_PDF_BODY_RE = re.compile(
+    r"%PDF-\d|FlateDecode|/Filter\s*/FlateDecode",
+    re.I,
+)
+_DOUBLED_STEM_RE = re.compile(
+    r"^([a-z][a-z0-9]*)-(\d{4})-\1-\2-(.+)$",
+)
+
+
+def extracted_body_is_raw_pdf(text: str) -> bool:
+    """True when an ``.extracted.md`` body is truncated PDF bytes, not prose.
+
+    Historic ``local_ingest`` UTF-8-decoded PDFs and capped them at 40 KiB.
+    Current CE writes a pypdf placeholder on failure; this still catches
+    leftover vault files and an agent Write of a fetched PDF.
+    """
+    body = text or ""
+    if body.startswith("---"):
+        rest = body[3:]
+        end = rest.find("\n---")
+        if end >= 0:
+            body = rest[end + 4:]
+    marker = "<!-- BEGIN FETCHED CONTENT"
+    i = body.find(marker)
+    if i >= 0:
+        body = body[i:]
+        nl = body.find("\n")
+        if nl >= 0:
+            body = body[nl + 1:]
+    head = body.lstrip()[:800]
+    return bool(_PDF_BODY_RE.search(head))
+
+
+def dedupe_citation_stem(stem: str) -> str:
+    """``waleffe-2024-waleffe-2024-topic`` → ``waleffe-2024-topic``.
+
+    CE ``citation_stem`` prepends author-year onto a filename topic that
+    already starts with author-year (common for arXiv drops).
+    """
+    s = (stem or "").strip()
+    m = _DOUBLED_STEM_RE.match(s)
+    if not m:
+        return s
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+
+def flag_raw_pdf_extractions(workspace: Path, ingest_out: dict[str, Any]) -> list[str]:
+    """Return vault-relative extracted.md paths whose body is raw PDF."""
+    ws = Path(workspace)
+    hits: list[str] = []
+    rows = ingest_out.get("results")
+    paths: list[str] = []
+    if isinstance(rows, list):
+        for row in rows:
+            if isinstance(row, dict):
+                p = str(row.get("extracted") or row.get("extracted_path") or "")
+                if p:
+                    paths.append(p)
+    for key in ("extracted", "extracted_path"):
+        p = str(ingest_out.get(key) or "")
+        if p:
+            paths.append(p)
+    for raw in paths:
+        cand = Path(raw)
+        if not cand.is_absolute():
+            cand = ws / raw
+        try:
+            cand = cand.resolve()
+        except OSError:
+            continue
+        if not str(cand).startswith(str(ws.resolve())):
+            continue
+        if not cand.name.endswith(".extracted.md") or not cand.is_file():
+            continue
+        try:
+            text = cand.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if extracted_body_is_raw_pdf(text):
+            try:
+                rel = str(cand.relative_to(ws))
+            except ValueError:
+                rel = str(cand)
+            hits.append(rel)
+    return hits
