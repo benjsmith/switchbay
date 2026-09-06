@@ -208,6 +208,87 @@ def test_backlog_gap_slide_is_dropped(tmp_path: Path):
     assert "28.4" in html
 
 
+def test_wiki_table_overwrites_agent_table(tmp_path: Path):
+    _wiki_table(tmp_path)
+    out = tools.REGISTRY["create_slideshow"].handler(tmp_path, {
+        "title": "A sentence used to be one vector",
+        "slug": "tbl-win",
+        "slides": [
+            {
+                "layout": "title",
+                "heading": "A sentence used to be one vector",
+                "lede": "That bottleneck is why attention exists.",
+            },
+            {
+                "layout": "table",
+                "heading": "Leaderboard",
+                "wiki_table": "tbl-attention-lineage-bahdanau-to-flashattention",
+                "table": {
+                    "columns": ["Act", "Number"],
+                    "rows": [["1", "99.9"], ["2", "98.7"]],
+                },
+            },
+            {
+                "layout": "close",
+                "heading": "The kernel changed.",
+                "lede": "The math of attention did not change in 2022.",
+            },
+        ],
+    })
+    assert out["ok"] is True, out
+    html = (tmp_path / "slideshows" / "tbl-win" / "index.html").read_text(
+        encoding="utf-8",
+    )
+    assert "99.9" not in html
+    assert "28.4 BLEU" in html
+
+
+def test_compare_counts_as_visual(tmp_path: Path):
+    out = tools.REGISTRY["create_slideshow"].handler(tmp_path, {
+        "title": "A sentence used to be one vector",
+        "slug": "cmp",
+        "slides": [
+            {
+                "layout": "title",
+                "heading": "A sentence used to be one vector",
+                "lede": "That bottleneck is why attention exists.",
+            },
+            {
+                "layout": "compare",
+                "heading": "Before and after",
+                "left": {"title": "2014", "body": "One vector for the whole sentence."},
+                "right": {"title": "2017", "body": "Attention over every token."},
+            },
+            {
+                "layout": "close",
+                "heading": "The kernel changed.",
+                "lede": "The math of attention did not change in 2022.",
+            },
+        ],
+    })
+    assert out["ok"] is True, out
+    html = (tmp_path / "slideshows" / "cmp" / "index.html").read_text(
+        encoding="utf-8",
+    )
+    assert "One vector for the whole sentence." in html
+
+
+def test_wiki_table_stays_inside_workspace(tmp_path: Path):
+    outside = tmp_path.parent / f"outside-{tmp_path.name}.md"
+    outside.write_text("| X | Y |\n|---|---|\n| 1 | 2 |\n", encoding="utf-8")
+    try:
+        assert slideshow_html.load_wiki_table(tmp_path, f"../{outside.name}") is None
+        from switchbay.slide_charts import load_quote
+        secret = tmp_path.parent / f"secret-{tmp_path.name}.md"
+        secret.write_text("> leaked quote\n", encoding="utf-8")
+        try:
+            assert load_quote(tmp_path, f"../{secret.name}") == ""
+        finally:
+            secret.unlink(missing_ok=True)
+    finally:
+        outside.unlink(missing_ok=True)
+
+
 def test_dictionary_bullets_escape_once():
     html = slideshow_html._bullets_html([
         {"title": "A & B", "body": "C < D"},

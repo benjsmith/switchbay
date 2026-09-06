@@ -142,11 +142,17 @@ def load_quote(workspace: Path, ref: str) -> str:
         Path(workspace) / "wiki" / "analyses" / f"{stem}.md",
         Path(workspace) / "wiki" / "sources" / f"{stem}.md",
     ]
+    root = Path(workspace).resolve()
     for p in candidates:
-        if not p.is_file():
+        try:
+            rp = p.resolve()
+            rp.relative_to(root)
+        except (OSError, ValueError):
+            continue
+        if not rp.is_file():
             continue
         try:
-            body = p.read_text(encoding="utf-8", errors="replace")
+            body = rp.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
         q = extract_quote(body)

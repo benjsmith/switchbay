@@ -2442,23 +2442,6 @@ export function mdWithWikilinks(text: string): string {
   return sanitizeHtml(marked.parse(pre) as string);
 }
 
-function slideshowSlugFromHref(href: string): string | null {
-  const h = (href || "").trim();
-  if (!h) return null;
-  try {
-    const u = new URL(h, window.location.origin);
-    const hash = u.hash.replace(/^#/, "");
-    const mHash = hash.match(/^slideshow=(.+)$/i);
-    if (mHash) return decodeURIComponent(mHash[1]);
-    const mApi = u.pathname.match(/\/api\/slideshows\/([^/]+)/i);
-    if (mApi) return decodeURIComponent(mApi[1]);
-    const mDir = u.pathname.match(/(?:^|\/)slideshows\/([^/]+)/i);
-    if (mDir) return decodeURIComponent(mDir[1]);
-  } catch { /* relative / hash only */ }
-  const m = h.match(/(?:slideshows\/|#slideshow=)([^/#?]+)/i);
-  return m ? decodeURIComponent(m[1]) : null;
-}
-
 /** Delegated click for rail/zen assistant markdown. */
 export function handleRailWikilinkClick(ev: { target: EventTarget | null; preventDefault: () => void }): boolean {
   const el = ev.target as HTMLElement | null;
@@ -2469,12 +2452,9 @@ export function handleRailWikilinkClick(ev: { target: EventTarget | null; preven
     ? wikiAttr.replace(/^slideshow:/i, "").trim()
     : "";
   const slug = (
-    a.getAttribute("data-slideshow-slug")
-    || slideshowFromWiki
-    || slideshowSlugFromHref(a.getAttribute("href") || "")
-    || ""
+    a.getAttribute("data-slideshow-slug") || slideshowFromWiki || ""
   ).trim();
-  if (slug && (a.hasAttribute("data-slideshow-slug") || slideshowFromWiki || slideshowSlugFromHref(a.getAttribute("href") || ""))) {
+  if (slug) {
     ev.preventDefault();
     window.dispatchEvent(new CustomEvent("sy:open-as-slideshow", {
       detail: { slug, title: (a.textContent || slug).trim() },

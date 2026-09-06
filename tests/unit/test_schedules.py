@@ -47,6 +47,39 @@ def test_until_at_stops_due(tmp_path):
     assert not schedules.is_due(updated, now=now + 120)
 
 
+def test_expire_windows_disables_and_returns_explicit_desk(tmp_path):
+    now = time.time()
+    item = schedules.create(
+        tmp_path, title="Wiki curator",
+        prompt="Curate this wiki for the current desk window.",
+        frequency="hourly",
+    )
+    schedules.update(tmp_path, item["id"], {"until_at": now - 10})
+    data = schedules.load(tmp_path)
+    for it in data["items"]:
+        if it["id"] == item["id"]:
+            it["desk_id"] = "wiki-curator"
+    schedules.save(tmp_path, data)
+    ended = schedules.expire_windows(tmp_path, now=now)
+    assert ended == ["wiki-curator"]
+    loaded = schedules.get(tmp_path, item["id"])
+    assert loaded is not None
+    assert loaded["enabled"] is False
+    assert schedules.expire_windows(tmp_path, now=now) == []
+
+
+def test_expire_windows_does_not_guess_auto(tmp_path):
+    now = time.time()
+    item = schedules.create(
+        tmp_path, title="nightly", prompt="/curate this wiki", frequency="hourly",
+    )
+    schedules.update(tmp_path, item["id"], {"until_at": now - 10})
+    assert schedules.expire_windows(tmp_path, now=now) == []
+    loaded = schedules.get(tmp_path, item["id"])
+    assert loaded is not None
+    assert loaded["enabled"] is False
+
+
 def test_update_and_delete(tmp_path):
     item = schedules.create(tmp_path, title="a", prompt="p", frequency="daily")
     sid = item["id"]

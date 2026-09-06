@@ -113,11 +113,13 @@ def load_wiki_table(workspace: Path, ref: str) -> dict[str, Any] | None:
         Path(workspace) / "wiki" / "tables" / name,
         Path(workspace) / "wiki" / "tables" / f"{name}.md",
     ]
+    root = Path(workspace).resolve()
     seen: set[Path] = set()
     for p in candidates:
         try:
             rp = p.resolve()
-        except OSError:
+            rp.relative_to(root)
+        except (OSError, ValueError):
             continue
         if rp in seen or not rp.is_file():
             continue
@@ -128,7 +130,7 @@ def load_wiki_table(workspace: Path, ref: str) -> dict[str, Any] | None:
             continue
         parsed = parse_markdown_table(body)
         if parsed:
-            parsed["source"] = str(rp.relative_to(Path(workspace).resolve()))
+            parsed["source"] = str(rp.relative_to(root))
             return parsed
     return None
 
@@ -397,7 +399,7 @@ def quality_errors(slides: list[dict[str, Any]], *, title: str) -> list[str]:
         if (
             cols or rows or str(s.get("media") or "").strip() or s.get("cards")
             or s.get("stats") or s.get("chart") or str(s.get("quote") or "").strip()
-            or s.get("steps")
+            or s.get("steps") or s.get("left") or s.get("right")
         ):
             has_visual = True
         layout = str(s.get("layout") or "")
@@ -477,7 +479,9 @@ def prepare_agent_slides(
                 continue
             was_meta = slide_is_metadata_dump(item)
             cols, rows = _slide_table_view(parsed["columns"], parsed["rows"])
-            item.setdefault("table", {"columns": cols, "rows": rows, "source": parsed.get("source")})
+            item["table"] = {
+                "columns": cols, "rows": rows, "source": parsed.get("source"),
+            }
             item["columns"] = cols
             item["rows"] = rows
             layout_now = str(item.get("layout") or "")

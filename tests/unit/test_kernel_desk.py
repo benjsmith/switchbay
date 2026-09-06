@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from switchbay.kernel import (
@@ -47,11 +48,37 @@ def test_seat_working_then_quiet(tmp_path: Path):
 def test_schedule_window_end_is_quiet_not_dismiss(tmp_path: Path):
     seat(tmp_path, DESK_CURATE, chief_provider="anthropic", chief_model="opus", run_id="r")
     assert window_ended({"until_at": 1}, now=2) is True
-    quiet(tmp_path, DESK_CURATE)
+    quiet(tmp_path, DESK_CURATE, keep_run=True)
     rec = get(tmp_path, DESK_CURATE)
     assert rec is not None
     assert rec.state == STATE_QUIET
     assert rec.state != STATE_DISMISSED
+    assert rec.run_id == "r"
+
+
+def test_expire_standing_desk_keeps_run_id(tmp_path: Path):
+    from switchbay import schedules
+    seat(
+        tmp_path, DESK_CURATE,
+        chief_provider="x", chief_model="y", run_id="run-curate",
+    )
+    item = schedules.create(
+        tmp_path, title="curate window", prompt="/curate", frequency="hourly",
+    )
+    now = time.time()
+    schedules.update(tmp_path, item["id"], {"until_at": now - 1})
+    data = schedules.load(tmp_path)
+    for it in data["items"]:
+        if it["id"] == item["id"]:
+            it["desk_id"] = DESK_CURATE
+    schedules.save(tmp_path, data)
+    ended = schedules.expire_windows(tmp_path, now=now)
+    assert ended == [DESK_CURATE]
+    quiet(tmp_path, DESK_CURATE, keep_run=True)
+    rec = get(tmp_path, DESK_CURATE)
+    assert rec is not None
+    assert rec.state == STATE_QUIET
+    assert rec.run_id == "run-curate"
 
 
 def test_stop_quiets_live_run(tmp_path: Path):

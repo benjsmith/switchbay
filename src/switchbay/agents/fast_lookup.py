@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import time
 import uuid
@@ -499,4 +500,10 @@ async def dispatch(
                 "output_tokens": out_tok,
                 "tokens": in_tok + out_tok,
             }
-            asyncio.create_task(_retire_run(runs, run_id, delay=8.0))
+            if not os.environ.get("PYTEST_CURRENT_TEST"):
+                task = asyncio.create_task(_retire_run(runs, run_id, delay=8.0))
+                box = app.setdefault("_lookup_retire", [])
+                box.append(task)
+                task.add_done_callback(
+                    lambda t, b=box: b.remove(t) if t in b else None,
+                )

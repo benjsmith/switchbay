@@ -26,7 +26,18 @@ def test_research_package_and_tools_registered():
     assert "research_fetch" not in rail_default.ALLOWED_TOOLS
 
 
-def test_ssrf_blocks_loopback_and_file():
+def test_ssrf_blocks_loopback_and_file(monkeypatch):
+    def fake_gai(host, port, *a, **k):
+        ip = {
+            "127.0.0.1": "127.0.0.1",
+            "localhost": "127.0.0.1",
+            "10.0.0.1": "10.0.0.1",
+        }.get(str(host))
+        if ip is None:
+            raise OSError("unresolved")
+        return [(0, 0, 0, "", (ip, port))]
+
+    monkeypatch.setattr(research.socket, "getaddrinfo", fake_gai)
     with pytest.raises(ValueError, match="http"):
         research.assert_public_http_url("file:///etc/passwd")
     with pytest.raises(ValueError, match="blocked"):

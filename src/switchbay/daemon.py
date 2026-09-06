@@ -1376,15 +1376,18 @@ async def _tick_schedules(app: web.Application) -> None:
         paths = _schedule_registry_paths(app)
     except Exception:  # noqa: BLE001
         return
-    # Global store.
+    # Global store. until_at is a schedule lifetime — disable, don't
+    # guess a desk (global rows have no workspace).
     try:
         live_all = {str(r.get("run_id") or "") for r in (app.get("runs") or {}).values()}
         await asyncio.to_thread(schedules.clear_stale_running, None, live_all)
+        await asyncio.to_thread(schedules.expire_windows, None)
         for item in await asyncio.to_thread(schedules.list_items, None):
             if schedules.is_due(item):
                 asyncio.create_task(_fire_schedule(app, None, item))
     except Exception:  # noqa: BLE001
         log.exception("global schedule tick failed")
+    from . import kernel as sbk
     for raw in paths:
         ws = Path(str(raw))
         if not ws.is_dir():
@@ -1399,17 +1402,15 @@ async def _tick_schedules(app: web.Application) -> None:
             items = await asyncio.to_thread(schedules.list_items, ws)
         except Exception:  # noqa: BLE001
             continue
+        try:
+            ended = await asyncio.to_thread(schedules.expire_windows, ws)
+            for did in ended:
+                if did not in sbk.DESK_INFO:
+                    continue
+                sbk.quiet(ws, did, keep_run=True)
+        except Exception:  # noqa: BLE001
+            log.exception("desk quiet on schedule window failed")
         for item in items:
-            from . import kernel as sbk
-            if sbk.window_ended(item):
-                did = str(item.get("desk_id") or sbk.DESK_AUTO)
-                try:
-                    sbk.quiet(ws, did)
-                    if "curate" in str(item.get("title") or "").lower() or \
-                       "curate" in str(item.get("prompt") or "").lower():
-                        sbk.quiet(ws, sbk.DESK_CURATE)
-                except Exception:  # noqa: BLE001
-                    log.exception("desk quiet on schedule window failed")
             if not schedules.is_due(item):
                 continue
             asyncio.create_task(_fire_schedule(app, ws, item))

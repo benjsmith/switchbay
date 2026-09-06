@@ -159,6 +159,43 @@ def is_due(item: dict[str, Any], *, now: float | None = None) -> bool:
     return now - last_f >= interval_sec(item)
 
 
+def expire_windows(store: Store, *, now: float | None = None) -> list[str]:
+    """Disable items whose ``until_at`` has passed.
+
+    ``until_at`` is a schedule lifetime (overnight window), not a desk
+    identity. Recurring prompts with no window are untouched. Returns
+    explicit ``desk_id`` values from newly expired rows so the ticker
+    can Stop those standing desks — it must not guess Auto/Curate from
+    the prompt text.
+    """
+    now = now if now is not None else time.time()
+    data = load(store)
+    changed = False
+    desks: list[str] = []
+    seen: set[str] = set()
+    for it in data.get("items") or []:
+        until = it.get("until_at")
+        try:
+            until_f = float(until) if until is not None else None
+        except (TypeError, ValueError):
+            until_f = None
+        if until_f is None or now < until_f:
+            continue
+        if not (it.get("enabled", True) or it.get("running_run_id")):
+            continue
+        it["enabled"] = False
+        it["running_run_id"] = None
+        it["edited_at"] = now
+        changed = True
+        did = str(it.get("desk_id") or "").strip()
+        if did and did not in seen:
+            seen.add(did)
+            desks.append(did)
+    if changed:
+        save(store, data)
+    return desks
+
+
 def create(
     store: Store,
     *,

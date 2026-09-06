@@ -3,13 +3,13 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
-## Unreleased
+## 2026-09-07 — v0.12.14 — Switch Bay VS 0.3.17
 
 **Migration:** none. **Breaking:** none. After pull, run
 `make refresh BUILD=1` (frontend changed). No new VSIX.
 
-Covers `5dcf43d` (desk kernel, already on `main`) plus the follow-up
-on standing desks, wiki lookup, and HTML slideshow quality.
+Standing desks, wiki lookup, and HTML slideshow quality (desk kernel
+on `main` plus the follow-up).
 
 ### Added
 
@@ -33,6 +33,19 @@ on standing desks, wiki lookup, and HTML slideshow quality.
 - Enterprise `media_generation: false` skips slideshow image generation.
 - Stop cancels in-flight sibling workers; Dismiss marks the run
   dismissed and only clears the org this desk owns.
+- A schedule `until_at` window disables that row. It only quiets a
+  standing desk when the row names one (`desk_id`), and Start can
+  still resume.
+
+### Fixed
+
+- `wiki_table` inlines the wiki cells, not an agent-invented `table`
+  under a wiki cite.
+- Compare slides count as a visual; title + compare + close is a
+  valid deck.
+- `wiki_table` / `quote_from` refuse paths outside the workspace.
+- The SSRF unit test no longer hits real DNS (that broke later
+  `git init` forks on macOS).
 
 ## 2026-09-04 — v0.12.13 — Switch Bay VS 0.3.17
 
