@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   classifySourceRef, normalizeWorkspacePath, openWorkspaceFile,
+  requestOpenVaultSource, vaultExtractedPath,
 } from "../../lib/localPath";
 import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "./previewLists";
 
@@ -39,10 +40,13 @@ export function SourceCite({ value, forceLocal = false }: { value: string; force
       <a
         href={`#file=${encodeURIComponent(value)}`}
         className="sy-source-cite"
-        title="Open with the system default app"
+        title={vaultExtractedPath(value)
+          ? "Open in the Editor tab"
+          : "Open with the system default app"}
         onClick={(ev) => {
           ev.preventDefault();
           ev.stopPropagation();
+          if (requestOpenVaultSource(value)) return;
           void openWorkspaceFile(value);
         }}
       >

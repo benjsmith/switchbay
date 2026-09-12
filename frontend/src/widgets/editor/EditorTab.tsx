@@ -15,6 +15,7 @@ import CodeView, { detectLanguage, LANGUAGE_CHOICES, type CodeLanguage } from ".
 import { notifyHtmlDeckOpen } from "../htmldeck/htmlDeckOpen";
 import { revealWorkspaceFile } from "../../lib/localPath";
 import { canGoBack, noteEditorVisit, popEditorHistory } from "./editorHistory";
+import type { TabSpec } from "../../ws";
 
 // Markdown view mode, driven by the chevron handle on the pane divider.
 // Ordered raw → split → rendered. The chevrons move the split the way
@@ -42,7 +43,7 @@ type LoadState =
   | { kind: "saving"; original: string; draft: string }
   | { kind: "error"; message: string };
 
-export default function EditorTab() {
+export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
   const { selection, setSelection } = useSelection();
   const { switchToKind, tabs } = useTabs();
   const [state, setState] = useState<LoadState>({ kind: "idle" });
@@ -50,8 +51,15 @@ export default function EditorTab() {
   const sourceRef = useRef<HTMLTextAreaElement>(null);
   const previewRef = useRef<HTMLDivElement>(null);
 
-  const path = selection?.kind === "page" ? selection.path : null;
-  const pageId = selection?.kind === "page" ? selection.id : null;
+  // Dedicated user markdown tabs (vault extracted sources) pin the
+  // file on the tab payload so each tab stays on its own document
+  // even when the global selection still names the wiki page.
+  const payloadPath = typeof tab?.payload?.path === "string"
+    ? String(tab.payload.path)
+    : "";
+  const pinnedPath = payloadPath.startsWith("vault/") ? payloadPath : null;
+  const path = pinnedPath || (selection?.kind === "page" ? selection.path : null);
+  const pageId = pinnedPath || (selection?.kind === "page" ? selection.id : null);
 
   // Trail for the Back button. Recorded here rather than in the
   // selection layer: this is the Editor's own reading order, and other

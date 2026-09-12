@@ -37,6 +37,13 @@ import {
 import { notifyHtmlDeckOpen } from "./widgets/htmldeck/htmlDeckOpen";
 import { notifyReportDocOpen } from "./widgets/library/reportDocOpen";
 import { notifyReportOpen } from "./widgets/report/reportOpen";
+import {
+  installSyHostMarker, vaultExtractedPath, type VaultSourceDetail,
+} from "./lib/localPath";
+
+// CE wiki-view / vault.js: advertise that this document is a Switchbay
+// host so "open full vault source" can land in an Editor tab.
+installSyHostMarker();
 
 const EMPTY_MODE: Mode = { name: "—", tabs: [] };
 const EMPTY_WORKSPACES: Workspaces = { paths: [], active: null };
@@ -1647,6 +1654,58 @@ export default function App() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  /** CE wiki-view / graph-modal vault cites → dedicated Editor tab.
+   *  Contract: `window.__syOpenVault({path, name})` or
+   *  `CustomEvent('sy:open-vault-source', {detail})`. Prefer a real
+   *  user markdown tab per file (idempotent); fall back to the
+   *  standing Editor + selection if the API is unavailable. */
+  useEffect(() => {
+    installSyHostMarker();
+    const openVault = async (detail?: VaultSourceDetail) => {
+      const raw = String(detail?.path || detail?.name || "").trim();
+      const path = vaultExtractedPath(raw);
+      if (!path) {
+        toast("No vault source path to open.", { err: true });
+        return;
+      }
+      const name = String(detail?.name || path.split("/").pop() || path);
+      try {
+        const r = await fetch("/api/tabs/vault-doc", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path, name }),
+        });
+        if (r.ok) {
+          const b = (await r.json()) as { tab?: TabSpec };
+          const tab = b.tab;
+          if (tab?.id) {
+            setMode((cur) =>
+              cur.tabs.some((t) => t.id === tab.id)
+                ? cur
+                : { ...cur, tabs: [...cur.tabs, tab] },
+            );
+            setActiveTab(tab.id);
+            setZenSurface(tab.id);
+            return;
+          }
+        }
+      } catch { /* daemon down — fall through */ }
+      // Fallback: reuse the standing Editor tab + selection.
+      setSelection({ kind: "page", id: path, path });
+      switchToKindRef.current?.("markdown");
+    };
+    const onOpenVault = (ev: Event) => {
+      const detail = (ev as CustomEvent<VaultSourceDetail>).detail;
+      void openVault(detail);
+    };
+    window.__syOpenVault = (detail) => { void openVault(detail); };
+    window.addEventListener("sy:open-vault-source", onOpenVault);
+    return () => {
+      window.removeEventListener("sy:open-vault-source", onOpenVault);
+      if (window.__syOpenVault) delete window.__syOpenVault;
+    };
+  }, [setSelection]);
 
   /** CE's sidebar + graph.js still write `#page=<id>` to window.location.hash
    *  when the user clicks. Translate that into a selection-layer dispatch. */

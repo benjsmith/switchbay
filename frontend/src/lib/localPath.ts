@@ -102,3 +102,47 @@ let lastReveal: string | null = null;
 export function getLastRevealPath(): string | null {
   return lastReveal;
 }
+
+
+export type VaultSourceDetail = { path?: string; name?: string };
+
+declare global {
+  interface Window {
+    __syOpenVault?: (detail: VaultSourceDetail) => void;
+  }
+}
+
+/** Mark this document as a Switchbay host so CE wiki-view / vault.js
+ *  can dispatch `sy:open-vault-source` instead of opening a browser tab. */
+export function installSyHostMarker(): void {
+  document.documentElement.dataset.syHost = "1";
+}
+
+/** `vault/<file>.extracted.md` from a cite / CE detail, or null. */
+export function vaultExtractedPath(raw: string): string | null {
+  const t = (raw || "").trim().replace(/^\[+/, "").replace(/\]+$/, "").trim();
+  if (!t) return null;
+  const n = normalizeWorkspacePath(t);
+  if (!n) return null;
+  const p = n.startsWith("vault/") ? n : `vault/${n}`;
+  if (!p.endsWith(".extracted.md")) return null;
+  return p;
+}
+
+/** Ask Switchbay to host this vault source in an Editor tab.
+ *  Prefers `window.__syOpenVault` (same contract CE vault.js uses),
+ *  else dispatches `sy:open-vault-source`. */
+export function requestOpenVaultSource(raw: string, name?: string): boolean {
+  const path = vaultExtractedPath(raw);
+  if (!path) return false;
+  const detail: VaultSourceDetail = {
+    path,
+    name: name || path.split("/").pop() || path,
+  };
+  if (typeof window.__syOpenVault === "function") {
+    window.__syOpenVault(detail);
+    return true;
+  }
+  window.dispatchEvent(new CustomEvent("sy:open-vault-source", { detail }));
+  return true;
+}

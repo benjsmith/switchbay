@@ -10,6 +10,7 @@
  * GraphTab.tsx so it can use the React context.
  */
 
+import { installSyHostMarker } from "../../lib/localPath";
 import { atlasEnabled, destroyAtlas, initAtlasChoice, mountAtlas, type ViewerMode } from "./atlas";
 import { installGraphSearch } from "./graphSearch";
 import { template } from "./template";
@@ -30,6 +31,9 @@ export function mountGraph(
   destroyAtlas();
   container.classList.add("ce-graph-root");
   container.innerHTML = template;
+  // CE vault.js looks for this marker (or window.__syOpenVault) before
+  // falling back to a browser tab / OS default app.
+  installSyHostMarker();
 
   // Clear any leftover modal-open state from a previous mount /
   // workspace switch. The CSS rule `body[data-modal="open"] #graph`
