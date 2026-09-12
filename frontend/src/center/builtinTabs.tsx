@@ -42,7 +42,7 @@ const OwidTab = lazy(() => import("../widgets/owid/OwidTab"));
 const GraphAdapter: TabComponent = ({ graphData, graphError }) => (
   <GraphTab data={graphData} error={graphError} />
 );
-const EditorAdapter: TabComponent = () => <EditorTab />;
+const EditorAdapter: TabComponent = ({ tab }) => <EditorTab tab={tab} />;
 const DuckDBAdapter: TabComponent = () => <DuckDBTab />;
 const SheetAdapter: TabComponent = () => <SheetTab />;
 const VegaAdapter: TabComponent = () => <VegaTab />;

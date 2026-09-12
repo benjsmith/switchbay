@@ -16,7 +16,9 @@ State file: `<workspace>/.workbench/tabs-state.json`
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -171,6 +173,7 @@ HTML_DECK_TAB_KIND = "html-deck"
 HTML_DECK_TAB_ID = "html-deck"
 INTRO_TAB_KIND = "intro"
 INTRO_TAB_ID = "intro"
+MARKDOWN_TAB_KIND = "markdown"
 # Easter egg: Settings → "fire thrusters?" opens a temporary Hopper tab
 # hosting the bundled Mars Hopper game (static/mars-hopper/).
 THRUSTERS_TAB_KIND = "thrusters"
@@ -550,6 +553,143 @@ def add_terminal_tab(
     path.parent.mkdir(parents=True, exist_ok=True)
     atomicio.write_json_atomic(path, data)
     return tab
+
+
+# ── Vault-source Editor tabs ──────────────────────────────────────
+# A dedicated USER markdown tab for one vault extracted source.
+# CE wiki-view / the graph modal ask Switchbay to host
+# `vault/<file>.extracted.md` here instead of handing the file to
+# the OS default app. Idempotent by payload.path — re-opening the
+# same source focuses the existing tab.
+
+_VAULT_SCHEME_RE = re.compile(r"^vault:", re.I)
+_VAULT_TAB_SLUG_RE = re.compile(r"[^A-Za-z0-9._-]+")
+
+
+def normalize_vault_source_path(raw: str) -> str | None:
+    """Workspace-relative `vault/…md` path, or None if unusable.
+
+    Accepts `vault:foo.extracted.md`, a bare basename, or an already
+    prefixed `vault/…` path. Refuses escapes, absolute paths, and
+    non-markdown targets — the Editor tab only hosts text.
+    """
+    p = (raw or "").strip()
+    if not p or "\x00" in p:
+        return None
+    p = _VAULT_SCHEME_RE.sub("", p)
+    p = p.replace("\\", "/").removeprefix("./")
+    if p.startswith("/") or p.startswith("~") or re.match(r"^[A-Za-z]:/", p):
+        return None
+    parts = [seg for seg in p.split("/") if seg and seg != "."]
+    if not parts or any(seg == ".." for seg in parts):
+        return None
+    # Bare basename (the usual cite) is assumed to live in vault/.
+    # Any other top-level tree (wiki/, slideshows/, …) is not a
+    # vault source — do not silently rewrite it.
+    if parts[0] != "vault":
+        if len(parts) != 1:
+            return None
+        parts = ["vault", *parts]
+    out = "/".join(parts)
+    if not out.endswith(".md"):
+        return None
+    return out
+
+
+def _vault_doc_tab_id(path: str, taken: set[str]) -> str:
+    name = path.rsplit("/", 1)[-1]
+    stem = name.removesuffix(".extracted.md").removesuffix(".md")
+    slug = _VAULT_TAB_SLUG_RE.sub("-", stem).strip("-.")[:48]
+    if not slug:
+        slug = hashlib.sha1(path.encode()).hexdigest()[:8]
+    base = f"vault-{slug}"
+    if base not in taken:
+        return base
+    extra = hashlib.sha1(path.encode()).hexdigest()[:6]
+    cand = f"{base}-{extra}"
+    n = 2
+    while cand in taken:
+        cand = f"{base}-{extra}{n}"
+        n += 1
+    return cand
+
+
+def add_vault_doc_tab(
+    workspace: Path, path: str, title: str | None = None,
+) -> dict[str, Any] | None:
+    """Ensure a user markdown tab exists for this vault source.
+    Idempotent by payload.path. Returns the tab dict, or None when
+    mode.json is unreadable / the path is not a vault markdown file."""
+    rel = normalize_vault_source_path(path)
+    if not rel:
+        return None
+    mode_path = workspace / ".workbench" / "mode.json"
+    if mode_path.is_file():
+        try:
+            data = json.loads(mode_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    else:
+        data = json.loads(json.dumps(modestore.DEFAULT_MODE))
+    if not isinstance(data, dict):
+        return None
+    tabs = data.setdefault("tabs", [])
+    if not isinstance(tabs, list):
+        return None
+    for t in tabs:
+        if not isinstance(t, dict):
+            continue
+        if t.get("kind") != MARKDOWN_TAB_KIND:
+            continue
+        if classify_source(t) != "user":
+            continue
+        if (t.get("payload") or {}).get("path") == rel:
+            return t
+    basename = rel.rsplit("/", 1)[-1]
+    tab_title = (title or basename).strip() or basename
+    taken = {str(t.get("id")) for t in tabs if isinstance(t, dict)}
+    tab: dict[str, Any] = {
+        "id": _vault_doc_tab_id(rel, taken),
+        "title": tab_title,
+        "kind": MARKDOWN_TAB_KIND,
+        "source": "user",
+        "payload": {"path": rel},
+    }
+    tabs.append(tab)
+    mode_path.parent.mkdir(parents=True, exist_ok=True)
+    atomicio.write_json_atomic(mode_path, data)
+    return tab
+
+
+def remove_vault_doc_tab(workspace: Path, tab_id: str) -> bool:
+    """Drop one dedicated vault-source Editor tab. True if removed."""
+    mode_path = workspace / ".workbench" / "mode.json"
+    if not mode_path.is_file():
+        return False
+    try:
+        data = json.loads(mode_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    tabs = data.get("tabs") if isinstance(data, dict) else None
+    if not isinstance(tabs, list):
+        return False
+    kept: list[Any] = []
+    removed = False
+    for t in tabs:
+        match = (
+            isinstance(t, dict)
+            and str(t.get("id") or "") == tab_id
+            and t.get("kind") == MARKDOWN_TAB_KIND
+            and classify_source(t) == "user"
+        )
+        if match:
+            removed = True
+        else:
+            kept.append(t)
+    if removed:
+        data["tabs"] = kept
+        atomicio.write_json_atomic(mode_path, data)
+    return removed
 
 
 def remove_terminal_tabs(

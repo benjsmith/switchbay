@@ -6,6 +6,7 @@ import { useTabs } from "../../center/TabsContext";
 import { ingestFile } from "../../lib/ingest";
 import CurationReplay from "./CurationReplay";
 import { peekPersistedQuery } from "./graphSearch";
+import { installSyHostMarker } from "../../lib/localPath";
 
 type Props = {
   data: GraphData | null;
@@ -89,6 +90,7 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   const [viewerGen, setViewerGen] = useState(0);
   const { selection, setSelection } = useSelection();
   const { switchToKind, tabs } = useTabs();
+  useEffect(() => { installSyHostMarker(); }, []);
   const hasEditor = useMemo(() => tabs.some((t) => t.kind === "markdown"), [tabs]);
   const selectPageRef = useRef<(id: string) => void>(() => {});
   selectPageRef.current = (id: string) => {

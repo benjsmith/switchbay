@@ -11,7 +11,7 @@
  */
 import { sanitizeHtml } from "../../../lib/sanitizeHtml";
 import { isCollapsibleList, readSourcesOpen, writeSourcesOpen } from "../../editor/previewLists";
-import { classifySourceRef, normalizeWorkspacePath, openWorkspaceFile } from "../../../lib/localPath";
+import { classifySourceRef, normalizeWorkspacePath, openWorkspaceFile, requestOpenVaultSource, vaultExtractedPath } from "../../../lib/localPath";
 
 window.Modal = (function () {
   let pages = {};
@@ -57,14 +57,29 @@ window.Modal = (function () {
       }
     });
 
-    // Frontmatter sources → OS default app (Preview / browser / …).
-    // Bind on the modal (capture) so a remounted Graph tab still hits
-    // these links even if #modal-properties was queried too early.
+    // Frontmatter sources + body `.cite` for vault extracted.md →
+    // Switchbay Editor tab. Other local files still go to the OS
+    // default app. Bind on the modal (capture) so a remounted Graph
+    // tab still hits these even if #modal-properties was queried early.
     if (modal) {
       modal.addEventListener('click', (ev) => {
-        const a = ev.target.closest && ev.target.closest('a.sy-source-cite[data-open-path]');
-        if (!a || !modal.contains(a)) return;
-        const path = a.getAttribute('data-open-path');
+        const el = ev.target.closest && ev.target.closest(
+          'a.sy-source-cite[data-open-path], .cite',
+        );
+        if (!el || !modal.contains(el)) return;
+        const raw = el.getAttribute('data-open-path')
+          || el.getAttribute('data-path')
+          || el.getAttribute('data-cite')
+          || el.getAttribute('href')
+          || el.textContent;
+        if (vaultExtractedPath(raw)) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          requestOpenVaultSource(raw);
+          return;
+        }
+        if (!el.matches || !el.matches('a.sy-source-cite[data-open-path]')) return;
+        const path = el.getAttribute('data-open-path');
         if (!path) return;
         ev.preventDefault();
         ev.stopPropagation();
@@ -396,7 +411,7 @@ window.Modal = (function () {
       return (
         `<a class="sy-source-cite" href="#file=${encodeURIComponent(path)}" `
         + `data-open-path="${escapeHtml(path)}" `
-        + `title="Open with the system default app">${escapeHtml(raw)}</a>`
+        + `title="${vaultExtractedPath(path) ? "Open in the Editor tab" : "Open with the system default app"}">${escapeHtml(raw)}</a>`
       );
     }
     return escapeHtml(raw);

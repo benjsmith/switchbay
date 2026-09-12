@@ -6614,6 +6614,34 @@ async def handle_tab_terminal_remove(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "removed": removed})
 
 
+async def handle_tab_vault_doc_add(request: web.Request) -> web.Response:
+    """Open (or focus) a dedicated user markdown tab for a vault
+    extracted source. Idempotent by payload.path. Body: {path, name?}.
+    CE wiki-view / the graph modal call this instead of handing the
+    file to the OS default app."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    raw = str(body.get("path") or body.get("name") or "").strip()
+    path = tabstore.normalize_vault_source_path(raw)
+    if not path:
+        return web.json_response(
+            {"error": "vault markdown path required"}, status=400,
+        )
+    title = str(body.get("name") or "").strip() or Path(path).name
+    workspace: Path = request.app["workspace"]
+    tab = await asyncio.to_thread(
+        tabstore.add_vault_doc_tab, workspace, path, title,
+    )
+    if tab is None:
+        return web.json_response(
+            {"error": "mode.json unreadable — fix or delete it"}, status=500,
+        )
+    await _broadcast(request.app, _hello_payload(request.app))
+    return web.json_response({"ok": True, "tab": tab})
+
+
 async def handle_shell_detect(request: web.Request) -> web.Response:
     """Router support for the rail's interpretation chip: does this
     input look like a shell command? (PATH lookups off-loop.)"""
@@ -16470,6 +16498,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/tabs/scope", handle_tab_scope)
     app.router.add_post("/api/tabs/terminal", handle_tab_terminal_add)
     app.router.add_post("/api/tabs/terminal/remove", handle_tab_terminal_remove)
+    app.router.add_post("/api/tabs/vault-doc", handle_tab_vault_doc_add)
     app.router.add_get("/ws", handle_ws)
     # Catch-all LAST: serves the built SPA + PWA assets (manifest, icons)
     # for any non-API GET. aiohttp matches in registration order, so the
