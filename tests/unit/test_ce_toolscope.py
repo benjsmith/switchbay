@@ -82,9 +82,9 @@ def test_fs_rules_allow_reading_any_discovered_skill(tmp_path, monkeypatch):
     monkeypatch.setattr(
         "switchbay.skillkit.cebridge.ce_root", lambda: tmp_path / "no-ce")
     rules = ce_toolscope.fs_rules(ws)
-    assert any(str(user) in r and r.startswith("Read(") for r in rules)
+    assert any(user.as_posix() in r and r.startswith("Read(") for r in rules)
     mirrors = ws.resolve() / ".workbench" / "skill-mirrors"
-    assert any(str(mirrors) in r for r in rules)
+    assert any(mirrors.as_posix() in r for r in rules)
 
 
 def test_write_scope_is_curation_dirs_only(fake_ce):
@@ -121,5 +121,5 @@ def test_rules_render_both_symlink_forms(tmp_path, monkeypatch):
     monkeypatch.setattr(
         ce_toolscope, "skill_roots", lambda _ws: [logical, physical])
     prefixes = ce_toolscope.command_prefixes(ws)
-    assert any(str(logical) in p for p in prefixes)
-    assert any(str(physical) in p for p in prefixes)
+    assert any(logical.as_posix() in p for p in prefixes)
+    assert any(physical.as_posix() in p for p in prefixes)

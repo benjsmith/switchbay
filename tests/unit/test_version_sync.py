@@ -10,6 +10,7 @@ updater kept offering it releases it was already past.
 from __future__ import annotations
 
 import json
+import os
 import re
 import subprocess
 import sys
@@ -54,6 +55,6 @@ def test_reported_version_is_the_running_one():
         [sys.executable, "-c",
          "from switchbay import updater; print(updater.local_switchbay_version())"],
         capture_output=True, text=True, check=True, cwd=REPO,
-        env={"PYTHONPATH": str(REPO / "src"), "PATH": "/usr/bin:/bin"},
+        env={**os.environ, "PYTHONPATH": str(REPO / "src")},
     )
     assert out.stdout.strip() == _pyproject_version()

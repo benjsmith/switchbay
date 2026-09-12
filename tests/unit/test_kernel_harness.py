@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -51,6 +52,10 @@ async def test_grok_harness_runs_curator_package(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="fake Pi probe uses select.select on stdin; Windows select is sockets-only",
+)
 async def test_pi_rpc_keeps_stdin_open_until_settled(tmp_path: Path, monkeypatch):
     """EOF on Pi stdin aborts the model turn; the harness must not close early."""
     import os
