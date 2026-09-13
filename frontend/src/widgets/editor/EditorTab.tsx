@@ -50,7 +50,7 @@ type LoadState =
 
 export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
   const { selection, setSelection } = useSelection();
-  const { switchToKind, tabs } = useTabs();
+  const { switchToKind, tabs, closeTab } = useTabs();
   const [state, setState] = useState<LoadState>({ kind: "idle" });
   const [graphData, setGraphData] = useState<GraphData | null>(null);
   const sourceRef = useRef<HTMLTextAreaElement>(null);
@@ -63,6 +63,16 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
     ? String(tab.payload.path)
     : "";
   const pinnedPath = payloadPath.startsWith("vault/") ? payloadPath : null;
+  // Ephemeral vault `.extracted.md` user tabs (and any other user
+  // markdown tab pinned to a vault path) get a Close control in the
+  // right toolbar cluster. The core Editor never does.
+  const isClosableVaultTab = Boolean(
+    tab
+    && tab.source === "user"
+    && tab.kind === "markdown"
+    && pinnedPath
+    && tab.id,
+  );
   const path = pinnedPath || (selection?.kind === "page" ? selection.path : null);
   const pageId = pinnedPath || (selection?.kind === "page" ? selection.id : null);
 
@@ -507,6 +517,17 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
         >
           {isSaving ? "Saving…" : "Save"}
         </button>
+        {isClosableVaultTab && tab && (
+          <button
+            type="button"
+            className="sy-editor-btn"
+            onClick={() => closeTab(tab.id)}
+            title="Close this vault source tab"
+            aria-label="Close this vault source tab"
+          >
+            Close
+          </button>
+        )}
       </header>
       {isMarkdownPage && String(properties.kind || "").toLowerCase() === "deck" && (
         <div className="sy-vega-banner">

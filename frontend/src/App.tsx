@@ -527,6 +527,37 @@ export default function App() {
     } catch { /* daemon down */ }
   }, []);
 
+  /** Close a vault-source Editor tab (user markdown with pinned path).
+   *  Optimistic strip update + neighbor activation; hello broadcast
+   *  reconciles. Core Editor is never closable via this path. */
+  const closeTab = useCallback(async (tabId: string) => {
+    try {
+      const r = await fetch("/api/tabs/vault-doc/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tab_id: tabId }),
+      });
+      if (!r.ok) return;
+      let neighbor: string | null = null;
+      setMode((cur) => {
+        const idx = cur.tabs.findIndex((t) => t.id === tabId);
+        if (idx < 0) return cur;
+        const tab = cur.tabs[idx]!;
+        if (tab.source !== "user" || tab.kind !== "markdown") return cur;
+        const path = (tab.payload as { path?: unknown } | undefined)?.path;
+        if (typeof path !== "string" || !path.startsWith("vault/")) return cur;
+        neighbor =
+          cur.tabs[idx + 1]?.id
+          ?? cur.tabs[idx - 1]?.id
+          ?? cur.tabs.find((t) => t.id !== tabId)?.id
+          ?? null;
+        return { ...cur, tabs: cur.tabs.filter((t) => t.id !== tabId) };
+      });
+      setActiveTab((cur) => (cur === tabId ? neighbor : cur));
+      setZenSurface((cur) => (cur === tabId ? neighbor : cur));
+    } catch { /* daemon down — hello will resync if it recovers */ }
+  }, []);
+
   /** Scope-toggle from the tab strip: user tabs flip between
    *  workspace-wide and scoped-to-the-focused-thread. The hello
    *  broadcast carries the updated mode back to every client. */
@@ -2341,8 +2372,14 @@ export default function App() {
   }), []);
 
   const tabsValue = useMemo(
-    () => ({ tabs: mode.tabs, activeId: activeTab, setActive: setActiveTab, switchToKind }),
-    [mode, activeTab, switchToKind],
+    () => ({
+      tabs: mode.tabs,
+      activeId: activeTab,
+      setActive: setActiveTab,
+      switchToKind,
+      closeTab,
+    }),
+    [mode, activeTab, switchToKind, closeTab],
   );
 
   // ⌘K palette: wiki pages join the fuzzy list (D5 + Zen ruling —
