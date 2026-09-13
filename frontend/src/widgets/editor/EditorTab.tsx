@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { marked } from "marked";
 import { sanitizeHtml } from "../../lib/sanitizeHtml";
+import {
+  htmlExtractionSrcDoc,
+  isHtmlHeavyExtraction,
+} from "../../lib/htmlExtraction";
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
 import { expandWikilinks, parseFrontmatter } from "./mdview";
@@ -22,6 +26,7 @@ import type { TabSpec } from "../../ws";
 // they POINT (like dragging the divider): ‹ grows the right (rendered)
 // pane, › grows the left (raw) pane.
 type EditorView = "raw" | "split" | "rendered";
+type HtmlExtractionView = "preview" | "source";
 const EDITOR_VIEW_KEY = "sy:editor-view";
 const VIEW_ORDER: EditorView[] = ["raw", "split", "rendered"];
 function readEditorView(): EditorView {
@@ -103,6 +108,9 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
   useEffect(() => {
     try { localStorage.setItem(EDITOR_VIEW_KEY, viewMode); } catch { /* quota */ }
   }, [viewMode]);
+  // HTML-heavy vault extractions: Preview (sandboxed iframe) vs Source
+  // (CodeMirror). Default Preview so users see the page, not tags.
+  const [htmlViewMode, setHtmlViewMode] = useState<HtmlExtractionView>("preview");
   const vIdx = VIEW_ORDER.indexOf(viewMode);
   const stepView = (d: -1 | 1) => {
     setViewMode(VIEW_ORDER[Math.max(0, Math.min(VIEW_ORDER.length - 1, vIdx + d))]!);
@@ -129,6 +137,14 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
   const previewHtml = useMemo(
     () => (draft ? sanitizeHtml(marked.parse(expandWikilinks(body), { async: false }) as string) : ""),
     [draft, body],
+  );
+  const isHtmlHeavy = useMemo(
+    () => Boolean(path && isHtmlHeavyExtraction(path, draft || original)),
+    [path, draft, original],
+  );
+  const htmlSrcDoc = useMemo(
+    () => (isHtmlHeavy ? htmlExtractionSrcDoc(draft || original) : ""),
+    [isHtmlHeavy, draft, original],
   );
 
   // After every preview re-render, walk the rendered DOM and drop a
@@ -336,7 +352,10 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
   // empty / loading / error / ready branches below — moving this
   // after the early returns gave us hooks-count mismatches and a
   // blank-page crash the first time path changed.
-  useEffect(() => { setLangOverride(null); }, [path]);
+  useEffect(() => {
+    setLangOverride(null);
+    setHtmlViewMode("preview");
+  }, [path]);
 
   const detectedLanguage: CodeLanguage = useMemo(() => (
     path ? detectLanguage(path, draft || original) : "plain"
@@ -496,7 +515,7 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
           ({creatingSlideshow ? "creating…" : "use → Slideshow above"}).
         </div>
       )}
-      {!isMarkdownPage && (
+      {!isMarkdownPage && !isHtmlHeavy && (
         <div className="sy-editor-codebar">
           <span className="sy-editor-codebar-label">language</span>
           <select
@@ -514,19 +533,61 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
           </select>
         </div>
       )}
+      {!isMarkdownPage && isHtmlHeavy && (
+        <div className="sy-editor-codebar sy-editor-codebar--html">
+          <span className="sy-editor-codebar-label">HTML extraction</span>
+          <div className="sy-editor-html-toggle" role="group" aria-label="HTML extraction view">
+            <button
+              type="button"
+              className={
+                "sy-editor-btn"
+                + (htmlViewMode === "preview" ? " sy-editor-btn--primary" : "")
+              }
+              aria-pressed={htmlViewMode === "preview"}
+              onClick={() => setHtmlViewMode("preview")}
+              title="Render the extracted HTML in a sandboxed preview"
+            >
+              Preview
+            </button>
+            <button
+              type="button"
+              className={
+                "sy-editor-btn"
+                + (htmlViewMode === "source" ? " sy-editor-btn--primary" : "")
+              }
+              aria-pressed={htmlViewMode === "source"}
+              onClick={() => setHtmlViewMode("source")}
+              title="View the raw extraction text"
+            >
+              View source
+            </button>
+          </div>
+        </div>
+      )}
       <div
         className={
           "sy-editor-split"
           + (!isMarkdownPage ? " sy-editor-split--code" : "")
+          + (isHtmlHeavy && htmlViewMode === "preview" ? " sy-editor-split--html-preview" : "")
         }
       >
         {!isMarkdownPage ? (
-          <CodeView
-            value={draft}
-            language={activeLanguage}
-            onChange={(next) => setState({ kind: "ready", original, draft: next })}
-            readOnly={isSaving}
-          />
+          isHtmlHeavy && htmlViewMode === "preview" ? (
+            <iframe
+              className="sy-editor-html-frame"
+              title={`HTML preview: ${path}`}
+              sandbox="allow-popups allow-popups-to-escape-sandbox"
+              referrerPolicy="no-referrer"
+              srcDoc={htmlSrcDoc}
+            />
+          ) : (
+            <CodeView
+              value={draft}
+              language={isHtmlHeavy ? "html" : activeLanguage}
+              onChange={(next) => setState({ kind: "ready", original, draft: next })}
+              readOnly={isSaving}
+            />
+          )
         ) : (
           <>
             {viewMode !== "rendered" && (
