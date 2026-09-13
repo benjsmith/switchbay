@@ -16,6 +16,9 @@ export const template = /* html */ `
     <button id="label-mode" class="ctrl-btn" title="Label visibility" aria-label="Label visibility">
       <span class="ctrl-label">labels:</span><span id="label-mode-state">auto</span>
     </button>
+    <button id="edge-mode" class="ctrl-btn" title="Edge visibility" aria-label="Edge visibility">
+      <span class="ctrl-label">edges:</span><span id="edge-mode-state">auto</span>
+    </button>
     <button id="label-types" class="ctrl-btn" title="Which page types show labels" aria-label="Which page types show labels">
       <span class="ctrl-label">types:</span><span id="label-types-state">4/11</span>
     </button>

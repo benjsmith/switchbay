@@ -139,11 +139,12 @@ def hello(
     selection: dict[str, Any] | None,
     workspaces: dict[str, Any],
     thread_id: str | None = None,
+    web_policy: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # `thread_id` = the daemon's focused thread, so a connecting client
     # can hydrate the right rail without a /api/threads round-trip.
     # None on a fresh workspace (next turn lazily creates one).
-    return custom({
+    payload: dict[str, Any] = {
         "type": "hello",
         "workspace": workspace,
         "default_file": default_file,
@@ -151,7 +152,14 @@ def hello(
         "selection": selection,
         "workspaces": workspaces,
         "thread_id": thread_id,
-    })
+    }
+    if web_policy is not None:
+        payload["web_policy"] = web_policy
+    return custom(payload)
+
+
+def web_policy_state(payload: dict[str, Any]) -> dict[str, Any]:
+    return custom({"type": "web_policy", **payload})
 
 
 def orchestration_handoff(

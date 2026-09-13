@@ -10,6 +10,7 @@ import ReasoningPicker from "./ReasoningPicker";
 import { useOrchestrationControl } from "./OrchestrationSlider";
 import { registerChord } from "../keys";
 import { useComposerDraft } from "../lib/composerDraft";
+import WebPolicyToggle from "../widgets/WebPolicyToggle";
 
 type VerbInfo = { name: string; aliases: string[]; description: string };
 
@@ -775,6 +776,7 @@ export default function Rail({
       <div className="sy-rail-head">
         <span>RAIL</span>
         <span style={{ flex: 1 }} />
+        <WebPolicyToggle compact />
         <ProviderPicker />
         <button
           type="button"

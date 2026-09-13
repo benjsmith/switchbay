@@ -48,6 +48,7 @@ type AtlasEngine = {
 type AtlasHandle = {
   engine: AtlasEngine;
   setLabels(mode: "auto" | "on" | "off", types?: readonly string[] | null): void;
+  setEdges(mode: "auto" | "on" | "off"): void;
   setPhysics(physics: Record<string, number>): void;
   destroy(): void;
 };
@@ -76,6 +77,7 @@ type AtlasGlobal = {
       };
       onOpenItem?: (id: string) => void;
       onEvent?: (event: AtlasEvent) => void;
+      edgeMode?: "auto" | "on" | "off";
     },
   ): AtlasHandle;
 };
@@ -220,6 +222,26 @@ function wireAtlasControls(handle: AtlasHandle): void {
     setMode(order[(order.indexOf(mode) + 1) % order.length]);
   };
   modeButton?.addEventListener("click", cycleMode);
+
+  // Edges drawing mode — mirrors labels (host-owned pill; drawing only).
+  let edgeMode: "auto" | "on" | "off" = "auto";
+  const edgeButton = document.getElementById("edge-mode");
+  const edgeState = document.getElementById("edge-mode-state");
+  const paintEdges = () => {
+    if (edgeState) edgeState.textContent = edgeMode;
+    document.documentElement.dataset.edges = edgeMode;
+    handle.setEdges(edgeMode);
+  };
+  const setEdgeMode = (next: "auto" | "on" | "off") => {
+    edgeMode = next;
+    paintEdges();
+  };
+  const cycleEdgeMode = () => {
+    const order: Array<"auto" | "on" | "off"> = ["auto", "on", "off"];
+    setEdgeMode(order[(order.indexOf(edgeMode) + 1) % order.length]);
+  };
+  edgeButton?.addEventListener("click", cycleEdgeMode);
+  paintEdges();
 
   if (typePanel && typeButton) {
     typePanel.querySelectorAll<HTMLElement>(".label-types-row").forEach((row) => {
