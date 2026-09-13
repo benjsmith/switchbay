@@ -187,9 +187,9 @@ export default function HelpModal({ open, onClose }: Props) {
         <div className="sy-confirm-actions sy-help-footer">
           <div className="sy-help-versions" aria-label="Installed versions">
             {versions === null
-              ? <span className="sy-help-dim">versions…</span>
+              ? <div className="sy-help-dim">Loading versions…</div>
               : versions.length === 0
-                ? null
+                ? <div className="sy-help-dim">No version info</div>
                 : versions.map((row) => (
                     <div key={row.id}>{versionLine(row)}</div>
                   ))}

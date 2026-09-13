@@ -6,14 +6,29 @@ Human-curated release notes. Earlier 0.9.x notes also live on the
 ## 2026-09-13 — v0.12.16
 
 **Migration:** none. **Breaking:** none. After pull, run
-`make refresh BUILD=1` (vendored atlas + graph facade). No new VSIX.
+`make refresh BUILD=1` (frontend layout + vendored atlas + graph facade).
+That rebuilds `frontend/dist` and restarts the daemon — required if the
+UI still shows a bottom-rail `Web off` chip, a cramped Help → versions
+footer, or no `edges:auto` pill (stale PWA bundle). No new VSIX.
 
 ### Fixed
 
+- **Help → versions footer.** `.sy-help-footer` no longer gets flex-
+  crushed by the scroll body into a one-line `versions…` stub: reserved
+  min-height, wrap, and scroll for multiple component rows; clearer
+  loading / empty copy.
+- **Version sync.** `switchbay.__version__` matches pyproject /
+  package.json (0.12.16) so Help → versions and the updater agree.
 - **Atlas sticky selection.** Vendored Knowledge Atlas IIFE from CE #13:
   retained full-graph focus no longer leaves `priority=1` edges stuck
   across node clicks / blank clear. Graph facade `clearFocus` now
   clears engine selection + focus and repaints (was a no-op).
+
+### Note (0.12.15 UI still missing?)
+
+Rail Web toggle lives only in `.sy-rail-head` (not composer tools). If
+you still see `Web off` beside Economy↔Maximum / Distance, the local
+bundle is stale — `make refresh BUILD=1`, then hard-reload the PWA tab.
 
 ## 2026-09-13 — v0.12.15
 
