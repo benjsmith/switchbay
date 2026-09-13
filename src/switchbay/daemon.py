@@ -717,6 +717,7 @@ async def handle_fs_open_external(request: web.Request) -> web.Response:
 
 def _hello_payload(app: web.Application) -> dict:
     workspace: Path = app["workspace"]
+    from . import web_policy as web_policy_mod
     return protocol.hello(
         workspace=str(workspace),
         default_file=_pick_default_file(workspace),
@@ -724,6 +725,7 @@ def _hello_payload(app: web.Application) -> dict:
         selection=selection.load(workspace),
         workspaces=workspaces.load(),
         thread_id=app.get("thread_id"),
+        web_policy=web_policy_mod.public_view(workspace),
     )
 
 
@@ -4379,6 +4381,42 @@ async def handle_permission_allow_delete(request: web.Request) -> web.Response:
         return web.json_response({"error": "pattern required"}, status=400)
     permissions.revoke(workspace, pattern)
     return web.json_response({"ok": True})
+
+
+
+async def handle_web_policy_get(request: web.Request) -> web.Response:
+    from . import web_policy as web_policy_mod
+    workspace = _workspace_from_request(request)
+    if isinstance(workspace, web.Response):
+        return workspace
+    return web.json_response(web_policy_mod.public_view(workspace))
+
+
+async def handle_web_policy_post(request: web.Request) -> web.Response:
+    from . import web_policy as web_policy_mod
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    if not isinstance(body, dict) or "enabled" not in body:
+        return web.json_response({"error": "enabled required"}, status=400)
+    workspace = _workspace_from_request(request, body)
+    if isinstance(workspace, web.Response):
+        return workspace
+    want = bool(body.get("enabled"))
+    if want and not web_policy_mod.admin_allows():
+        view = web_policy_mod.public_view(workspace)
+        return web.json_response({
+            "error": "web egress is disabled by admin policy",
+            **view,
+        }, status=403)
+    web_policy_mod.save(workspace, enabled=want)
+    view = web_policy_mod.public_view(workspace)
+    await _broadcast(request.app, protocol.web_policy_state({
+        "workspace": str(workspace),
+        **view,
+    }))
+    return web.json_response({"ok": True, **view})
 
 
 async def handle_packs_registry(request: web.Request) -> web.Response:
@@ -16373,6 +16411,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/permission/allow", handle_permission_allow_list)
     app.router.add_post("/api/permission/allow", handle_permission_allow_add)
     app.router.add_delete("/api/permission/allow", handle_permission_allow_delete)
+    app.router.add_get("/api/web-policy", handle_web_policy_get)
+    app.router.add_post("/api/web-policy", handle_web_policy_post)
     app.router.add_get(
         "/api/packs/{name}/files/{path:.*}", handle_pack_file,
     )

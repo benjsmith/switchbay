@@ -27,6 +27,7 @@ import type { TerminalWsApi } from "./rail/PtyThreadSurface";
 import type { ActiveRun } from "./center/activeRun";
 import { installKeyRegistry, registerChord, registerCombo } from "./keys";
 import { RailSocket, type Mode, type Selection, type ServerMessage, type TabSpec, type Workspaces } from "./ws";
+import { applyWebPolicy, bindWebPolicy, loadWebPolicy } from "./lib/webPolicy";
 import { SelectionProvider } from "./selection/SelectionContext";
 import "./widgets/graph/load";    // window.Sidebar/Subgraph/Modal/Graph + ce-graph.css
 import type { GraphData } from "./widgets/graph/types";
@@ -612,6 +613,7 @@ export default function App() {
     setSocketReady(true);
     const off = s.on((msg: ServerMessage) => {
       if (msg.type === "hello") {
+        bindWebPolicy(msg.workspace, msg.web_policy);
         // Just set the workspace; the [workspace] reset effect below
         // clears graph state on a change. (Calling setGraphData inside
         // this updater is a side-effect-in-reducer anti-pattern that
@@ -1142,6 +1144,8 @@ export default function App() {
               : e,
           ),
         );
+      } else if (msg.type === "web_policy") {
+        applyWebPolicy(msg);
       } else if (msg.type === "permission_request") {
         // Agent's PreToolUse hook (claude-code) is asking the user to
         // approve a tool call that isn't on the static allowlist.
@@ -1485,6 +1489,11 @@ export default function App() {
 
   // Page proposals are a Reviews-tab backlog, not rail cards. Keep
   // the tab in mode.json via the daemon; the tab hydrates itself.
+  useEffect(() => {
+    if (!workspace) return;
+    void loadWebPolicy(workspace);
+  }, [workspace]);
+
   useEffect(() => {
     if (!workspace) return;
     let cancelled = false;

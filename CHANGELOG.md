@@ -3,6 +3,27 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-13 — v0.12.15
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` (frontend + vendored atlas changed). No new VSIX.
+Do not tag/publish until rail Web toggle + atlas edges are verified in UI.
+
+### Fixed
+
+- **Rail Web on/off.** Workspace web-egress toggle sits in the rail head
+  again (next to the provider picker), not in the composer tools row
+  beside the Economy↔Maximum / Distance slider where it clashed with
+  bottom chrome.
+
+### Added
+
+- **Workspace web policy.** Per-workspace Web off/on (default off);
+  admin `web_egress` can force off. `/api/web-policy` + hello/WS sync.
+- **Atlas edges pill.** `edges: auto|on|off` next to `labels:` in the
+  graph/atlas controls; vendored Knowledge Atlas IIFE refreshed for
+  `setEdges` (CE `@curiosity/knowledge-atlas` 7d0cafc / 0.2.0).
+
 ## 2026-09-07 — v0.12.14 — Switch Bay VS 0.3.17
 
 **Migration:** none. **Breaking:** none. After pull, run

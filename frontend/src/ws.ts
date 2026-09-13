@@ -85,6 +85,15 @@ export type Hello = {
   /** The daemon's focused thread — hydrate the rail from it without a
    *  /api/threads round-trip. null on a fresh workspace. */
   thread_id?: string | null;
+  web_policy?: { enabled: boolean; admin_allows: boolean; requested?: boolean; workspace?: string };
+};
+
+export type WebPolicyMsg = {
+  type: "web_policy";
+  workspace?: string;
+  enabled: boolean;
+  admin_allows: boolean;
+  requested?: boolean;
 };
 
 /** The daemon's focused thread changed (switcher click, + New thread,
@@ -617,7 +626,8 @@ export type ServerMessage =
   | ProviderRetryResolved
   | PermissionRequest
   | PermissionResolved
-  | OrchestrationHandoff;
+  | OrchestrationHandoff
+  | WebPolicyMsg;
 export type ClientMessage = UserInput | SelectionSet;
 export type Listener = (msg: ServerMessage) => void;
 
