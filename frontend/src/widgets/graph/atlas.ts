@@ -29,6 +29,7 @@ type AtlasScene = {
 
 type AtlasEngine = {
   focus(id: string, origin?: string): void;
+  clearFocus?(): void;
   getState(): { focusId?: string; pinned?: string[] };
   setViewScale?(scale: number): void;
   select?(ids: string[], mode?: "replace" | "add"): void;
@@ -397,12 +398,16 @@ function installGraphFacade(handle: AtlasHandle): void {
       // rebuild when the click already focused this node.
       if (handle.engine.getState().focusId === pageId) return;
       handle.engine.focus(pageId, "system");
+      handle.engine.select?.([pageId], "replace");
     },
     clearFocus: () => {
-      // Nothing to undo: the accent focus mark is stripped from every
-      // scene as it lands (stripAtlasFocusMark), so there is no ring to
-      // chase here. Forcing a rebuild to unset the engine's focusId
-      // would only make the builder pick a fresh entry node.
+      // Engine clearFocus demotes roles + focus-edge priorities in place
+      // (CE sticky-selection fix). Also clear selection and strip any
+      // leftover focus mark, then repaint.
+      handle.engine.select?.([], "replace");
+      handle.engine.clearFocus?.();
+      stripAtlasFocusMark(handle.engine);
+      atlasRepaint?.();
     },
     highlightSearch: (ids: string[]) => {
       atlasHighlightSearch(handle, ids);

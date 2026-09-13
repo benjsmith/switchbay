@@ -3,6 +3,18 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-13 — v0.12.16
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` (vendored atlas + graph facade). No new VSIX.
+
+### Fixed
+
+- **Atlas sticky selection.** Vendored Knowledge Atlas IIFE from CE #13:
+  retained full-graph focus no longer leaves `priority=1` edges stuck
+  across node clicks / blank clear. Graph facade `clearFocus` now
+  clears engine selection + focus and repaints (was a no-op).
+
 ## 2026-09-13 — v0.12.15
 
 **Migration:** none. **Breaking:** none. After pull, run
