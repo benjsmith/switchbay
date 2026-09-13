@@ -3,6 +3,19 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-13 — v0.12.18
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` (Editor vault-source Close). No new VSIX.
+
+### Added
+
+- **Close on vault-source Editor tabs.** The Editor sub-toolbar right
+  cluster (Graph / Slideshow / … / Save) gains **Close** for ephemeral
+  vault `.extracted.md` user tabs — removes the tab from the strip and
+  activates a neighbor. Uses `/api/tabs/vault-doc/remove` +
+  `tabstore.remove_vault_doc_tab`. Core Editor unchanged.
+
 ## 2026-09-13 — v0.12.17
 
 **Migration:** none. **Breaking:** none. After pull, run

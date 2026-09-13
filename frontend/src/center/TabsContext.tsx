@@ -11,6 +11,12 @@ type Ctx = {
    * Returns true if a tab was found.
    */
   switchToKind: (kind: string) => boolean;
+  /**
+   * Close a closable user tab (vault-source Editor tabs today).
+   * Removes it from the strip and activates a sensible neighbor.
+   * No-op when the id is unknown / not closable.
+   */
+  closeTab: (tabId: string) => void;
 };
 
 const TabsContext = createContext<Ctx | null>(null);

@@ -6680,6 +6680,29 @@ async def handle_tab_vault_doc_add(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "tab": tab})
 
 
+async def handle_tab_vault_doc_remove(request: web.Request) -> web.Response:
+    """Close a dedicated vault-source Editor tab. Body: {tab_id}.
+    Only removes user markdown tabs created by /api/tabs/vault-doc —
+    the core Editor is untouched."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    tab_id = str(body.get("tab_id") or "").strip()
+    if not tab_id:
+        return web.json_response({"error": "tab_id required"}, status=400)
+    workspace: Path = request.app["workspace"]
+    removed = await asyncio.to_thread(
+        tabstore.remove_vault_doc_tab, workspace, tab_id,
+    )
+    if not removed:
+        return web.json_response(
+            {"error": "no such vault-source tab"}, status=404,
+        )
+    await _broadcast(request.app, _hello_payload(request.app))
+    return web.json_response({"ok": True, "removed": tab_id})
+
+
 async def handle_shell_detect(request: web.Request) -> web.Response:
     """Router support for the rail's interpretation chip: does this
     input look like a shell command? (PATH lookups off-loop.)"""
@@ -16539,6 +16562,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/tabs/terminal", handle_tab_terminal_add)
     app.router.add_post("/api/tabs/terminal/remove", handle_tab_terminal_remove)
     app.router.add_post("/api/tabs/vault-doc", handle_tab_vault_doc_add)
+    app.router.add_post("/api/tabs/vault-doc/remove", handle_tab_vault_doc_remove)
     app.router.add_get("/ws", handle_ws)
     # Catch-all LAST: serves the built SPA + PWA assets (manifest, icons)
     # for any non-API GET. aiohttp matches in registration order, so the
