@@ -223,7 +223,7 @@ def fs_rules(workspace: Path) -> list[str]:
         log.exception("skill read-scope failed")
     try:
         mirrors = Path(workspace).resolve() / ".workbench" / "skill-mirrors"
-        rules.append(f"Read({mirrors}/**)")
+        rules.append(f"Read({mirrors.as_posix()}/**)")
     except OSError:
         pass
     return _dedup(rules)

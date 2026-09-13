@@ -222,9 +222,13 @@ def pick_worker_model(
     pool = others or allowed
     if s <= 0.25:
         # Cheapest (local / flash / mini). Strength 0 is local.
+        # Prefer independence from the chief's provider on ties so
+        # Economy workers burn gemini/mlx flash-class rather than
+        # anthropic haiku when both score the same.
         chosen = min(pool, key=lambda r: (
             0 if r.get("local") else 1,
             float(r.get("strength") or 0),
+            1 if str(r.get("provider")) == chief_pid else 0,
         ))
     elif s >= 0.8:
         # Strong but leave the very top for the kernel when possible.

@@ -24,6 +24,11 @@ frontend/.vite/
 !/.vscode/launch.json
 !/.vscode/tasks.json
 
+# VS Code plugin experiment (belongs on exp/vscode-plugin, not main)
+switchbay.code-workspace
+extensions/switchbay/
+extensions/switchbay-sketch/
+
 # ── vscode plugin compiled output (source under extensions/ is tracked) ──
 extensions/**/out/
 extensions/**/media/graph/

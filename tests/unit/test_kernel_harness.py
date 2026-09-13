@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -50,8 +52,13 @@ async def test_grok_harness_runs_curator_package(tmp_path: Path, monkeypatch):
 
 
 @pytest.mark.asyncio
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="fake Pi probe uses select.select on stdin; Windows select is sockets-only",
+)
 async def test_pi_rpc_keeps_stdin_open_until_settled(tmp_path: Path, monkeypatch):
     """EOF on Pi stdin aborts the model turn; the harness must not close early."""
+    import os
     import sys
     script = tmp_path / "fake_pi.py"
     script.write_text(
@@ -157,8 +164,9 @@ def test_spawn_env_pythonpath_is_absolute(tmp_path: Path):
         provider_id="xai", model="grok-4.5", workspace=tmp_path,
     )
     env = spawn_env(req)
-    assert env["PYTHONPATH"].endswith("/src")
-    assert env["PYTHONPATH"].startswith("/")
+    src_path = Path(env["PYTHONPATH"])
+    assert src_path.name == "src"
+    assert src_path.is_absolute()
     assert env["SWITCHBAY_SRC"] == env["PYTHONPATH"]
     assert "ce_wave_prime" in env["SWITCHBAY_PACKAGE_TOOLS"].split(",")
     assert env["SWITCHBAY_PACKAGE_ID"] == CURATOR_ID
@@ -287,10 +295,10 @@ def test_spawn_env_path_includes_homebrew(tmp_path: Path, monkeypatch):
     from switchbay.kernel.harness_pi import enrich_path, shebang_wants_node
     brew = tmp_path / "opt" / "homebrew" / "bin"
     brew.mkdir(parents=True)
-    env = {"PATH": "/usr/bin:/bin"}
+    env = {"PATH": os.pathsep.join(["/usr/bin", "/bin"])}
     enrich_path(env, extra_dirs=(str(brew),))
-    assert str(brew) in env["PATH"].split(":")
-    assert env["PATH"].startswith(str(brew))
+    assert str(brew) in env["PATH"].split(os.pathsep)
+    assert env["PATH"].split(os.pathsep)[0] == str(brew)
     script = tmp_path / "pi"
     script.write_text("#!/usr/bin/env node\nconsole.log(1)\n", encoding="utf-8")
     assert shebang_wants_node(str(script)) is True

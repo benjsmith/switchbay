@@ -228,8 +228,11 @@ def pi_argv(req: NodeRequest, *, binary: str, ext: Path) -> list[str]:
 
 def _killpg(proc: asyncio.subprocess.Process, sig: int = signal.SIGTERM) -> None:
     try:
-        os.killpg(proc.pid, sig)
-    except (ProcessLookupError, PermissionError, OSError):
+        if hasattr(os, "killpg") and proc.pid is not None:
+            os.killpg(proc.pid, sig)
+        elif proc.returncode is None:
+            proc.kill()
+    except (ProcessLookupError, PermissionError, OSError, AttributeError):
         try:
             proc.kill()
         except Exception:  # noqa: BLE001
