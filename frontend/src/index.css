@@ -2357,15 +2357,32 @@ a.sy-source-cite { color: var(--accent); }
   border-radius: 4px;
 }
 .sy-help-footer {
+  /* Keep version rows visible: .sy-settings-body is flex:1 and will
+   * otherwise crush this action bar to a one-line sliver showing only
+   * the "versions…" loading stub. */
   justify-content: space-between;
   align-items: flex-end;
   gap: 12px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  min-height: 4.75em; /* ~3 version lines + padding */
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 12px;
 }
 .sy-help-versions {
   font-size: 11px;
   color: var(--text-faint);
   line-height: 1.45;
   min-width: 0;
+  flex: 1 1 14rem;
+  max-height: 7.25em; /* scroll if many components */
+  overflow-y: auto;
+  white-space: normal;
+}
+.sy-help-versions .sy-help-dim {
+  display: inline-block;
+  min-height: 1.45em;
 }
 
 /* ── Center (tab strip) ──────────────────────────────────────────── */
