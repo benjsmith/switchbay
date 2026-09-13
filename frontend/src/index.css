@@ -5648,6 +5648,27 @@ a.sy-source-cite { color: var(--accent); }
   font-size: 11px;
   padding: 1px 4px;
 }
+.sy-editor-codebar--html {
+  justify-content: flex-start;
+  gap: 12px;
+}
+.sy-editor-html-toggle {
+  display: inline-flex;
+  gap: 4px;
+}
+.sy-editor-split--html-preview {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.sy-editor-html-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  min-height: 0;
+  border: 0;
+  background: #fff;
+}
+
 .sy-editor-source {
   flex: 1 1 0;
   min-width: 0;

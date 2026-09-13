@@ -3,6 +3,21 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-13 — v0.12.17
+
+**Migration:** none. **Breaking:** none. After pull, run
+`make refresh BUILD=1` (Editor HTML extraction preview). No new VSIX.
+
+### Fixed
+
+- **Vault HTML extractions in Editor.** Files like
+  `….html.extracted.md` (and bodies that are mostly HTML / start with
+  `<!DOCTYPE`/`<html`/`<head>`) render in a sandboxed iframe preview
+  instead of dumping raw tags in CodeMirror. Preview ↔ View source
+  toggle; scripts stripped via DOMPurify; `source_url` becomes a
+  controlled `<base href>` for relative assets. Normal markdown
+  `.extracted.md` sources are unchanged.
+
 ## 2026-09-13 — v0.12.16
 
 **Migration:** none. **Breaking:** none. After pull, run
