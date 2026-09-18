@@ -18,6 +18,8 @@ export default defineConfig({
       // daemon so handle_figure_file can serve from <ws>/figures/ or
       // <ws>/wiki/figures/ (PDF page rasters, sketch PNGs, etc.).
       "/figures": DAEMON,
+      // Phase 4a: same-origin embed reverse-proxy (CE + okstratr).
+      "/embed": DAEMON,
     },
   },
 });
