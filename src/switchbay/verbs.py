@@ -445,6 +445,18 @@ def _action_stub(_: VerbContext) -> VerbResult:
 
 
 register(Verb(
+    name="research",
+    aliases=[],
+    description=(
+        "Seat the Research desk: search the open web, fetch into the "
+        "vault, ingest, then write a cited brief. `/research stop` "
+        "quiets the DAG; `/research dismiss` tears it down."
+    ),
+    handler=_action_stub,
+))
+
+
+register(Verb(
     name="curate",
     aliases=["curator"],
     description=(

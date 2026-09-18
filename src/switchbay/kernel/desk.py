@@ -21,6 +21,7 @@ DESK_CURATE = "curate"
 DESK_PROJECTS = "projects"
 DESK_CODE = "code"
 DESK_DECK = "deck"
+DESK_RESEARCH = "research"
 
 STATE_WORKING = "working"
 STATE_QUIET = "quiet"
@@ -37,6 +38,7 @@ DESK_INFO: dict[str, dict[str, str | None]] = {
     DESK_PROJECTS: {"label": "Work", "slash": "work"},
     DESK_CODE: {"label": "Code", "slash": "code"},
     DESK_DECK: {"label": "Deck", "slash": None},
+    DESK_RESEARCH: {"label": "Research", "slash": "research"},
 }
 
 # Explicit slash / internal command → standing desk. Curate always
@@ -57,6 +59,7 @@ _COMMAND_DESK: dict[str, str] = {
     "make-slides": DESK_DECK,
     "make_slides": DESK_DECK,
     "slideshow-author": DESK_DECK,
+    "research": DESK_RESEARCH,
 }
 
 _TASK_KIND_DESK: dict[str, str] = {
@@ -65,6 +68,7 @@ _TASK_KIND_DESK: dict[str, str] = {
     "code": DESK_CODE,
     "deck": DESK_DECK,
     "auto": DESK_AUTO,
+    "research": DESK_RESEARCH,
 }
 
 # Authoring a presentation. A subject mention ("HTML slideshows",
@@ -112,10 +116,12 @@ def choose_desk(
 ) -> str | None:
     """Which standing desk this run reuses, or None for a one-shot.
 
-    Named desks (curate / work / code / deck) always seat — including
-    a single-worker ``/curate``. Simple wiki/lookup questions do not.
-    Deeper Auto (plan, research, multi-worker) reuses Auto. A second
-    slideshow ask returns the same Deck id, not a new desk.
+    Named desks (curate / work / code / deck / research) always seat —
+    including a single-worker ``/curate``. Simple wiki/lookup questions
+    do not. Deeper Auto (plan, multi-worker) reuses Auto. Explicit
+    ``/research`` seats Research; Auto web-ingest hires the research
+    package on the Auto desk. A second slideshow ask returns the same
+    Deck id, not a new desk.
     """
     cmd = (command or "").strip().lower()
     if cmd in _COMMAND_DESK:

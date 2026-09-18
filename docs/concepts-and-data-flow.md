@@ -220,8 +220,25 @@ flowchart LR
 
 - **Capture** writes curiosity-engine's own staging shapes; the CE
   sweeps *are* the async curation half. Ingesting a file (Browser `+`)
-  dispatches a background agent that classifies it into CE types and
-  records `extracted_from` provenance.
+  or a **watch folder** (Settings → Watch folders) stages a copy into
+  `vault/` and runs curiosity-engine `local_ingest.py` for supported
+  formats (text, HTML, PDF, CSV, XLSX, **PPTX**). Watch ingest writes
+  vault extracts only — it does **not** create wiki pages; Curate does
+  that later. Watch folders only pick up files that arrive *after* you
+  add the folder (existing contents are baselined). On macOS, iCloud
+  Drive placeholders in a folder you already authorized are downloaded
+  on demand — that file only, overall wait bounded at 8s per attempt
+  including helper calls — before ingest; other cloud providers are
+  not auto-hydrated. A file is not marked seen until staging +
+  extraction succeed; placeholders, timeouts, and corrupt PPTX stay
+  pending/retryable rather than counting as ingested. Each ingest file
+  uses the interpreter that already has that extractor: workspace CE
+  venv for pypdf/openpyxl when present, Switch Bay host for
+  `python-pptx` when the workspace lacks it. Scan/graph stay on the
+  workspace venv (kuzu). Old vault extracts that say
+  `PPTX extraction unavailable` need an explicit re-ingest; Switch
+  Bay does not rewrite them. The extract's `source_path` /
+  `extracted_from` record the authorized original watch path.
 - **Curation** (curiosity-engine, a bundled first-party skill) links and
   promotes captured material into the wiki graph. A wiki write schedules
   a background graph rebuild → `data.json`.
@@ -268,9 +285,10 @@ roles stay computational kinds (investigate / verify / synthesize /
 execute), not job titles. **Standing desks** (Curate, Work, Code, Deck,
 Auto) reuse a chief and org across waves: working while a run is live,
 quiet after Stop or a finished wave, dismissed only when you drop the
-row. `/curate`, `/work`, and `/code` always seat; authoring an HTML
-slideshow reuses one Deck desk; a wiki question (`what do we know
-about X`) does not seat. Recurring Auto prompts live in the
+row. `/curate`, `/work`, and `/code` always seat — including a duration
+brief such as `/curate for 10 mins`. Authoring an HTML slideshow
+reuses one Deck desk; a wiki question (`what do we know about X`)
+does not seat. Recurring Auto prompts live in the
 **Schedules** tab (per workspace; the daemon fires due items even when
 that vault is not focused). A desk may keep `.orchestrator/APPROACH.md`
 as the overnight problem-solving sequence.
@@ -370,6 +388,28 @@ group chat.
 | **Knowledge graph** | Durable accepted knowledge (`wiki/` + graph). Writes still go through propose → reviewer. |
 | **A2A** | Agent/thread interoperability (`message/send`). Not the orchestration algorithm. |
 | **Model ladder** | Available model/provider capability and cost hierarchy. The orchestrator may use it; it must not bypass it. |
+
+### Live seats (Settings)
+
+Each standing desk has a **live-seat** cap — queue / backpressure, not a lifetime stop. When every seat is taken, extra workers wait; they are not dropped, and the desk does not shut down. The **chief of staff is counted**. Floor **4** (chief + verifier + synthesizer + specialist), default **8**, current hard max **8**. Settings → Auto orchestration (`desk_max_live_workers`) cannot go below 4 or above the hard max. Admin policy may only **tighten** the ceiling:
+
+```json
+{
+  "orchestration": { "max_live_workers": 5 }
+}
+```
+
+A baked enterprise cap is never raised or erased by a missing, zero, or malformed overlay. Nested Curate workers and Comms wiki curation share the same per-workspace Curate desk gate.
+
+---
+
+## Data flow — Comms streams
+
+Email and chat accounts are **curation sources**, not Switch Bay threads. Discovery is **metadata only** (headers, labels, channel names). No body content is fetched or written to the wiki until you **explicitly approve** a thread for a **specific workspace**. **Revoke** stops future retrieval for that source. Auto-relevance may suggest a workspace; it never approves.
+
+**Secret / Top Secret** (and unknown or missing classification under enterprise) is refused **before any body fetch**. Tenant secret label GUIDs can be listed in admin policy (`comms.tenant_label_ids`) and match when they appear inside `MSIP_Labels`. Gmail system labels such as `INBOX` / `UNREAD` are not classifications.
+
+**Teams and Slack message bodies are not retrieved**, even after Approve. Their adapters currently lack trustworthy pre-body classification; listing and review remain, and the UI does not imply content will flow. Wiki ingest of approved Gmail / Outlook / IMAP mail needs a **keyed, allowlisted, file-capable CLI** (Claude Code, Grok Build, Codex, Muse Code) — not an HTTP-only provider.
 
 ---
 

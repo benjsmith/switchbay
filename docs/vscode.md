@@ -60,7 +60,7 @@ Update extension…** if `dist/*.vsix` is already built.
 
 PWA **+ Add workspace** adds a *wiki* to the PWA switcher. It does not write a code-repo pointer. Register repos from VS Code as above (or CE `setup.sh --register-code-repo`).
 
-Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (cheap pypdf/text extract + `vault.db` index). Vision is **not** used here — CE flags `multimodal_recommended` when figures/tables need a later CURATE wave. Files outside the wiki use `--source-path-only` (originals stay put).
+Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (pypdf/text/`python-pptx` extract + `vault.db` index). Each file uses the interpreter that already has that extractor (workspace CE venv for pypdf/openpyxl when present; Switch Bay host for `python-pptx` when the workspace lacks it). Vision is **not** used here — CE flags `multimodal_recommended` when figures/tables need a later CURATE wave. Files outside the wiki use `--source-path-only` (originals stay put). Historic `PPTX extraction unavailable` vault files need an explicit re-ingest.
 
 ## What to open
 

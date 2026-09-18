@@ -165,6 +165,8 @@ def strip_thread_scopes(workspace: Path) -> int:
 TERMINAL_TAB_KIND = "terminal"
 REPORT_TAB_KIND = "report"
 REPORT_TAB_ID = "report"
+COMMS_TAB_KIND = "comms"
+COMMS_TAB_ID = "comms"
 REPORT_DOC_TAB_KIND = "report-doc"
 REPORT_DOC_TAB_ID = "report-doc"
 LIBRARY_TAB_KIND = "library"
@@ -300,6 +302,56 @@ def remove_thrusters_tab(workspace: Path) -> bool:
     kept = [
         t for t in tabs
         if not (isinstance(t, dict) and t.get("kind") == THRUSTERS_TAB_KIND)
+    ]
+    if len(kept) == len(tabs):
+        return False
+    data["tabs"] = kept
+    atomicio.write_json_atomic(path, data)
+    return True
+
+
+def add_comms_tab(workspace: Path) -> dict[str, Any] | None:
+    """Ensure the Comms review tab exists (email/Teams/Slack queue)."""
+    path = workspace / ".workbench" / "mode.json"
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+    else:
+        data = json.loads(json.dumps(modestore.DEFAULT_MODE))
+    if not isinstance(data, dict):
+        return None
+    tabs = data.setdefault("tabs", [])
+    if not isinstance(tabs, list):
+        return None
+    for t in tabs:
+        if isinstance(t, dict) and t.get("kind") == COMMS_TAB_KIND:
+            return t
+    tab = {
+        "id": COMMS_TAB_ID, "title": "Comms", "kind": COMMS_TAB_KIND,
+        "source": "user", "payload": {},
+    }
+    tabs.append(tab)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomicio.write_json_atomic(path, data)
+    return tab
+
+
+def remove_comms_tab(workspace: Path) -> bool:
+    path = workspace / ".workbench" / "mode.json"
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    tabs = data.get("tabs") if isinstance(data, dict) else None
+    if not isinstance(tabs, list):
+        return False
+    kept = [
+        t for t in tabs
+        if not (isinstance(t, dict) and t.get("kind") == COMMS_TAB_KIND)
     ]
     if len(kept) == len(tabs):
         return False

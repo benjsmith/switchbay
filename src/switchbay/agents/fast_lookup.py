@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 import uuid
@@ -33,6 +32,8 @@ MAX_PAGE_CHARS = 6000
 SYNTH_MAX_TOKENS = 2048
 CONFIRM_MAX_TOKENS = 400
 REVISE_MAX_TOKENS = 1200
+# Production retires lookup runs after a delay. Tests set False.
+lookup_retire_tasks = True
 
 _STOP = frozenset({
     "a", "an", "the", "and", "or", "for", "that", "this", "with", "from",
@@ -500,7 +501,7 @@ async def dispatch(
                 "output_tokens": out_tok,
                 "tokens": in_tok + out_tok,
             }
-            if not os.environ.get("PYTEST_CURRENT_TEST"):
+            if lookup_retire_tasks:
                 task = asyncio.create_task(_retire_run(runs, run_id, delay=8.0))
                 box = app.setdefault("_lookup_retire", [])
                 box.append(task)

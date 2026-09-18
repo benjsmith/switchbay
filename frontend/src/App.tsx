@@ -130,6 +130,11 @@ export default function App() {
   const [graphReloadTick, setGraphReloadTick] = useState(0);
   const [selection, setSelectionLocal] = useState<Selection | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    const onOpen = () => setSettingsOpen(true);
+    window.addEventListener("sy:open-settings", onOpen);
+    return () => window.removeEventListener("sy:open-settings", onOpen);
+  }, []);
   // Non-null once the daemon is stopping (user Quit / `/quit`), which
   // switches the whole app to a "stopped" overlay and halts reconnects.
   const [stopped, setStopped] = useState<{ reason?: string } | null>(null);
@@ -1196,6 +1201,7 @@ export default function App() {
           run_id: msg.run_id,
           origin: msg.origin ?? null,
           origin_path: msg.origin_path ?? null,
+          protected: Boolean(msg.protected),
           state: "pending" as const,
         };
         if (msg.thread_id && msg.thread_id === focusedThreadRef.current) {
@@ -1383,6 +1389,15 @@ export default function App() {
         if (focusedThreadRef.current && gone.includes(focusedThreadRef.current)) {
           onResetRef.current?.();
         }
+      } else if (msg.type === "open_comms") {
+        const focus = (tries: number) => {
+          if (switchToKindRef.current?.("comms")) return;
+          if (tries > 0) window.setTimeout(() => focus(tries - 1), 60);
+        };
+        focus(10);
+        window.dispatchEvent(new CustomEvent("sy:comms-review"));
+      } else if (msg.type === "comms.review") {
+        window.dispatchEvent(new CustomEvent("sy:comms-review"));
       } else if (msg.type === "open_report") {
         // A capable model built a rich HTML report — hand the id to the
         // Report tab (it loads regardless) and focus the tab. The tab was
@@ -1567,6 +1582,11 @@ export default function App() {
     const h = window.setInterval(() => void tick(), 2000);
     return () => { cancelled = true; window.clearInterval(h); };
   }, []);
+
+  useEffect(() => {
+    if (!workspace) return;
+    void loadWebPolicy(workspace);
+  }, [workspace]);
 
   useEffect(() => {
     if (!workspace) return;
@@ -2445,6 +2465,9 @@ export default function App() {
             onLoadOlder={onLoadOlder}
             onOpenSettings={() => setSettingsOpen(true)}
             onOpenHelp={() => setHelpOpen(true)}
+            onReset={onReset}
+            otherPerms={otherPerms}
+            pinnedAction={noWikiAction}
           />
         ) : (
         <Shell

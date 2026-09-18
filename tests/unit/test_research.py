@@ -71,6 +71,25 @@ def test_research_search_requires_query():
     assert out["ok"] is False
 
 
+def test_research_handler_fail_closed_when_web_off(tmp_path: Path):
+    from switchbay import tools
+    out = tools.execute("research_search", tmp_path, {"query": "qwen"})
+    assert isinstance(out, dict)
+    assert out.get("ok") is False
+    assert "web egress" in str(out.get("error") or "").lower() or "off" in str(out.get("error") or "").lower()
+
+
+def test_research_handler_allows_when_policy_on(tmp_path: Path, monkeypatch):
+    from switchbay import permissions, tools, web_policy
+    web_policy.save(tmp_path, enabled=True)
+    monkeypatch.setattr(research, "search_web", lambda *a, **k: {"ok": True, "hits": []})
+    out = tools.execute(
+        "research_search", tmp_path, {"query": "qwen"},
+        consent=permissions.trusted_consent(),
+    )
+    assert out.get("ok") is True
+
+
 def test_research_fetch_writes_vault_and_ingests(tmp_path: Path, monkeypatch):
     body = b"<html><body>hello paper</body></html>"
 

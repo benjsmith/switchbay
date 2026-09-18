@@ -68,11 +68,43 @@ def register(tool: Tool) -> None:
     REGISTRY[tool.name] = tool
 
 
-def execute(name: str, workspace: Path, payload: dict[str, Any]) -> dict[str, Any] | str:
+def execute(
+    name: str,
+    workspace: Path,
+    payload: dict[str, Any],
+    *,
+    consent: Any = None,
+) -> dict[str, Any] | str:
+    """Run a registry tool. Protected web egress is gated here.
+
+    ``consent`` must be ``permissions.trusted_consent()`` from this
+    process after a real card. Payload/env ``_approved`` flags are
+    stripped and never count as consent.
+    """
+    from . import permissions
+
     tool = REGISTRY.get(name)
     if tool is None:
         raise KeyError(f"unknown tool: {name}")
-    return tool.handler(workspace, payload)
+    data = permissions.strip_forged_approval(payload if isinstance(payload, dict) else {})
+    if permissions.needs_web_consent(name, data):
+        blocked = permissions.web_egress_block_reason(workspace, name, data)
+        if blocked:
+            return {"ok": False, "error": blocked}
+        approved = (
+            permissions.is_trusted_consent(consent)
+            or permissions.invocation_approved()
+        )
+        if not approved:
+            decision = permissions.request_protected_sync(workspace, name, data)
+            if decision != "approve":
+                return {"ok": False, "error": "web egress denied"}
+        blocked = permissions.web_egress_block_reason(workspace, name, data)
+        if blocked:
+            return {"ok": False, "error": blocked}
+        with permissions.approved_invocation():
+            return tool.handler(workspace, data)
+    return tool.handler(workspace, data)
 
 
 # ── DuckDB starter-pill tools ────────────────────────────────────────

@@ -876,6 +876,11 @@ async def _warm_curation_history(workspace: Path) -> None:
         log.exception("curation-history pre-warm failed for %s", workspace)
 
 
+def _desk_live_view(workspace: Path | None = None) -> dict[str, Any]:
+    from .agents.desk_admission import public_view
+    return public_view(workspace)
+
+
 async def handle_settings_get(request: web.Request) -> web.Response:
     """General app preferences (see app_settings). Read-only mirror of
     settings.json plus a couple of derived, display-only fields."""
@@ -899,6 +904,7 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "media": media,
         "orchestration_preference": orchestration_policy.get_preference(),
         "orchestration_denied_models": orchestration_policy.get_denied_models(workspace),
+        **_desk_live_view(workspace),
     })
 
 
@@ -925,6 +931,11 @@ async def handle_settings_post(request: web.Request) -> web.Response:
                 log.exception("rail-history relocation failed for %s", workspace)
     if "orchestration_preference" in body:
         orchestration_policy.set_preference(body["orchestration_preference"])
+    if "desk_max_live_workers" in body:
+        try:
+            app_settings.set_desk_max_live_workers(int(body["desk_max_live_workers"]))
+        except (TypeError, ValueError) as e:
+            return web.json_response({"error": str(e)}, status=400)
     if "orchestration_denied_models" in body:
         raw = body["orchestration_denied_models"]
         if raw is None:
@@ -1337,6 +1348,9 @@ async def _fire_schedule(
     prompt = str(item.get("prompt") or "").strip()
     if not sid or not prompt:
         return
+    kind, spec, sargs = _parse_schedule_prompt(prompt)
+    if kind == "skip":
+        return
     await asyncio.to_thread(schedules.mark_started, store, sid, "pending")
     pref = item.get("preference")
     try:
@@ -1352,11 +1366,18 @@ async def _fire_schedule(
     try:
         for workspace in targets:
             try:
-                rid = await _dispatch_auto(
-                    app, None, prompt,
-                    preference=pref_f,
-                    workspace_override=workspace,
-                )
+                if kind == "desk" and spec is not None:
+                    _seat_desk_now(workspace, spec, sargs)
+                    rid = await _run_desk(
+                        app, spec, prompt=sargs,
+                        workspace=workspace, preference=pref_f,
+                    )
+                else:
+                    rid = await _dispatch_auto(
+                        app, None, prompt,
+                        preference=pref_f,
+                        workspace_override=workspace,
+                    )
                 if rid:
                     last_rid = rid
                     await asyncio.to_thread(schedules.set_running, store, sid, rid)
@@ -1409,7 +1430,11 @@ async def _tick_schedules(app: web.Application) -> None:
             for did in ended:
                 if did not in sbk.DESK_INFO:
                     continue
-                sbk.quiet(ws, did, keep_run=True)
+                spec = _desk_spec_from_id(did)
+                if spec is not None:
+                    _quiet_desk(app, spec, ws)
+                else:
+                    sbk.quiet(ws, did, keep_run=True)
         except Exception:  # noqa: BLE001
             log.exception("desk quiet on schedule window failed")
         for item in items:
@@ -1418,25 +1443,73 @@ async def _tick_schedules(app: web.Application) -> None:
             asyncio.create_task(_fire_schedule(app, ws, item))
 
 
-def _workspace_from_request(request: web.Request) -> Path:
-    raw = (request.query.get("workspace") or "").strip()
-    workspace: Path = request.app["workspace"]
-    if raw:
-        cand = Path(raw)
-        if cand.is_dir() and workspaces.is_within_home(cand):
-            workspace = cand
-    return workspace
-
-
 async def handle_orchestration_org(request: web.Request) -> web.Response:
     """Standing desk roster for Agent Space when no run is live."""
     workspace = _workspace_from_request(request)
+    if isinstance(workspace, web.Response):
+        return workspace
     org = await asyncio.to_thread(orchestrator_fs.load_org, workspace)
     return web.json_response({
         "org": org,
         "workspace": str(workspace),
         "workspace_name": workspace.name,
     })
+
+
+def _desk_has_live_work(
+    app: web.Application, workspace: Path, rec: Any,
+) -> bool:
+    """True when a real run or tracked launch is still going."""
+    runs: dict[str, dict[str, Any]] = app.get("runs") or {}
+    rid = getattr(rec, "run_id", None)
+    if rid:
+        r = runs.get(str(rid))
+        if r and r.get("status") in _ORCH_BUSY_STATUSES:
+            ws = str(r.get("workspace") or "")
+            if not ws or ws == str(workspace):
+                return True
+    launches: dict[tuple[str, str], asyncio.Task] = app.get("desk_launches") or {}
+    task = launches.get(_desk_launch_key(workspace, str(rec.desk_id)))
+    return bool(task is not None and not task.done())
+
+
+def _reconcile_desk_state(
+    app: web.Application, workspace: Path, rec: Any,
+) -> str:
+    """Derive working/quiet from live runs and launches only.
+
+    Checkpoints prove resumability, not liveness. A leftover
+    running/interrupted/waiting_limits/planning snapshot without a live
+    run or tracked launch is quiet, keeping the resumable ID.
+    """
+    from . import kernel as sbk
+    if rec.state == sbk.STATE_DISMISSED:
+        return rec.state
+    if _desk_has_live_work(app, workspace, rec):
+        if rec.state != sbk.STATE_WORKING:
+            try:
+                sbk.set_working(workspace, rec.desk_id, run_id=rec.run_id)
+            except Exception:  # noqa: BLE001
+                pass
+        return sbk.STATE_WORKING
+    if rec.state != sbk.STATE_WORKING:
+        return rec.state
+    phase = ""
+    if rec.run_id:
+        try:
+            ck = orchestration.load_checkpoint(workspace, rec.run_id)
+        except Exception:  # noqa: BLE001
+            ck = None
+        st = (ck or {}).get("status") if isinstance(ck, dict) else None
+        phase = str((st or {}).get("phase") or "")
+    try:
+        sbk.quiet(
+            workspace, rec.desk_id, run_id=rec.run_id,
+            keep_run=bool(rec.run_id and phase not in ("completed", "")),
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return sbk.STATE_QUIET
 
 
 async def handle_desks_list(request: web.Request) -> web.Response:
@@ -1452,8 +1525,11 @@ async def handle_desks_list(request: web.Request) -> web.Response:
         objective = rec.objective
         if not objective and org and rec.run_id and rec.run_id == oid:
             objective = org.get("objective")
+        state = _reconcile_desk_state(request.app, workspace, rec)
+        row = rec.to_dict()
+        row["state"] = state
         desks.append({
-            **rec.to_dict(),
+            **row,
             "label": info.get("label") or rec.desk_id,
             "slash": info.get("slash"),
             "objective": objective,
@@ -3700,6 +3776,36 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
 
     effective_pid = pid or _resolve_default_provider()
     is_local = _provider_is_local(effective_pid)
+    is_curate = action in ("curate", "curator")
+    label = pid or _resolve_default_provider()
+    try:
+        plabel = llmgateway.get(label).LABEL
+    except llmgateway.ProviderError:
+        plabel = label
+    run_model = cp_model or _effective_model(label)
+    if is_curate:
+        raw_pref = body.get("preference")
+        try:
+            pref = float(raw_pref) if raw_pref is not None else None
+        except (TypeError, ValueError):
+            pref = None
+        cspec = _desk_spec("curate") or {
+            "desk_id": "curate", "cancel": ("curate",), "slash": "curate",
+            "command": "curate", "task_kind": "curation", "staff": _CURATE_STAFF,
+        }
+        _launch_desk(
+            request.app, cspec, prompt=args, workspace=workspace,
+            preference=pref,
+            provider_override=pid, model_override=cp_model,
+            lock_provider=bool(provider),
+        )
+        return web.json_response({
+            "ok": True, "action": action,
+            "provider": label, "provider_label": plabel, "model": run_model,
+            "background": True,
+            "orchestrated": not _curate_constrained(local=is_local, text=args),
+        })
+
     _lrung = None
     if is_local:
         _lcfg = await asyncio.to_thread(localllm.load_config)
@@ -3713,64 +3819,18 @@ async def handle_ce_action_run(request: web.Request) -> web.Response:
     if ce_prompt is None:
         return web.json_response(
             {"error": f"not a CE action: {action}"}, status=400)
-    extra_system = ""
-    if action in ("curate", "curator"):
-        cap = _CURATOR_PROFILE_CAP_TOKENS
-        if _lrung is not None:
-            cap = max(400, _lrung.extra_system_chars // 4)
-        elif is_local:
-            cap = 400
-        prof = await asyncio.to_thread(_curator_profile, workspace, cap)
-        extra_system = _curator_profile_system(prof)
-        fb = await asyncio.to_thread(_review_feedback_system, workspace)
-        if fb:
-            extra_system = (extra_system + "\n\n" + fb).strip()
-        prime = await asyncio.to_thread(
-            _curate_wave_prime_system, workspace, args, local=is_local,
-        )
-        if prime:
-            extra_system = (extra_system + "\n\n" + prime).strip()
-
-    label = pid or _resolve_default_provider()
-    try:
-        plabel = llmgateway.get(label).LABEL
-    except llmgateway.ProviderError:
-        plabel = label
-    run_model = cp_model or _effective_model(label)
     excerpt = f"[{action} · background · {plabel} · {run_model}] {args}".strip()
-
-    is_curate = action in ("curate", "curator")
-    constrained = is_local or bool(args and len(args) <= 80 and "\n" not in args)
-    if is_curate:
-        raw_pref = body.get("preference")
-        try:
-            pref = float(raw_pref) if raw_pref is not None else None
-        except (TypeError, ValueError):
-            pref = None
-        task = asyncio.create_task(_dispatch_auto(
-            request.app, None, ce_prompt,
-            preference=pref,
-            provider_override=pid, model_override=cp_model,
-            input_excerpt=excerpt,
-            extra_system=extra_system or None,
-            command="curate",
-            task_kind="curation",
-            constrained=constrained,
-            lock_provider=bool(provider),
-        ))
-    else:
-        task = asyncio.create_task(_dispatch_chat(
-            request.app, None, ce_prompt,
-            provider_override=pid, model_override=cp_model,
-            input_excerpt=excerpt,
-            extra_system=extra_system or None,
-            command=action if is_local else None,
-        ))
+    task = asyncio.create_task(_dispatch_chat(
+        request.app, None, ce_prompt,
+        provider_override=pid, model_override=cp_model,
+        input_excerpt=excerpt,
+        command=action if is_local else None,
+    ))
     task.add_done_callback(_make_dispatch_error_surface(request.app, None))
     return web.json_response({
         "ok": True, "action": action,
         "provider": label, "provider_label": plabel, "model": run_model,
-        "background": True, "orchestrated": is_curate and not constrained,
+        "background": True, "orchestrated": False,
     })
 
 
@@ -4183,6 +4243,15 @@ async def handle_permission_request(request: web.Request) -> web.Response:
         # by the display label so it survives per-session run-id churn.
         muted: set[str] = request.app.setdefault("muted_origins", set())
         if origin in muted:
+            # Protected egress must fail closed — never skip into the
+            # CLI's static allowlist.
+            if permissions.needs_web_consent(tool, tool_input):
+                return web.json_response({
+                    "decision": "deny",
+                    "remember": False,
+                    "muted": True,
+                    "reason": "web egress denied",
+                })
             return web.json_response({"decision": "skip", "muted": True})
 
     # Hard deny home/FS-wide scans BEFORE pre-approve / cards — agents
@@ -4201,11 +4270,23 @@ async def handle_permission_request(request: web.Request) -> web.Response:
             "reason": deny_reason,
         })
 
+    if permissions.needs_web_consent(tool, tool_input):
+        blocked = permissions.web_egress_block_reason(workspace, tool, tool_input)
+        if blocked:
+            return web.json_response({
+                "decision": "deny",
+                "remember": False,
+                "reason": blocked,
+            })
+        # Policy on: per-call card. Never short-circuit via allow-list.
+    else:
+        pattern = permissions.pattern_for(tool, tool_input)
+        if permissions.is_pre_approved(
+            workspace, pattern, tool=tool, tool_input=tool_input,
+        ):
+            return web.json_response({"decision": "approve", "remember": True, "cached": True})
+
     pattern = permissions.pattern_for(tool, tool_input)
-    if permissions.is_pre_approved(
-        workspace, pattern, tool=tool, tool_input=tool_input,
-    ):
-        return web.json_response({"decision": "approve", "remember": True, "cached": True})
 
     rec = permissions.register(
         workspace=workspace, provider=provider, tool=tool,
@@ -4217,6 +4298,7 @@ async def handle_permission_request(request: web.Request) -> web.Response:
         req_id=rec.req_id, provider=provider, tool=tool,
         tool_input=tool_input, pattern=rec.pattern, run_id=rec.run_id,
         thread_id=rec.thread_id, origin=rec.origin, origin_path=rec.origin_path,
+        protected=permissions.is_protected_egress(tool),
     ))
     decision = await permissions.await_decision(rec)
     # Tell the frontend the card is settled even when await_decision
@@ -4310,9 +4392,16 @@ async def handle_permission_mute(request: web.Request) -> web.Response:
         # Clear this source's in-flight cards now.
         for rec in permissions.list_pending():
             if rec.decision is None and rec.origin == origin:
-                permissions.resolve(rec.req_id, decision="skip", remember=False)
+                # Protected cards deny (fail closed). Other tools skip
+                # to the CLI allowlist.
+                verdict = (
+                    "deny"
+                    if permissions.needs_web_consent(rec.tool, rec.tool_input)
+                    else "skip"
+                )
+                permissions.resolve(rec.req_id, decision=verdict, remember=False)
                 await _broadcast(
-                    request.app, protocol.permission_resolved(rec.req_id, "skip"),
+                    request.app, protocol.permission_resolved(rec.req_id, verdict),
                 )
     else:
         muted.discard(origin)
@@ -4369,6 +4458,12 @@ async def handle_permission_allow_add(request: web.Request) -> web.Response:
     pattern = str(body.get("pattern") or "").strip()
     if not pattern:
         return web.json_response({"error": "pattern required"}, status=400)
+    if permissions.is_protected_pattern(pattern):
+        return web.json_response({
+            "ok": False,
+            "error": "web egress cannot be remembered as a blanket grant",
+            "patterns": permissions.list_allowed(workspace),
+        }, status=400)
     patterns = permissions.add_pattern(workspace, pattern)
     return web.json_response({"ok": True, "patterns": patterns})
 
@@ -5676,9 +5771,19 @@ _DECK_STAFF = (
     "Spoken English; cite wiki and vault. Do not invent numbers."
 )
 
+_RESEARCH_STAFF = (
+    "Search the open web, fetch into this workspace vault, ingest, "
+    "then write a cited brief. Use research_search and research_fetch."
+)
+
+
+_CURATE_STAFF = (
+    "Run curiosity-engine CURATE over this workspace."
+)
+
 
 def _desk_spec(sname: str) -> dict[str, Any] | None:
-    """Slash name → work/code desk spec. None if not a desk slash."""
+    """Slash name → standing-desk spec. None if not a desk slash."""
     n = (sname or "").strip().lower()
     if n in ("work", "working", "steer", "steering"):
         return {
@@ -5705,7 +5810,7 @@ def _desk_spec(sname: str) -> dict[str, Any] | None:
             "cancel": ("curate",),
             "task_kind": "curation",
             "slash": "curate",
-            "staff": "/curate",
+            "staff": _CURATE_STAFF,
         }
     if n in ("deck", "slideshow-author"):
         return {
@@ -5715,6 +5820,15 @@ def _desk_spec(sname: str) -> dict[str, Any] | None:
             "task_kind": "deck",
             "slash": None,
             "staff": _DECK_STAFF,
+        }
+    if n == "research":
+        return {
+            "desk_id": "research",
+            "command": "research",
+            "cancel": ("research",),
+            "task_kind": "research",
+            "slash": "research",
+            "staff": _RESEARCH_STAFF,
         }
     if n == "auto":
         return {
@@ -5738,6 +5852,8 @@ def _desk_spec_from_id(desk_id: str) -> dict[str, Any] | None:
         return _desk_spec("curate")
     if did in ("deck", "slideshow"):
         return _desk_spec("deck")
+    if did == "research":
+        return _desk_spec("research")
     if did == "auto":
         return _desk_spec("auto")
     return None
@@ -5777,6 +5893,8 @@ def _quiet_desk(app: web.Application, spec: dict[str, Any], workspace: Path) -> 
     rid = rec.run_id if rec is not None else None
     if rid:
         n += _cancel_run_ids(app, {rid})
+    if _cancel_desk_launch(app, workspace, str(spec["desk_id"])):
+        n += 1
     try:
         sbk.quiet(workspace, str(spec["desk_id"]), keep_run=True)
     except Exception:  # noqa: BLE001
@@ -5802,6 +5920,8 @@ def _dismiss_desk(app: web.Application, spec: dict[str, Any], workspace: Path) -
     rid = rec.run_id if rec is not None else None
     if rid:
         n += _cancel_run_ids(app, {rid}, dismiss=True)
+    if _cancel_desk_launch(app, workspace, str(spec["desk_id"])):
+        n += 1
     return n
 
 
@@ -5818,10 +5938,38 @@ def _maybe_resume_quiet_desk(
     rec = sbk.get(workspace, str(spec["desk_id"]))
     if rec is None or rec.state != sbk.STATE_QUIET or not rec.run_id:
         return None
+    try:
+        from . import schedules as _sched
+        for item in _sched.list_items(workspace):
+            if str(item.get("desk_id") or "") != rec.desk_id:
+                continue
+            until = item.get("until_at")
+            try:
+                until_f = float(until) if until is not None else None
+            except (TypeError, ValueError):
+                until_f = None
+            if until_f is not None and time.time() >= until_f:
+                return None
+    except Exception:  # noqa: BLE001
+        pass
     ck = orchestration.load_checkpoint(workspace, rec.run_id)
     st = (ck or {}).get("status") if isinstance(ck, dict) else None
     phase = str((st or {}).get("phase") or "")
     if phase not in ("quiet", "interrupted", "running"):
+        return None
+    until = None
+    if isinstance(st, dict):
+        until = st.get("curate_until")
+    plan = (ck or {}).get("plan") if isinstance(ck, dict) else None
+    if until is None and plan is not None:
+        dec = getattr(plan, "decision", None)
+        if isinstance(dec, dict):
+            until = dec.get("curate_until")
+    try:
+        until_f = float(until) if until is not None else None
+    except (TypeError, ValueError):
+        until_f = None
+    if until_f is not None and time.time() >= until_f:
         return None
     oid = rec.run_id
     sbk.set_working(workspace, rec.desk_id, run_id=oid)
@@ -5832,6 +5980,264 @@ def _maybe_resume_quiet_desk(
     return oid
 
 
+def _curate_constrained(*, local: bool, text: str = "") -> bool:
+    """Local short curate stays a single session. Cloud always host-waves.
+
+    Duration/continuous local still uses host package waves (one worker).
+    Mode aliases belong in the prime payload; they are not a reason to
+    skip the desk.
+    """
+    if not local:
+        return False
+    from .agents.orchestration import parse_duration_window
+    repeat, _until = parse_duration_window(text)
+    return not repeat
+
+
+def _parse_schedule_prompt(
+    prompt: str,
+) -> tuple[str, dict[str, Any] | None, str]:
+    """Classify a schedule prompt: desk fire, skip control, or Auto.
+
+    ``skip`` is ``/curate stop`` / ``/work dismiss`` — those are not
+    fires. Deck/Auto have no public slash, so ``/deck`` stays Auto.
+    """
+    parsed = rail.parse(prompt)
+    if parsed.get("kind") != "slash":
+        return "auto", None, prompt
+    spec = _desk_spec(str(parsed.get("name") or ""))
+    if not spec or not spec.get("slash"):
+        return "auto", None, prompt
+    sargs = str(parsed.get("args") or "")
+    if _desk_slash_verb(sargs) in ("quiet", "dismiss"):
+        return "skip", spec, sargs
+    return "desk", spec, sargs
+
+
+def _schedule_desk_launch(prompt: str) -> tuple[dict[str, Any] | None, str]:
+    """Schedule prompt → (desk spec, args) when it should fire a desk."""
+    kind, spec, sargs = _parse_schedule_prompt(prompt)
+    if kind == "desk":
+        return spec, sargs
+    return None, prompt
+
+
+def _desk_launch_key(workspace: Path, desk_id: str) -> tuple[str, str]:
+    return (str(workspace), str(desk_id))
+
+
+def _track_desk_launch(
+    app: web.Application, workspace: Path, desk_id: str, task: asyncio.Task,
+) -> None:
+    launches: dict[tuple[str, str], asyncio.Task] = app.setdefault(
+        "desk_launches", {},
+    )
+    key = _desk_launch_key(workspace, desk_id)
+    old = launches.get(key)
+    if old is not None and old is not task and not old.done():
+        old.cancel()
+    launches[key] = task
+
+
+def _cancel_desk_launch(
+    app: web.Application, workspace: Path, desk_id: str,
+) -> bool:
+    launches: dict[tuple[str, str], asyncio.Task] = app.get("desk_launches") or {}
+    task = launches.pop(_desk_launch_key(workspace, desk_id), None)
+    if task is None or task.done():
+        return False
+    task.cancel()
+    return True
+
+
+def _seat_desk_now(
+    workspace: Path,
+    spec: dict[str, Any],
+    prompt: str,
+    *,
+    provider: str | None = None,
+    model: str | None = None,
+) -> None:
+    """Stand the desk before dispatch so the dashboard is not empty.
+
+    Keep a live ``run_id`` — ``seat()`` would otherwise clear it and
+    Stop/Start would lose the wave that is already running.
+    """
+    from . import kernel as sbk
+    did = str(spec["desk_id"])
+    pid = provider or _resolve_default_provider()
+    mdl = model or (_effective_model(pid) if pid else None)
+    obj = (prompt or "").strip() or str(spec.get("staff") or did)
+    keep_run = None
+    try:
+        rec = sbk.get(workspace, did)
+        if rec is not None and rec.state == sbk.STATE_WORKING and rec.run_id:
+            keep_run = rec.run_id
+    except Exception:  # noqa: BLE001
+        keep_run = None
+    try:
+        sbk.seat(
+            workspace, did,
+            chief_provider=str(pid or "unknown"),
+            chief_model=mdl,
+            objective=obj[:2000],
+            run_id=keep_run,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("desk seat on launch failed")
+
+
+async def _curate_extra_system(
+    workspace: Path, args: str, *, local: bool, local_rung: Any = None,
+) -> str:
+    """Profile + Reviews feedback + Phase 1 prime. Off the WS loop."""
+    cap = _CURATOR_PROFILE_CAP_TOKENS
+    if local_rung is not None:
+        cap = max(400, int(getattr(local_rung, "extra_system_chars", 0) or 0) // 4)
+    elif local:
+        cap = 400
+    prof = await asyncio.to_thread(_curator_profile, workspace, cap)
+    extra = _curator_profile_system(prof)
+    fb = await asyncio.to_thread(_review_feedback_system, workspace)
+    if fb:
+        extra = (extra + "\n\n" + fb).strip()
+    prime = await asyncio.to_thread(
+        _curate_wave_prime_system, workspace, args, local=local,
+    )
+    if prime:
+        extra = (extra + "\n\n" + prime).strip()
+    return extra
+
+
+async def _run_curate_desk(
+    app: web.Application,
+    args: str,
+    *,
+    preference: float | None = None,
+    workspace: Path,
+    workspace_override: Path | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    lock_provider: bool = False,
+) -> str | None:
+    """Build the CE prompt off-loop, then dispatch the Curate desk."""
+    pid = provider_override
+    model = model_override
+    if not pid:
+        pid, model = _ce_action_provider(workspace)
+    effective = pid or _resolve_default_provider()
+    is_local = _provider_is_local(effective)
+    lrung = None
+    if is_local:
+        lcfg = await asyncio.to_thread(localllm.load_config)
+        lrung = rail_default.resolve_local_rung(
+            localllm.ram_gb(),
+            model_hint=rail_default.model_hint_from_cfg(lcfg),
+        )
+    ce_prompt = _ce_action_prompt(
+        "curate", args, local=is_local, local_rung=lrung,
+    ) or _CURATE_STAFF
+    extra = await _curate_extra_system(
+        workspace, args, local=is_local, local_rung=lrung,
+    )
+    from . import kernel as sbk
+    rec = sbk.get(workspace, sbk.DESK_CURATE)
+    if rec is None or rec.state == sbk.STATE_DISMISSED:
+        return None
+    excerpt = f"[curate · background] {args}".strip()
+    return await _dispatch_auto(
+        app, None, ce_prompt,
+        preference=preference,
+        workspace_override=workspace_override,
+        provider_override=pid,
+        model_override=model,
+        input_excerpt=excerpt,
+        extra_system=extra or None,
+        command="curate",
+        task_kind="curation",
+        constrained=_curate_constrained(local=is_local, text=args),
+        lock_provider=lock_provider,
+    )
+
+
+async def _run_desk(
+    app: web.Application,
+    spec: dict[str, Any],
+    *,
+    prompt: str,
+    workspace: Path,
+    preference: float | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    lock_provider: bool = False,
+) -> str | None:
+    ws_path = Path(workspace)
+    me = asyncio.current_task()
+    if me is not None:
+        _track_desk_launch(app, ws_path, str(spec["desk_id"]), me)
+    # Pin the captured vault. Comparing to the focused workspace and
+    # passing None lets a mid-preflight workspace switch steal the run.
+    override = ws_path
+    kind = spec.get("task_kind")
+    rid: str | None = None
+    try:
+        from . import kernel as sbk
+        rec = sbk.get(ws_path, str(spec["desk_id"]))
+        if rec is not None and rec.state == sbk.STATE_DISMISSED:
+            return None
+        if kind == "curation":
+            rid = await _run_curate_desk(
+                app, prompt,
+                preference=preference,
+                workspace=Path(workspace),
+                workspace_override=override,
+                provider_override=provider_override,
+                model_override=model_override,
+                lock_provider=lock_provider,
+            )
+        else:
+            staff = not (prompt or "").strip()
+            text = (prompt or "").strip() or str(spec["staff"])
+            cmd = spec.get("command")
+            excerpt = (
+                f"[{cmd} · background] {prompt}"
+                if cmd else
+                f"[desk · background] {prompt}"
+            ).strip()
+            rid = await _dispatch_auto(
+                app, None, text,
+                preference=preference,
+                workspace_override=override,
+                provider_override=provider_override,
+                model_override=model_override,
+                lock_provider=lock_provider,
+                input_excerpt=excerpt,
+                command=cmd,
+                task_kind=kind,
+                family_staff=staff and kind in {"projects", "code"},
+            )
+    finally:
+        launches: dict[tuple[str, str], asyncio.Task] = app.get("desk_launches") or {}
+        key = _desk_launch_key(ws_path, str(spec["desk_id"]))
+        if launches.get(key) is me:
+            launches.pop(key, None)
+        # Only tear down a placeholder seat (working, no run yet).
+        # A started wave is quieted by `_finish_desk`; Stop uses keep_run.
+        if not rid:
+            from . import kernel as sbk
+            try:
+                rec = sbk.get(ws_path, str(spec["desk_id"]))
+                if (
+                    rec is not None
+                    and rec.state == sbk.STATE_WORKING
+                    and not rec.run_id
+                ):
+                    sbk.quiet(ws_path, rec.desk_id)
+            except Exception:  # noqa: BLE001
+                pass
+    return rid
+
+
 def _launch_desk(
     app: web.Application,
     spec: dict[str, Any],
@@ -5839,29 +6245,27 @@ def _launch_desk(
     prompt: str,
     workspace: Path | None = None,
     preference: float | None = None,
+    provider_override: str | None = None,
+    model_override: str | None = None,
+    lock_provider: bool = False,
 ) -> None:
-    staff = not (prompt or "").strip()
-    text = (prompt or "").strip() or str(spec["staff"])
-    cmd = spec.get("command")
-    excerpt = (
-        f"[{cmd} · background] {prompt}"
-        if cmd else
-        f"[desk · background] {prompt}"
-    ).strip()
-    kind = spec.get("task_kind")
     focused = Path(app["workspace"])
-    override = None
-    if workspace is not None and Path(workspace) != focused:
-        override = workspace
-    t = asyncio.create_task(_dispatch_auto(
-        app, None, text,
+    ws_path = Path(workspace) if workspace is not None else focused
+    _seat_desk_now(
+        ws_path, spec, prompt,
+        provider=provider_override,
+        model=model_override,
+    )
+    t = asyncio.create_task(_run_desk(
+        app, spec,
+        prompt=prompt,
+        workspace=ws_path,
         preference=preference,
-        workspace_override=override,
-        input_excerpt=excerpt,
-        command=cmd,
-        task_kind=kind,
-        family_staff=staff and kind in {"projects", "code"},
+        provider_override=provider_override,
+        model_override=model_override,
+        lock_provider=lock_provider,
     ))
+    _track_desk_launch(app, ws_path, str(spec["desk_id"]), t)
     t.add_done_callback(_make_dispatch_error_surface(app, None))
 
 
@@ -7477,6 +7881,9 @@ async def handle_streams_oauth_callback(request: web.Request) -> web.Response:
 
 
 async def handle_streams_poll(request: web.Request) -> web.Response:
+    blocked = _policy_block("comms_streams")
+    if blocked:
+        return blocked
     acct = await asyncio.to_thread(streams.get_account, request.match_info["account_id"])
     if acct is None:
         return web.json_response({"error": "no such account"}, status=404)
@@ -7491,6 +7898,7 @@ async def handle_streams_poll(request: web.Request) -> web.Response:
 
 
 async def handle_streams_auto(request: web.Request) -> web.Response:
+    """Cadence only: poll/ingest already-approved threads. Never auto-approves."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
@@ -7501,19 +7909,110 @@ async def handle_streams_auto(request: web.Request) -> web.Response:
     )
     if acct is None:
         return web.json_response({"error": "no such account"}, status=404)
-    return web.json_response({"ok": True, "auto_curate": acct["auto_curate"]})
+    return web.json_response({
+        "ok": True,
+        "auto_curate": bool(acct.get("auto_curate")),
+        "note": "cadence for approved threads only; does not approve sources",
+    })
 
 
-def _stream_curation_provider() -> str | None:
-    """Comms curation writes wiki pages, so it needs a file-capable
-    CLI provider. Claude Code first, Codex fallback."""
-    for pid in ("claude_code", "openai_codex"):
+def _comms_curation_pair_ok(
+    pid: str | None,
+    model: str | None,
+    *,
+    denied: list[str] | tuple[str, ...] | set[str] | None,
+) -> bool:
+    """Keyed, allowlisted, file-capable CLI (shell + file_write).
+
+    Direct Comms curation calls ``chat_stream`` with no tools / ToolUse
+    loop, so HTTP ``can_curate`` (tools-only) providers cannot write.
+    Grok Build qualifies via ``can_execute``.
+    """
+    from .agents import orchestration_policy as orch_pol
+    if not pid:
+        return False
+    if not admin_policy.provider_allowed(pid):
+        return False
+    if not orch_pol.model_allowed(pid, model, denied):
+        return False
+    try:
+        provider = llmgateway.get(pid)
+    except llmgateway.ProviderError:
+        return False
+    try:
+        keyed = bool(provider.has_key())
+    except Exception:  # noqa: BLE001
+        keyed = False
+    if not keyed:
+        return False
+    return bool(llmgateway.can_execute(pid))
+
+
+def _comms_curation_route(workspace: Path | None) -> tuple[str | None, str | None]:
+    """File-capable CLI routing (can_execute), plus model allowlists.
+
+    Direct Comms curation has no ToolUse loop, so HTTP tools-only
+    providers are skipped. Does not add a second source-approval
+    prompt: Comms sources are already explicitly approved.
+    """
+    from .agents import orchestration_policy as orch_pol
+    ws = Path(workspace) if workspace is not None else None
+    denied = orch_pol.get_denied_models(ws) if ws is not None else orch_pol.get_denied_models()
+    candidates: list[tuple[str | None, str | None]] = []
+    if ws is not None:
         try:
-            if llmgateway.get(pid).has_key():
-                return pid
-        except llmgateway.ProviderError:
+            candidates.append(_ce_action_provider(ws))
+        except Exception:  # noqa: BLE001
+            log.exception("comms curator CE-action route failed")
+        try:
+            hint_pid, hint_model = _auto_roster_pair(ws)
+            picked = orch_pol.pick_chief_pair(
+                default_provider=hint_pid,
+                default_model=hint_model,
+                preference=orch_pol.get_preference(),
+                workspace=ws,
+            )
+            candidates.append(picked)
+        except Exception:  # noqa: BLE001
+            log.exception("comms curator roster route failed")
+    for pid, prov in llmgateway.PROVIDERS.items():
+        try:
+            keyed = bool(prov.has_key())
+        except Exception:  # noqa: BLE001
+            keyed = False
+        if keyed:
+            candidates.append((pid, _effective_model(pid)))
+    seen: set[tuple[str, str | None]] = set()
+    for pid, model in candidates:
+        if not pid:
             continue
-    return None
+        key = (pid, model)
+        if key in seen:
+            continue
+        seen.add(key)
+        if _comms_curation_pair_ok(pid, model, denied=denied):
+            return pid, model
+    return None, None
+
+
+def _comms_user_ingest_error(raw: str | None) -> str:
+    """Short user-facing ingest failure. No implementation details."""
+    low = str(raw or "").lower()
+    if not low.strip():
+        return "Could not add this to the wiki. It stays approved."
+    if "revok" in low:
+        return "This source was revoked before it could be added."
+    if "comms_streams" in low or "disabled by admin" in low:
+        return "Comms ingestion is turned off by policy."
+    if "allowlist" in low:
+        return "This workspace is not allowed for the account."
+    if "no wiki commit" in low or "produced no wiki" in low:
+        return "Nothing new was added to the wiki. It stays queued."
+    if "provider" in low or "configured" in low or "curator" in low or "file-capable" in low:
+        return "No file-capable curator is available for this workspace."
+    if "retrieve" in low or "fetch" in low or "not connected" in low:
+        return "Could not retrieve the approved mail. It stays approved."
+    return "Could not add this to the wiki. It stays approved."
 
 
 async def _triage_events(
@@ -7584,92 +8083,184 @@ async def _curate_into(
     charter invariant: no cross-workspace curator). Headless and
     OUTSIDE the rail — the messages must not enter the conversation
     log; the wiki pages the agent writes ARE the durable output.
-    Registered in the runs registry so the dashboard shows it."""
-    pid = _stream_curation_provider()
-    if pid is None:
-        return False, "comms curation needs Claude Code or Codex configured"
+    Registered in the runs registry so the dashboard shows it.
+
+    Occupies one worker seat on the workspace Curate desk so Comms
+    shares live-worker limits with /curate.
+    """
+    from . import comms_review as _cr
+    from .agents import desk_admission as seats
+    from .kernel.desk import DESK_CURATE
     if not ws.is_dir():
         return False, f"target workspace missing: {ws}"
+    if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in events):
+        return False, "revoked during handoff"
+    if not admin_policy.feature_enabled("comms_streams"):
+        return False, admin_policy.feature_error("comms_streams")
+    allow = set(streams.live_allowed_workspaces(acct))
+    if str(ws) not in allow:
+        return False, "workspace is not on this account allowlist"
+    pid, model = _comms_curation_route(ws)
+    if not pid:
+        return False, "no file-capable curator is available for this workspace"
+    if not model:
+        model = _effective_model(pid)
     provider = llmgateway.get(pid)
     run_id = f"run-{uuid.uuid4().hex[:8]}"
     runs: dict[str, dict[str, Any]] = app.setdefault("runs", {})
     runs[run_id] = {
-        "run_id": run_id, "provider": pid, "model": _effective_model(pid),
+        "run_id": run_id, "provider": pid, "model": model,
         "input_excerpt": f"curate comms: {acct['label']} → {ws.name} ({len(events)} msgs)",
         "started_at": time.time(), "last_chunk_at": time.time(),
         "tool_count": 0, "status": "running",
         "task": asyncio.current_task(),
         "workspace": str(ws), "workspace_name": ws.name,
         "is_background": True,
+        "desk": DESK_CURATE,
     }
+    gate = None
+    sid = None
+    acquired = False
     try:
+        from . import ce_host
+        before = await asyncio.to_thread(ce_host.wiki_work_snapshot, ws)
+        if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in events):
+            return False, "revoked during handoff"
+        if str(ws) not in set(streams.live_allowed_workspaces(acct)):
+            return False, "workspace is not on this account allowlist"
         ws_desc = await asyncio.to_thread(streams.workspace_descriptor, str(ws))
         profile = await asyncio.to_thread(_curator_profile, ws)
+        if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in events):
+            return False, "revoked during handoff"
+        domain = seats.desk_domain_id(ws, DESK_CURATE)
+        gate = seats.gate_for(domain, workspace=ws)
+        gate.retain()
+        sid = seats.slot_id(run_id, "comms-curator")
+        await gate.acquire(sid, kind="worker")
+        acquired = True
+        if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in events):
+            return False, "revoked during handoff"
+        if not admin_policy.feature_enabled("comms_streams"):
+            return False, admin_policy.feature_error("comms_streams")
+        if str(ws) not in set(streams.live_allowed_workspaces(acct)):
+            return False, "workspace is not on this account allowlist"
         req = llmgateway.ChatRequest(
             messages=[{"role": "user",
                        "content": streams.curation_prompt(
                            acct, events, workspace_desc=ws_desc,
                            profile=profile or None)}],
-            model=_effective_model(pid),
+            model=model,
             workspace=str(ws),
-            reasoning_effort=_effort_for(
-                pid, _effective_model(pid), "ladder"),
+            reasoning_effort=_effort_for(pid, model, "ladder"),
         )
+        if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in events):
+            return False, "revoked during handoff"
         async for ev in provider.chat_stream(req):
             runs[run_id]["last_chunk_at"] = time.time()
             if isinstance(ev, llmgateway.DoneChunk):
                 break
+        receipt = await asyncio.to_thread(ce_host.wiki_diff_receipt, ws, before)
+        landed = int(receipt.get("wiki_pages_landed") or 0)
+        changed = list(receipt.get("wiki_pages_changed") or [])
+        committed = bool(receipt.get("wiki_committed"))
+        if run_id in runs:
+            runs[run_id]["wiki_pages_landed"] = landed
+            runs[run_id]["wiki_committed"] = committed
+        if not committed or (landed <= 0 and not changed):
+            return False, "curation produced no wiki commit"
         return True, None
+    except asyncio.CancelledError:
+        raise
     except Exception as e:  # noqa: BLE001
         log.exception("stream curation failed for %s → %s", acct["id"], ws)
         return False, str(e)
     finally:
+        if gate is not None:
+            try:
+                if acquired and sid:
+                    await gate.release_async(sid)
+            finally:
+                seats.release_domain(gate)
         runs.pop(run_id, None)
 
 
 async def _run_stream_curation(app: web.Application, acct: dict[str, Any]) -> dict[str, Any]:
-    """The full pass: (optional) triage → per-workspace scoped
-    curation runs → consume exactly what was processed. Failed runs
-    leave their events in transit for the next attempt."""
-    events = (await asyncio.to_thread(streams.pending_events, acct["id"]))[:150]
-    if not events:
-        return {"ok": True, "curated": 0, "skipped": 0, "note": "transit empty"}
-    allow = streams.allowed_workspaces(acct)
+    """Curate only approved, non-revoked, allowlisted transit events."""
+    from . import comms_review
+    raw = (await asyncio.to_thread(streams.pending_events, acct["id"]))[:150]
+    allow = set(streams.allowed_workspaces(acct))
     if not allow:
         return {"ok": False,
                 "error": "no workspaces allowlisted for this stream — "
                          "tick at least one in Settings"}
-    # Legacy "default" mode (pre-allowlist-only) = no gate over what
-    # was a one-entry allowlist → fanout covers it exactly.
-    mode = acct.get("routing") or ("smart" if acct.get("triage") else "fanout")
-    if mode == "default":
-        mode = "fanout"
+    keep: list[dict[str, Any]] = []
+    purge: list[str] = []
     skipped: list[str] = []
-    if mode == "smart":
-        triaged = await _triage_events(app, acct, events)
-        if triaged is None:
-            # No privileged workspace to guess into — leave the batch
-            # PENDING and say why (retried next poll/curate).
-            return {"ok": False,
-                    "error": "triage unavailable (no provider key?) — "
-                             "messages stay pending"}
-        groups, skipped = triaged
-    else:
-        # No gate: full batch to every allowed workspace; each scoped
-        # curator is the keep/skip decision (full text + wiki
-        # context — the per-workspace skip-bin, paid in curation
-        # tokens).
-        groups = {p: events for p in allow}
+    for e in raw:
+        eid = str(e.get("id") or "")
+        key = str(e.get("comms_key") or "")
+        ws = str(e.get("approved_workspace") or "")
+        if not e.get("approved") or not key or not ws:
+            if eid:
+                purge.append(eid)
+            continue
+        if comms_review.is_revoked(key):
+            if eid:
+                purge.append(eid)
+            continue
+        if ws not in allow:
+            if eid:
+                purge.append(eid)
+            continue
+        item = comms_review.get_item(key)
+        if not item or ws not in (item.get("approved_workspaces") or []):
+            if eid:
+                purge.append(eid)
+            continue
+        keep.append(e)
+    if purge:
+        await asyncio.to_thread(streams.consume_transit, acct["id"], purge)
+    if not admin_policy.feature_enabled("comms_streams"):
+        return {"ok": False, "error": admin_policy.feature_error("comms_streams")}
+    if not keep:
+        return {"ok": True, "curated": 0, "skipped": 0, "note": "no approved transit"}
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for e in keep:
+        groups.setdefault(str(e["approved_workspace"]), []).append(e)
     errors: list[str] = []
     targets: list[str] = []
     succeeded_ws: set[str] = set()
     for ws_path, evs in groups.items():
+        from . import comms_review as _cr
+        if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in evs):
+            errors.append("revoked during handoff")
+            continue
         ok, err = await _curate_into(app, acct, Path(ws_path), evs)
+        if any(_cr.is_revoked(str(e.get("comms_key") or "")) for e in evs):
+            errors.append("revoked during handoff")
+            for e in evs:
+                _cr.set_ingest_state(
+                    str(e.get("comms_key") or ""), ws_path,
+                    state="error",
+                    error=_comms_user_ingest_error("revoked during handoff"),
+                )
+            continue
         if ok:
             succeeded_ws.add(ws_path)
             targets.append(Path(ws_path).name)
+            for e in evs:
+                _cr.set_ingest_state(
+                    str(e.get("comms_key") or ""), ws_path,
+                    state="ingested", error="",
+                )
         elif err:
             errors.append(err)
+            for e in evs:
+                _cr.set_ingest_state(
+                    str(e.get("comms_key") or ""), ws_path,
+                    state="error",
+                    error=_comms_user_ingest_error(err),
+                )
     # An event is consumed only when EVERY workspace it was routed to
     # curated successfully — a multi-labelled message whose second
     # target failed stays in transit for the retry (the workspace
@@ -7701,11 +8292,166 @@ async def _run_stream_curation(app: web.Application, acct: dict[str, Any]) -> di
 
 
 async def handle_streams_curate(request: web.Request) -> web.Response:
+    from . import admin_policy
+    if not admin_policy.feature_enabled("comms_streams"):
+        return web.json_response(
+            {"error": admin_policy.feature_error("comms_streams")}, status=403,
+        )
     acct = await asyncio.to_thread(streams.get_account, request.match_info["account_id"])
     if acct is None:
         return web.json_response({"error": "no such account"}, status=404)
+    await streams.ingest_approved_updates(acct)
     result = await _run_stream_curation(request.app, acct)
     return web.json_response(result, status=200 if result.get("ok") else 502)
+
+
+async def handle_comms_review_list(request: web.Request) -> web.Response:
+    from . import comms_review
+    resolved = _workspace_from_request(request)
+    if isinstance(resolved, web.Response):
+        return resolved
+    workspace = resolved
+    items = await asyncio.to_thread(
+        comms_review.list_items, workspace=str(workspace),
+    )
+    return web.json_response({
+        "items": items,
+        "pending": sum(1 for i in items if i.get("status") == "pending"),
+        "workspace": str(workspace),
+        "workspaces": [
+            {"path": p, "name": Path(p).name}
+            for p in (workspaces.load().get("paths") or [])
+        ],
+    })
+
+
+async def handle_comms_review_open(request: web.Request) -> web.Response:
+    resolved = _workspace_from_request(request)
+    if isinstance(resolved, web.Response):
+        return resolved
+    workspace = resolved
+    await asyncio.to_thread(tabstore.add_comms_tab, workspace)
+    await _broadcast(request.app, _hello_payload(request.app))
+    await _broadcast(request.app, protocol.custom({"type": "open_comms"}))
+    return web.json_response({"ok": True})
+
+
+async def _ingest_after_approve(
+    app: web.Application,
+    acct: dict[str, Any],
+    key: str,
+    workspace: str,
+) -> dict[str, Any]:
+    """Fetch + curate an already-approved source. Approval already stuck.
+
+    Returns ingest_state / ingest_error for the HTTP body. Fail-closed
+    adapters do not pretend content was pulled.
+    """
+    from . import comms_review
+    cap = str((comms_review.get_item(key) or {}).get("content_capability") or "ok")
+    if cap == "fail_closed" or acct.get("provider") not in ("imap", "gmail", "msgraph"):
+        msg = "This source can be listed, but message content cannot be retrieved."
+        await asyncio.to_thread(
+            comms_review.set_ingest_state, key, workspace,
+            state="unsupported", error=msg,
+        )
+        return {"ingest_state": "unsupported", "ingest_error": msg}
+    await asyncio.to_thread(
+        comms_review.set_ingest_state, key, workspace,
+        state="pending", error="",
+    )
+    fetched = await streams.fetch_approved_thread(acct, key, workspace)
+    if not fetched.get("ok"):
+        err = _comms_user_ingest_error(str(fetched.get("error") or "retrieve"))
+        await asyncio.to_thread(
+            comms_review.set_ingest_state, key, workspace,
+            state="error", error=err,
+        )
+        return {"ingest_state": "error", "ingest_error": err}
+    if not fetched.get("events"):
+        return {"ingest_state": "pending", "ingest_error": ""}
+    curated = await _run_stream_curation(app, acct)
+    if curated.get("ok") and int(curated.get("curated") or 0) > 0:
+        await asyncio.to_thread(
+            comms_review.set_ingest_state, key, workspace,
+            state="ingested", error="",
+        )
+        return {"ingest_state": "ingested", "ingest_error": ""}
+    if curated.get("ok"):
+        err = _comms_user_ingest_error("curation produced no wiki commit")
+        await asyncio.to_thread(
+            comms_review.set_ingest_state, key, workspace,
+            state="error", error=err,
+        )
+        return {"ingest_state": "error", "ingest_error": err}
+    err = _comms_user_ingest_error(str(curated.get("error") or ""))
+    await asyncio.to_thread(
+        comms_review.set_ingest_state, key, workspace,
+        state="error", error=err,
+    )
+    return {"ingest_state": "error", "ingest_error": err}
+
+
+async def handle_comms_review_act(request: web.Request) -> web.Response:
+    from . import comms_review
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"error": "invalid json"}, status=400)
+    key = str(body.get("key") or "").strip()
+    action = str(body.get("action") or body.get("decision") or "").strip().lower()
+    if not key or action not in ("approve", "reject", "revoke"):
+        return web.json_response({"error": "key and action required"}, status=400)
+    resolved = _workspace_from_request(request, body if isinstance(body, dict) else None)
+    if isinstance(resolved, web.Response):
+        return resolved
+    ws = str(resolved)
+    item = await asyncio.to_thread(comms_review.get_item, key)
+    acct_id = str((item or {}).get("account_id") or "")
+    acct = await asyncio.to_thread(streams.get_account, acct_id) if acct_id else None
+    if acct is None:
+        return web.json_response({"error": "account missing; will not use active workspace"}, status=400)
+    allowed = streams.allowed_workspaces(acct)
+    if action == "approve":
+        if not str(body.get("workspace") or "").strip():
+            return web.json_response({"error": "workspace is required"}, status=400)
+        ws = str(body.get("workspace") or "").strip()
+        out = await asyncio.to_thread(
+            comms_review.approve, key, ws, allowed=allowed,
+        )
+        if out.get("ok"):
+            ingest = await _ingest_after_approve(
+                request.app, acct, key, ws,
+            )
+            out.update(ingest)
+            item = await asyncio.to_thread(
+                comms_review.get_item, key, ws,
+            )
+            if item:
+                out["item"] = item
+    elif action == "reject":
+        out = await asyncio.to_thread(comms_review.reject, key)
+    else:
+        out = await asyncio.to_thread(comms_review.revoke, key, reason="user")
+    if not out.get("ok"):
+        return web.json_response(out, status=400)
+    await asyncio.to_thread(tabstore.add_comms_tab, resolved)
+    await _broadcast(request.app, protocol.custom({
+        "type": "comms.review", "key": key, "action": action,
+    }))
+    return web.json_response(out)
+
+
+async def handle_comms_review_close(request: web.Request) -> web.Response:
+    resolved = _workspace_from_request(request)
+    if isinstance(resolved, web.Response):
+        return resolved
+    workspace = resolved
+    removed = await asyncio.to_thread(tabstore.remove_comms_tab, workspace)
+    if removed:
+        await _broadcast(request.app, _hello_payload(request.app))
+        await _broadcast(request.app, protocol.nav("graph", {}, "Graph"))
+    return web.json_response({"ok": True, "removed": removed})
 
 
 async def _stream_poll_loop(app: web.Application) -> None:
@@ -7715,17 +8461,18 @@ async def _stream_poll_loop(app: web.Application) -> None:
     while True:
         try:
             await asyncio.sleep(_STREAM_POLL_INTERVAL)
+            if not admin_policy.feature_enabled("comms_streams"):
+                continue
             for acct in await asyncio.to_thread(streams.list_accounts):
                 if streams.account_status(acct) != "connected":
                     continue
                 try:
                     await streams.poll_account(acct)
+                    # poll_account discovers metadata and ingests already-
+                    # approved threads. auto_curate is cadence for the
+                    # curator pass only — it never approves sources.
                     if acct.get("auto_curate"):
-                        pending = await asyncio.to_thread(
-                            streams.pending_events, acct["id"],
-                        )
-                        if pending:
-                            await _run_stream_curation(app, acct)
+                        await _run_stream_curation(app, acct)
                 except Exception:  # noqa: BLE001
                     log.exception("stream poll failed: %s", acct.get("label"))
         except asyncio.CancelledError:
@@ -7832,89 +8579,86 @@ async def _decisions_heartbeat_loop(app: web.Application) -> None:
 _WATCH_FOLDERS_INTERVAL = 60.0
 
 
-async def _dispatch_watch_ingest(app: web.Application, src_abs: str) -> None:
-    """Ingest one file a watch folder surfaced: stage a copy into the
-    vault (the ingest agent is workspace-scoped and can't read the
-    original), then dispatch the background agent with
-    `extracted_from` pointing at the ORIGINAL absolute path — watch
-    folders are exactly the external provenance the Sources view
-    renders."""
-    workspace: Path = app["workspace"]
-    src = Path(src_abs)
-    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", src.name) or "file.bin"
+async def _dispatch_watch_ingest(
+    app: web.Application, cand: watchfolders.Candidate, *, workspace: Path,
+) -> None:
+    """Hydrate (if needed), stage, and CE-ingest one watched file.
 
-    def _stage() -> tuple[str, int]:
-        payload = src.read_bytes()
-        digest = hashlib.sha1(payload).hexdigest()[:12]
-        target_dir = workspace / "vault" / digest
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target = target_dir / safe_name
-        if not target.exists():
-            target.write_bytes(payload)
-        return str(target.relative_to(workspace)), len(payload)
+    ``workspace`` is the one captured at scan time. Do not re-read
+    ``app["workspace"]`` — a UI switch before this task runs must not
+    ingest into a different vault that happens to watch the same folder.
 
-    rel, total = await asyncio.to_thread(_stage)
-    ext = src.suffix.lower().lstrip(".")
-    ext_hint = f"The file has extension `.{ext}`." if ext else "The file has no extension."
-    prompt = (
-        f"A watched folder picked up a new file. The original lives at "
-        f"`{src_abs}` (outside the workspace); a copy was staged at "
-        f"`{rel}` (size {total} bytes) for you to read. {ext_hint} "
-        f"Ingest it as a CE-shaped wiki page:\n\n"
-        f"  1. Read the staged copy (use Read for text/markdown; for "
-        f"PDFs or other binaries, try a shell extraction first — e.g. "
-        f"`pdftotext` if available, or just describe by filename + "
-        f"size when the contents aren't readable).\n"
-        f"  2. Classify into one of CE's page types: `source` "
-        f"(PDFs, articles, reports), `note` (plain user-authored "
-        f"text), `figure` (images), `unclassified` (anything else).\n"
-        f"  3. Slugify the filename to a kebab-case stem. Write the "
-        f"wiki page to `wiki/<type>s/<slug>.md` with frontmatter "
-        f"`type: <type>`, `title: \"[<typ>] <human title>\"`, "
-        f"`created` / `updated` dates, and `extracted_from: "
-        f"{src_abs}` — the ORIGINAL path, so provenance points at "
-        f"the user's file, not the vault copy.\n"
-        f"  4. Body: 2-4 paragraphs of metadata + key takeaways.\n"
-        f"  5. Don't run any other tools after Write."
-    )
-    run_id = f"run-{uuid.uuid4().hex[:8]}"
-
-    async def _runner() -> None:
+    Deterministic supported extraction runs here — no model dispatch.
+    Marked seen only after accepted extracted content is handed off.
+    """
+    inflight: set[str] = app.setdefault("watch_inflight", set())
+    key = cand.logical
+    if key in inflight:
+        return
+    inflight.add(key)
+    try:
+        result = await asyncio.to_thread(watchfolders.handoff, workspace, cand)
+        payload = {
+            "path": cand.path,
+            "logical": cand.logical,
+            "status": result.status,
+            "vault_path": result.vault_rel,
+            "extracted": result.extracted,
+            "error": result.error,
+        }
+        if result.status == "success":
+            _log_event(
+                app, "exec", f"watch-folder ingest: {cand.logical}",
+                source="watchfolders", actor="system", payload=payload,
+            )
+            _broadcast_files_changed_soon(app)
+        else:
+            log.info(
+                "watch-folder %s %s: %s",
+                result.status, cand.logical, result.error or "",
+            )
+    except Exception:  # noqa: BLE001
+        log.exception("watch-folder ingest failed: %s", cand.logical)
         try:
-            await _dispatch_chat(
-                app, ws=None, text=prompt,
-                input_excerpt=f"watch-ingest {safe_name}",
-                run_id=run_id,
-                command="ingest",
+            await asyncio.to_thread(
+                watchfolders.record_pending,
+                workspace, cand.logical,
+                state="error",
+                error="internal watch-ingest error",
+                retryable=True,
             )
         except Exception:  # noqa: BLE001
-            log.exception("watch-folder ingest run %s crashed", run_id)
-
-    task = asyncio.create_task(_runner())
-    task.add_done_callback(_make_dispatch_error_surface(app, run_id))
-    _log_event(
-        app, "exec", f"watch-folder ingest: {src_abs}",
-        source="watchfolders", actor="system",
-        payload={"path": src_abs, "vault_path": rel, "run_id": run_id},
-    )
+            log.exception("watch-folder pending record failed")
+    finally:
+        inflight.discard(key)
 
 
 async def _watch_folders_loop(app: web.Application) -> None:
     """Background: poll the active workspace's watch folders and
-    auto-ingest new files (capped per beat — each file is one agent
-    run). Sleep-first; every failure contained."""
+    auto-ingest new files (capped per beat). Sleep-first; hydration
+    and staging run off-loop with timeouts so the heartbeat stays
+    responsive. Every failure contained."""
     while True:
         try:
             await asyncio.sleep(_WATCH_FOLDERS_INTERVAL)
+            if not admin_policy.feature_enabled("watch_folders"):
+                continue
             ws: Path = app["workspace"]
+            inflight: set[str] = app.setdefault("watch_inflight", set())
+            inflight_snap = set(inflight)
             picked, backlog = await asyncio.to_thread(
-                watchfolders.scan_new, ws,
+                watchfolders.scan_candidates, ws, inflight=inflight_snap,
             )
-            for src_abs in picked:
-                try:
-                    await _dispatch_watch_ingest(app, src_abs)
-                except Exception:  # noqa: BLE001
-                    log.exception("watch-folder ingest failed: %s", src_abs)
+            if Path(app["workspace"]) != ws:
+                continue
+            tasks = [
+                asyncio.create_task(
+                    _dispatch_watch_ingest(app, cand, workspace=ws),
+                )
+                for cand in picked
+            ]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
             if backlog:
                 log.info(
                     "watch folders: %d more new files queued for later "
@@ -7928,12 +8672,9 @@ async def _watch_folders_loop(app: web.Application) -> None:
 
 async def handle_watch_folders_get(request: web.Request) -> web.Response:
     workspace: Path = request.app["workspace"]
-    folders = await asyncio.to_thread(watchfolders.list_folders, workspace)
-    return web.json_response({
-        "folders": folders,
-        "cap_per_beat": watchfolders.MAX_PER_BEAT,
-        "interval_s": int(_WATCH_FOLDERS_INTERVAL),
-    })
+    status = await asyncio.to_thread(watchfolders.api_status, workspace)
+    status["interval_s"] = int(_WATCH_FOLDERS_INTERVAL)
+    return web.json_response(status)
 
 
 async def handle_watch_folders_add(request: web.Request) -> web.Response:
@@ -7963,8 +8704,8 @@ async def handle_watch_folders_add(request: web.Request) -> web.Response:
         request.app, "exec", f"watch folder added: {res['path']}",
         source="watchfolders", actor="user", payload=res,
     )
-    folders = await asyncio.to_thread(watchfolders.list_folders, workspace)
-    return web.json_response({"ok": True, "folder": res, "folders": folders})
+    status = await asyncio.to_thread(watchfolders.api_status, workspace)
+    return web.json_response({"ok": True, "folder": res, **status})
 
 
 async def handle_watch_folders_remove(request: web.Request) -> web.Response:
@@ -7977,8 +8718,8 @@ async def handle_watch_folders_remove(request: web.Request) -> web.Response:
     ok = await asyncio.to_thread(watchfolders.remove_folder, workspace, raw)
     if not ok:
         return web.json_response({"error": "not a watched folder"}, status=404)
-    folders = await asyncio.to_thread(watchfolders.list_folders, workspace)
-    return web.json_response({"ok": True, "folders": folders})
+    status = await asyncio.to_thread(watchfolders.api_status, workspace)
+    return web.json_response({"ok": True, **status})
 
 
 async def handle_watch_folders_toggle(request: web.Request) -> web.Response:
@@ -7994,8 +8735,8 @@ async def handle_watch_folders_toggle(request: web.Request) -> web.Response:
     )
     if not ok:
         return web.json_response({"error": "not a watched folder"}, status=404)
-    folders = await asyncio.to_thread(watchfolders.list_folders, workspace)
-    return web.json_response({"ok": True, "folders": folders})
+    status = await asyncio.to_thread(watchfolders.api_status, workspace)
+    return web.json_response({"ok": True, **status})
 
 
 def _bulk_listing(root: Path) -> tuple[str, int, int]:
@@ -8223,15 +8964,13 @@ _AGENT_MAX_TURNS_LOCAL = _AGENT_SAFETY_BACKSTOP
 
 def _make_dispatch_error_surface(
     app: web.Application,
-    target: web.WebSocketResponse | str,
+    target: web.WebSocketResponse | str | None,
 ):
     """Return a `add_done_callback` that converts unhandled
     exceptions in dispatch tasks into rail-visible notices.
 
-    `target` is either a WebSocket (route the notice to that one
-    client — the rail surface) or a run_id string (no specific
-    client; broadcast to every connected client so any open dashboard
-    sees the failure). Headless background dispatches use the latter.
+    `target` is a WebSocket (that one client), a run_id string, or
+    None for a headless launch — both of the last two broadcast.
 
     Without this, an exception that escapes _dispatch_chat or
     _dispatch_fanout BEFORE their internal try/except blocks
@@ -8254,7 +8993,7 @@ def _make_dispatch_error_surface(
         )
         async def _send():
             try:
-                if isinstance(target, str):
+                if target is None or isinstance(target, str):
                     await _broadcast(app, notice)
                 else:
                     await target.send_json(notice)
@@ -8350,9 +9089,8 @@ _RULE_SLASH_RE = re.compile(
 )
 
 
-_CE_CURATE_MODES = {
-    "figures", "tables", "sources", "repair", "analyses", "sweep",
-}
+from .ce_protocol import CURATE_MODE_ALIASES as _CURATE_MODE_ALIASES
+_CE_CURATE_MODES = frozenset(_CURATE_MODE_ALIASES)
 
 
 # D6: per-workspace curator profile — user-authored steering injected
@@ -8578,8 +9316,11 @@ def _curate_wave_prime_system(
     if local:
         return ""
     from . import ce_host
+    from .ce_protocol import CURATE_MODE_ALIASES
     token = args.split(None, 1)[0].lower() if (args or "").strip() else ""
-    payload = {"mode": token} if token else {}
+    payload: dict[str, Any] = (
+        {"mode": token} if token in CURATE_MODE_ALIASES else {}
+    )
     try:
         prime = ce_host.wave_prime(workspace, payload)
     except Exception as exc:  # noqa: BLE001
@@ -9748,6 +10489,11 @@ def _desk_stopped_notice(task_kind: str | None) -> str:
             "Stopped — Deck desk is quiet. "
             "Dismiss it from Desks."
         )
+    if kind == "research":
+        return (
+            "Stopped — /research desk is quiet. "
+            "Dismiss with /research dismiss."
+        )
     slash = {"projects": "work", "code": "code"}.get(kind, "")
     if slash:
         return (
@@ -9778,6 +10524,7 @@ def _finish_desk(
         "code": sbk.DESK_CODE,
         "deck": sbk.DESK_DECK,
         "auto": sbk.DESK_AUTO,
+        "research": sbk.DESK_RESEARCH,
     }.get(kind)
     if not desk_id:
         return
@@ -9857,13 +10604,13 @@ async def _dispatch_auto(
         or orchestration_policy.provider_category(pid) == "local"
     )
     # Provider-backed /curate is always the CE curator node so it can
-    # dispatch Phase 2 workers. Local stays the single-session fallback.
-    # Constrained /curate still seats the Curate desk (chat path).
-    ce_provider_wave = (
-        task_kind == "curation" and not constrained and not local_pid
-    )
+    # dispatch Phase 2 workers. Local short curate stays a single
+    # session (constrained=True). Duration/continuous local still host-
+    # waves, one worker at a time — do not skip duration machinery.
+    ce_provider_wave = task_kind == "curation" and not constrained
     projects_desk_wave = task_kind in {"projects", "code"}
     deck_wave = task_kind == "deck"
+    research_desk_wave = task_kind == "research"
     desk_id = sbk.choose_desk(
         task_kind=task_kind,
         command=command,
@@ -9887,7 +10634,7 @@ async def _dispatch_auto(
         decision.strategy == "fast_lookup"
         and not ce_provider_wave
         and not projects_desk_wave
-        and task_kind not in {"curation", "projects", "code", "deck", "auto"}
+        and task_kind not in {"curation", "projects", "code", "deck", "auto", "research"}
     ):
         from .agents import fast_lookup as fast_lookup_mod
         from .kernel.hire import pick_fast_model, pick_kernel_model, strong_check_mode
@@ -9939,6 +10686,8 @@ async def _dispatch_auto(
     if (
         plain_single and not ce_provider_wave
         and not projects_desk_wave and not deck_wave
+        and not research_desk_wave
+        and not bool(features.web_ingest)
     ):
         await _chat_notice(
             app, ws,
@@ -10114,6 +10863,7 @@ async def _dispatch_auto(
         )
         curator_provider = curator_model = curator_harness = None
         project_hires: list[dict] | None = None
+        research_hires: list[dict] | None = None
         if str(task_kind or "") == "curation":
             from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
             hire = sbk.decide_hire(
@@ -10188,7 +10938,59 @@ async def _dispatch_auto(
                     "reports_to": "chief",
                 }],
             )
+        elif str(task_kind or "") == "research":
+            from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
+            pkg = sbk.get_package(sbk.RESEARCH_ID)
+            hire = sbk.decide_hire(
+                sbk.HireRequest(
+                    package_id=sbk.RESEARCH_ID,
+                    justification="research desk",
+                    needed_tools=list(pkg.tools if pkg else []),
+                    needed_skills=list(pkg.needed_skills if pkg else []),
+                    kind="specialist",
+                    desk_prior=True,
+                ),
+                preference=pref,
+                chief=(pid, model),
+                org=[],
+                workspace=workspace,
+                chief_tools=list(_CHIEF_TOOLS),
+                pi_available=sbk.pi_available(),
+            )
+            if hire.accepted:
+                curator_provider = hire.provider
+                curator_model = hire.model
+                curator_harness = hire.harness
+            research_hires = [hire.to_dict()] if hire.accepted else None
+            sbk.seat(
+                workspace, sbk.DESK_RESEARCH,
+                chief_provider=pid,
+                chief_model=model,
+                thread_id=thread_id,
+                run_id=parent_run_id,
+                objective=text,
+                org=[{
+                    "package": sbk.RESEARCH_ID,
+                    "provider": curator_provider or pid,
+                    "model": curator_model or model,
+                    "harness": curator_harness or "rail",
+                    "reports_to": "chief",
+                }],
+            )
         elif desk_id == sbk.DESK_AUTO:
+            from .agents.rail_default import ALLOWED_TOOLS as _CHIEF_TOOLS
+            auto_hires = sbk.pick_auto_hires(
+                text,
+                preference=pref,
+                chief=(pid, model),
+                workspace=workspace,
+                chief_tools=list(_CHIEF_TOOLS),
+                pi_available=sbk.pi_available(),
+                research=bool(features.research and features.web_ingest),
+                web_ingest=bool(features.web_ingest),
+            )
+            if auto_hires:
+                research_hires = [d.to_dict() for d in auto_hires]
             sbk.seat(
                 workspace, sbk.DESK_AUTO,
                 chief_provider=pid,
@@ -10196,6 +10998,13 @@ async def _dispatch_auto(
                 thread_id=thread_id,
                 run_id=parent_run_id,
                 objective=text,
+                org=[{
+                    "package": d.package_id,
+                    "provider": d.provider or pid,
+                    "model": d.model or model,
+                    "harness": d.harness or "rail",
+                    "reports_to": "chief",
+                } for d in auto_hires],
             )
         elif str(task_kind or "") in {"projects", "code"}:
             from . import kernel as sbk
@@ -10247,11 +11056,22 @@ async def _dispatch_auto(
             curator_model=curator_model,
             curator_harness=curator_harness,
             project_hires=project_hires,
+            research_hires=research_hires,
             workspace=workspace,
         )
         plan.features = features.to_dict()
         if extra_system:
             plan.extra_system = extra_system
+        if local_pid:
+            b = plan.bounds
+            plan.bounds = orchestration.OrchestrationBounds(
+                max_nodes=b.max_nodes,
+                max_depth=b.max_depth,
+                max_concurrency=1,
+                max_expansions=b.max_expansions,
+                worker_timeout_sec=b.worker_timeout_sec,
+                wall_clock_sec=b.wall_clock_sec,
+            ).clamp()
         if parent_run_id in runs:
             runs[parent_run_id]["planner_provider"] = planner_meta.get("provider")
             runs[parent_run_id]["planner_model"] = planner_meta.get("model")
@@ -10266,8 +11086,12 @@ async def _dispatch_auto(
             parent_run_id=parent_run_id, default_provider=provider,
             default_model=model, ws=ws,
         )
+        window_ended = str(
+            (result.telemetry or {}).get("stop_reason") or "",
+        ) == "curate window ended"
         _finish_desk(
-            workspace, task_kind, parent_run_id, cancelled=result.cancelled,
+            workspace, task_kind, parent_run_id,
+            cancelled=result.cancelled or window_ended,
         )
         if result.cancelled:
             if parent_run_id in runs:
@@ -10351,6 +11175,63 @@ async def _dispatch_auto(
     return parent_run_id
 
 
+def _task_kind_from_plan(plan: Any) -> str | None:
+    if plan is None:
+        return None
+    dec = getattr(plan, "decision", None) or {}
+    if isinstance(dec, dict) and dec.get("task_kind"):
+        return str(dec["task_kind"])
+    strat = str(getattr(plan, "strategy", "") or "")
+    return {
+        "ce_curate": "curation",
+        "research": "research",
+        "deck": "deck",
+        "projects": "projects",
+        "code": "code",
+        "auto": "auto",
+    }.get(strat)
+
+
+def _finish_resume_desk(
+    workspace: Path, plan: Any, orchestration_id: str, *, cancelled: bool,
+) -> None:
+    """Quiet this run's desk unless a newer overlapping seat owns it."""
+    from . import kernel as sbk
+    kind = _task_kind_from_plan(plan)
+    if not kind:
+        try:
+            for rec in sbk.list_standing(workspace):
+                if rec.run_id == orchestration_id:
+                    kind = {
+                        sbk.DESK_CURATE: "curation",
+                        sbk.DESK_PROJECTS: "projects",
+                        sbk.DESK_CODE: "code",
+                        sbk.DESK_DECK: "deck",
+                        sbk.DESK_RESEARCH: "research",
+                        sbk.DESK_AUTO: "auto",
+                    }.get(rec.desk_id)
+                    break
+        except Exception:  # noqa: BLE001
+            kind = None
+    if not kind:
+        return
+    try:
+        desk_id = {
+            "curation": sbk.DESK_CURATE,
+            "projects": sbk.DESK_PROJECTS,
+            "code": sbk.DESK_CODE,
+            "deck": sbk.DESK_DECK,
+            "research": sbk.DESK_RESEARCH,
+            "auto": sbk.DESK_AUTO,
+        }.get(kind)
+        rec = sbk.get(workspace, desk_id) if desk_id else None
+        if rec is not None and rec.run_id and rec.run_id != orchestration_id:
+            return
+    except Exception:  # noqa: BLE001
+        pass
+    _finish_desk(workspace, kind, orchestration_id, cancelled=cancelled)
+
+
 async def _resume_orchestration(
     app: web.Application, orchestration_id: str,
     *,
@@ -10366,13 +11247,15 @@ async def _resume_orchestration(
     )
     if ck is None or ck.get("plan") is None:
         log.warning("resume %s: no checkpoint", orchestration_id)
+        _finish_resume_desk(workspace, None, orchestration_id, cancelled=False)
         return
     status = ck["status"]
     phase = str(status.get("phase") or "")
+    plan = ck["plan"]
     if phase != "quiet" and not orchestration.checkpoint_resumable(status):
         log.info("resume %s: not resumable (phase=%s)", orchestration_id, status.get("phase"))
+        _finish_resume_desk(workspace, plan, orchestration_id, cancelled=False)
         return
-    plan = ck["plan"]
     thread_id = str(status.get("thread_id") or app.get("thread_id") or "")
     if not thread_id:
         thread_id = await asyncio.to_thread(conversations.new_thread, workspace)
@@ -10383,12 +11266,14 @@ async def _resume_orchestration(
         provider = llmgateway.get(pid)
     except llmgateway.ProviderError as e:
         await _broadcast(app, protocol.notice(f"resume failed: {e}", kind="chat"))
+        _finish_resume_desk(workspace, plan, orchestration_id, cancelled=False)
         return
     if not provider.has_key():
         await _broadcast(app, protocol.notice(
             f"resume failed: no key for {getattr(provider, 'LABEL', pid)}",
             kind="chat",
         ))
+        _finish_resume_desk(workspace, plan, orchestration_id, cancelled=False)
         return
     model = status.get("default_model") or _effective_model(pid) or provider.PROVIDER.get("default_model")
     runs: dict[str, dict[str, Any]] = app.setdefault("runs", {})
@@ -10476,6 +11361,10 @@ async def _resume_orchestration(
             "end_turn",
         ))
     except asyncio.CancelledError:
+        rec = runs.get(orchestration_id)
+        if rec is not None:
+            rec["status"] = "cancelled"
+            rec["user_cancel"] = True
         await _broadcast(app, protocol.run_error(
             orchestration_id, "cancelled", "resume cancelled", thread_id,
         ))
@@ -10486,6 +11375,11 @@ async def _resume_orchestration(
             orchestration_id, "server", str(e), thread_id,
         ))
     finally:
+        rec = runs.get(orchestration_id) or {}
+        cancelled = rec.get("status") == "cancelled" or bool(rec.get("user_cancel"))
+        _finish_resume_desk(
+            workspace, plan, orchestration_id, cancelled=cancelled,
+        )
         runs.pop(orchestration_id, None)
 
 
@@ -11516,9 +12410,24 @@ async def _dispatch_chat(
                         "propose_wiki_page", "propose_page_edit",
                     ) and (local_rung is None or local_rung.force_scaffold):
                         tinput = {**tinput, "scaffold": True}
-                    output = await asyncio.to_thread(
-                        tools.execute, tname, workspace, tinput,
-                    )
+                    if permissions.needs_web_consent(tname, tinput):
+                        verdict, reason = await permissions.mediate_protected_call(
+                            workspace=workspace, tool=tname, tool_input=tinput,
+                            provider=str(pid or "switchbay"),
+                            run_id=run_id, thread_id=thread_id,
+                            broadcast=lambda msg: _broadcast(app, msg),
+                        )
+                        if verdict != "approve":
+                            output = {"ok": False, "error": reason}
+                        else:
+                            output = await asyncio.to_thread(
+                                tools.execute, tname, workspace, tinput,
+                                consent=permissions.trusted_consent(),
+                            )
+                    else:
+                        output = await asyncio.to_thread(
+                            tools.execute, tname, workspace, tinput,
+                        )
                     # Cap results for every model — a 100-turn curate
                     # that stuffed unbounded JSON into `messages` is a
                     # plausible path to multi-GB RSS.
@@ -12193,8 +13102,29 @@ async def handle_slideshow_close(request: web.Request) -> web.Response:
     return web.json_response({"ok": True, "removed": removed})
 
 
+def _pdf_render_error(detail: str) -> tuple[str, int]:
+    """Classify renderer failure: missing runtime vs browser vs spawn."""
+    blob = (detail or "").lower()
+    if "cannot find package" in blob or "cannot find module" in blob:
+        return (
+            "PDF renderer cannot resolve Playwright. "
+            "Install frontend deps with `pnpm --dir frontend install --frozen-lockfile`.",
+            503,
+        )
+    if "executable doesn't exist" in blob or "browserType.launch" in blob:
+        return (
+            "Playwright Chromium is not installed. "
+            "Run `pnpm --dir frontend exec playwright install chromium`.",
+            503,
+        )
+    if "enoent" in blob or "no such file" in blob:
+        return ("PDF renderer failed to spawn Node or Playwright.", 503)
+    return ("PDF rendering failed", 500)
+
+
 async def handle_slideshow_pdf(request: web.Request) -> web.Response:
     """Render every HTML slide to one 16:9 PDF page under vault/exports."""
+    from . import runtime
     workspace: Path = request.app["workspace"]
     try:
         body = await request.json()
@@ -12205,12 +13135,18 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
         return web.json_response({"error": "invalid slideshow slug"}, status=400)
     if await asyncio.to_thread(html_decks.entry_html, workspace, slug) is None:
         return web.json_response({"error": "slideshow not found"}, status=404)
-    node = shutil.which("node")
+    spawn_env = runtime.spawn_env()
+    node = runtime.resolve_node(spawn_env)
     renderer = (
         Path(__file__).resolve().parents[2]
         / "frontend" / "scripts" / "render-slideshow-pdf.mjs"
     )
-    if not node or not renderer.is_file():
+    if not node:
+        return web.json_response({
+            "error": "Node.js is not installed or not executable",
+            "detail": "PDF export needs a Node runtime on PATH (nvm, Homebrew, or Volta).",
+        }, status=503)
+    if not renderer.is_file():
         return web.json_response(
             {"error": "PDF renderer is not installed"}, status=503,
         )
@@ -12222,27 +13158,38 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
     url = f"http://127.0.0.1:{port}/api/slideshows/{slug}/index.html"
     proc: asyncio.subprocess.Process | None = None
     try:
-        proc = await asyncio.create_subprocess_exec(
-            node,
-            str(renderer),
-            url,
-            str(temporary),
-            cwd=str(renderer.parent.parent),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                node,
+                str(renderer),
+                url,
+                str(temporary),
+                cwd=str(renderer.parent.parent),
+                env=spawn_env,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+            )
+        except OSError as e:
+            return web.json_response({
+                "error": "PDF renderer failed to spawn",
+                "detail": str(e),
+            }, status=503)
         output, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
         if proc.returncode != 0 or not temporary.is_file():
             detail = output.decode(errors="replace")[-1600:]
+            msg, status = _pdf_render_error(detail)
             return web.json_response({
-                "error": "PDF rendering failed",
+                "error": msg,
                 "detail": detail or "Install the Playwright Chromium browser.",
-            }, status=500)
+            }, status=status)
         await asyncio.to_thread(os.replace, temporary, destination)
     except asyncio.TimeoutError:
         if proc is not None:
             proc.kill()
-            await proc.communicate()
+            try:
+                await proc.communicate()
+            except Exception:  # noqa: BLE001
+                pass
         return web.json_response({"error": "PDF rendering timed out"}, status=504)
     finally:
         if temporary.is_file():
@@ -15242,6 +16189,16 @@ async def _check_external_edit_async(app: web.Application, rel: str) -> None:
         log.exception("file_state check failed for %s", rel)
 
 
+def _ws_response() -> web.WebSocketResponse:
+    """Rail socket. Compression off: aiohttp 3.14 rejects some
+    permessage-deflate / PONG sequences ("Received frame with
+    non-zero reserved bits", aio-libs/aiohttp#13274), dropping
+    ``user_input``. The composer still echoes the slash; the desk
+    never seats. Safari and Chromium both hit it.
+    """
+    return web.WebSocketResponse(heartbeat=30.0, compress=False)
+
+
 async def handle_ws(request: web.Request) -> web.WebSocketResponse:
     # Defense-in-depth: the _origin_guard middleware already rejected
     # non-loopback Origins, but re-check here so a future routing change
@@ -15251,7 +16208,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         return web.json_response(
             {"error": "cross-origin websocket refused"}, status=403,
         )
-    ws = web.WebSocketResponse(heartbeat=30.0)
+    ws = _ws_response()
     await ws.prepare(request)
     workspace: Path = request.app["workspace"]
     request.app["ws_clients"].add(ws)
@@ -15408,14 +16365,19 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             continue
                         desk_spec = _desk_spec(sname.lower())
                         if desk_spec and desk_spec.get("task_kind") in (
-                            "projects", "code",
+                            "projects", "code", "curation", "research",
                         ):
-                            # Work/code desks. /work is the projects
-                            # desk; /steer is a silent alias. Not
-                            # /project (thread binding) and not
+                            # Work / code / curate desks. /work is the
+                            # projects desk; /steer is a silent alias.
+                            # Not /project (thread binding) and not
                             # /portfolio (Library).
                             slash = str(desk_spec["slash"])
                             verb = _desk_slash_verb(sargs)
+                            reviews_note = (
+                                " Reviews stay in the Reviews tab."
+                                if desk_spec.get("task_kind") == "curation"
+                                else ""
+                            )
                             if verb is None and not sargs.strip():
                                 resumed = _maybe_resume_quiet_desk(
                                     request.app, desk_spec,
@@ -15437,7 +16399,8 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                     f"Quieted the {slash} desk"
                                     + (f" ({n} run" + ("" if n == 1 else "s")
                                        + " stopped)" if n else "")
-                                    + f". Dismiss with /{slash} dismiss.",
+                                    + f". Dismiss with /{slash} dismiss."
+                                    + reviews_note,
                                     kind="slash",
                                 ))
                                 continue
@@ -15450,20 +16413,42 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                     f"Dismissed the {slash} desk"
                                     + (f" ({n} run" + ("" if n == 1 else "s")
                                        + " stopped)" if n else "")
-                                    + ".",
+                                    + "."
+                                    + reviews_note,
                                     kind="slash",
                                 ))
                                 continue
+                            extra_pid = extra_model = None
+                            if desk_spec.get("task_kind") == "curation":
+                                extra_pid, extra_model = _ce_action_provider(
+                                    request.app["workspace"],
+                                )
                             _launch_desk(
                                 request.app, desk_spec,
                                 prompt=sargs.strip(),
                                 preference=pref,
+                                provider_override=extra_pid,
+                                model_override=extra_model,
                             )
-                            await ws.send_json(protocol.notice(
+                            notice = (
                                 f"/{slash} running in the background. "
                                 f"Quiet with /{slash} stop; dismiss with "
-                                f"/{slash} dismiss.",
-                                kind="chat",
+                                f"/{slash} dismiss."
+                            )
+                            if extra_pid:
+                                try:
+                                    extra_label = llmgateway.get(extra_pid).LABEL
+                                except llmgateway.ProviderError:
+                                    extra_label = extra_pid
+                                notice = (
+                                    f"/{slash} running in the background on "
+                                    f"{extra_label} ({extra_model}). "
+                                    "The rail stays free. "
+                                    f"Quiet with /{slash} stop; dismiss with "
+                                    f"/{slash} dismiss."
+                                )
+                            await ws.send_json(protocol.notice(
+                                notice, kind="chat",
                             ))
                             continue
                         if sname.lower() in ("effort", "reasoning", "think"):
@@ -15783,59 +16768,10 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             t.add_done_callback(
                                 _make_dispatch_error_surface(request.app, ws))
                             continue
+                        # ingest / add-source (curate is a desk slash above).
                         # Worker-rung routing: a hybrid ladder
                         # (normal→local) runs the CE action on the local
-                        # model without flipping the global default. Fall
-                        # back to the default when no rung applies. Resolve
-                        # it FIRST so the prompt can be localised — the
-                        # local model gets skill-free operating rules
-                        # (it can't load the skill).
-                        if sname.lower() in ("curate", "curator"):
-                            cspec = _desk_spec("curate") or {
-                                "desk_id": "curate",
-                                "cancel": ("curate",),
-                                "slash": "curate",
-                            }
-                            cverb = _desk_slash_verb(sargs)
-                            if cverb == "quiet":
-                                n = _quiet_desk(
-                                    request.app, cspec,
-                                    request.app["workspace"],
-                                )
-                                await ws.send_json(protocol.notice(
-                                    f"Quieted the curate desk"
-                                    + (f" ({n} run" + ("" if n == 1 else "s")
-                                       + " stopped)" if n else "")
-                                    + ". Dismiss with /curate dismiss. "
-                                    "Reviews stay in the Reviews tab.",
-                                    kind="slash",
-                                ))
-                                continue
-                            if cverb == "dismiss":
-                                n = _dismiss_desk(
-                                    request.app, cspec,
-                                    request.app["workspace"],
-                                )
-                                await ws.send_json(protocol.notice(
-                                    f"Dismissed the curate desk"
-                                    + (f" ({n} run" + ("" if n == 1 else "s")
-                                       + " stopped)" if n else "")
-                                    + ". Reviews stay in the Reviews tab.",
-                                    kind="slash",
-                                ))
-                                continue
-                            if cverb is None and not sargs.strip():
-                                resumed = _maybe_resume_quiet_desk(
-                                    request.app, cspec,
-                                    request.app["workspace"],
-                                )
-                                if resumed:
-                                    await ws.send_json(protocol.notice(
-                                        f"Resuming the quiet curate desk "
-                                        f"(`{resumed}`). Same DAG.",
-                                        kind="slash",
-                                    ))
-                                    continue
+                        # model without flipping the global default.
                         cp_pid, cp_model = _ce_action_provider(
                             request.app["workspace"],
                         )
@@ -15852,41 +16788,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                             sname.lower(), sargs, local=_ce_local,
                             local_rung=_lrung,
                         )
-                        extra_system = ""
                         if ce_prompt is not None:
-                            if sname.lower() in ("curate", "curator"):
-                                # D6: steer the curator with the
-                                # workspace profile, verbatim + capped —
-                                # system-side so Jump does not dump it.
-                                _cap = _CURATOR_PROFILE_CAP_TOKENS
-                                if _lrung is not None:
-                                    _cap = max(400, _lrung.extra_system_chars // 4)
-                                elif _ce_local:
-                                    _cap = 400
-                                prof = await asyncio.to_thread(
-                                    _curator_profile,
-                                    request.app["workspace"],
-                                    _cap,
-                                )
-                                extra_system = _curator_profile_system(prof)
-                                fb = await asyncio.to_thread(
-                                    _review_feedback_system,
-                                    request.app["workspace"],
-                                )
-                                if fb:
-                                    extra_system = (
-                                        extra_system + "\n\n" + fb
-                                    ).strip()
-                                prime = await asyncio.to_thread(
-                                    _curate_wave_prime_system,
-                                    request.app["workspace"],
-                                    sargs,
-                                    local=_ce_local,
-                                )
-                                if prime:
-                                    extra_system = (
-                                        extra_system + "\n\n" + prime
-                                    ).strip()
                             if cp_pid:
                                 try:
                                     cp_label = llmgateway.get(cp_pid).LABEL
@@ -15906,39 +16808,17 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
                                     f"/{sname.lower()} stop.",
                                     kind="chat",
                                 ))
-                            # Background: do not occupy the focused
-                            # rail thread (user can keep chatting).
                             excerpt = (
                                 f"[{sname.lower()} · background] "
                                 f"{sargs}"
                             ).strip()
-                            _is_curate = sname.lower() in ("curate", "curator")
-                            _constrained = _ce_local or bool(
-                                sargs.strip()
-                                and len(sargs.strip()) <= 80
-                                and "\n" not in sargs
-                            )
-                            if _is_curate:
-                                t = asyncio.create_task(_dispatch_auto(
-                                    request.app, None, ce_prompt,
-                                    preference=pref,
-                                    provider_override=cp_pid,
-                                    model_override=cp_model,
-                                    input_excerpt=excerpt,
-                                    extra_system=extra_system or None,
-                                    command="curate",
-                                    task_kind="curation",
-                                    constrained=_constrained,
-                                ))
-                            else:
-                                t = asyncio.create_task(_dispatch_chat(
-                                    request.app, None, ce_prompt,
-                                    provider_override=cp_pid,
-                                    model_override=cp_model,
-                                    input_excerpt=excerpt,
-                                    extra_system=extra_system or None,
-                                    command=sname.lower() if _ce_local else None,
-                                ))
+                            t = asyncio.create_task(_dispatch_chat(
+                                request.app, None, ce_prompt,
+                                provider_override=cp_pid,
+                                model_override=cp_model,
+                                input_excerpt=excerpt,
+                                command=sname.lower() if _ce_local else None,
+                            ))
                             t.add_done_callback(
                                 _make_dispatch_error_surface(request.app, None),
                             )
@@ -16323,6 +17203,10 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/streams/{account_id}/curate", handle_streams_curate)
     app.router.add_post("/api/streams/{account_id}/auto", handle_streams_auto)
     app.router.add_post("/api/streams/{account_id}/routing", handle_streams_routing)
+    app.router.add_get("/api/comms/review", handle_comms_review_list)
+    app.router.add_post("/api/comms/review", handle_comms_review_act)
+    app.router.add_post("/api/comms/review/open", handle_comms_review_open)
+    app.router.add_post("/api/comms/review/close", handle_comms_review_close)
     app.router.add_get("/api/workspaces", handle_workspaces_get)
     app.router.add_post("/api/workspaces/add", handle_workspaces_add)
     app.router.add_post("/api/workspaces/switch", handle_workspaces_switch)
@@ -16640,6 +17524,16 @@ def build_app(workspace: Path) -> web.Application:
         except Exception:  # noqa: BLE001
             log.exception("reviews tab restore on boot failed")
     app.on_startup.append(_seed_reviews_tab)
+
+    async def _seed_comms_tab(_app: web.Application) -> None:
+        from . import comms_review
+        ws: Path = _app["workspace"]
+        try:
+            if await asyncio.to_thread(comms_review.pending_count) > 0:
+                await asyncio.to_thread(tabstore.add_comms_tab, ws)
+        except Exception:  # noqa: BLE001
+            log.exception("comms tab restore on boot failed")
+    app.on_startup.append(_seed_comms_tab)
 
     # A never-curated wiki (the freshly-seeded demo, or a hand-authored
     # one) has no `.curator/graph.kuzu`, and viewer.sh only READS that —
@@ -16991,7 +17885,9 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     from . import daemonlog
     log_path = daemonlog.configure()
     from . import http as sbhttp
+    from . import runtime as sb_runtime
     sbhttp.install_gates()
+    sb_runtime.apply_to_environ()
     log.info(
         "boot: profile=%s overlay=%s baked=%s",
         admin_policy.profile(),

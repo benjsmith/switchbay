@@ -97,11 +97,115 @@ Provider ids: `github_copilot`, `llamacpp`, `mlx`, `ollama`,
 | `interactive_terminal` | **on** | Rail shell (POSIX PTY / Windows ConPTY). Same default as VS Code. |
 | `agent_run_command` | **on** | Copilot/HTTP agents may run workspace commands (approval + hard-deny still apply). |
 | `hf_model_download` | off (admin may set **true**) | Hugging Face / Ollama pulls from Settings. On-disk models still work when off. |
-| `comms_streams` | off | IMAP / Gmail / Slack / … as ingest sources |
+| `comms_streams` | off | IMAP / Gmail / Outlook / Slack / Teams as **discovery** sources. Metadata-only until an explicit per-workspace thread/channel approve. Teams and Slack **bodies stay blocked**. Connecting an account is not thread approval. See [Comms classification](#comms-classification-and-tenant-labels). |
 | `github_share` | off | `gh` publish of a workspace |
 | `media_generation` | off | External image/video APIs |
 | `user_mcp_servers` | on | Local MCP add is useful and stays on-box |
-| `watch_folders` | on | Local directory poll |
+| `watch_folders` | on | Local directory poll. New arrivals only (existing files are baselined). Watcher writes a **deterministic vault extract**; it does not immediately author wiki pages (Curate does that later). macOS iCloud hydration is per-file, not a tree pin — not live-cloud certified in CI. |
+| `web_egress` | off | Workspace Web on/off. Off: no search/fetch. On: the user may still enable Web **per workspace** (workspace default remains off). Each search/fetch still needs a once/deny card that is **never remembered**. Model API transport is a separate allowlist. |
+| `pi_harness` | off | Optional PATH harness for hired packages. Off until IT opts in. |
+
+## Live worker ceiling
+
+Each standing desk (Curate / Work / Code / Deck / Auto / Research) has a
+**live-seat** cap — queue / backpressure, not a lifetime spawn budget.
+The chief of staff is counted. Floor **4** (chief + verifier +
+synthesizer + specialist), default **8**, current hard max **8**.
+Settings → Auto orchestration (`desk_max_live_workers`) cannot go below
+4 or above the hard max. Admin policy may only **tighten** the ceiling:
+
+```json
+{
+  "orchestration": { "max_live_workers": 5 }
+}
+```
+
+A baked enterprise cap is never raised or erased by a missing, zero, or
+malformed overlay. Nested Curate workers and Comms wiki curation share
+the same per-workspace Curate desk gate.
+
+## Comms classification and tenant labels
+
+`features.comms_streams` stays **off** in enterprise until IT opts in.
+When on:
+
+- Discovery stores headers, labels, and channel names only. Bodies are
+  not fetched until the operator **Approves for workspace** on a stable
+  thread/channel key (provider + account + id — not the subject line).
+- **Revoke** is durable and wins races with polling.
+- Suggested relevance never auto-approves. An existing connected mailbox
+  does **not** imply any thread is approved.
+- **Secret / Top Secret** is refused before any body fetch. Under
+  enterprise (or `comms.require_classification: true`), **unknown** and
+  **missing** classification are also refused before body fetch.
+- Gmail system labels (`INBOX`, `UNREAD`, …) are not classifications.
+- Teams and Slack listing/review remain; **message bodies are not
+  retrieved** even after Approve (no trustworthy pre-body classification
+  on those adapters).
+- Wiki ingest of approved Gmail / Outlook / IMAP mail needs a **keyed,
+  workspace-allowlisted, file-capable CLI** (Claude Code, Grok Build,
+  Codex, Muse Code — `shell` + `file_write`). Copilot / other HTTP-only
+  providers cannot write that path. Direct Comms curation does not use
+  the HTTP tool loop. Enterprise packages hide those CLIs by default, so
+  enabling `comms_streams` without enabling a file-capable provider
+  still cannot land wiki pages.
+
+Tenant secret **MIP / Purview label GUIDs** belong in admin policy.
+They match when the GUID appears inside `MSIP_Labels` (or as a label
+id). Replace the example id with your tenant's secret label GUIDs —
+the value below is the fixture used in unit tests, not a real tenant:
+
+```json
+{
+  "profile": "enterprise",
+  "features": { "comms_streams": true },
+  "comms": {
+    "require_classification": true,
+    "classification_headers": [
+      "Sensitivity",
+      "Classification",
+      "X-MS-Exchange-Organization-Classification",
+      "MSIP_Labels",
+      "X-Microsoft-Classification",
+      "X-Sensitivity",
+      "X-Tenant-Class"
+    ],
+    "secret_names": [
+      "secret",
+      "top secret",
+      "top-secret",
+      "classified secret",
+      "Restricted-Tenant"
+    ],
+    "tenant_label_ids": [
+      "a3a2f242-b872-42f3-89a6-ffffeeeedddd"
+    ]
+  }
+}
+```
+
+Default secret names and the Microsoft header list are always on; extra
+`classification_headers` / `secret_names` extend them. A baked
+enterprise overlay cannot turn `require_classification` off.
+
+### Fixture tests vs a real tenant
+
+CI and `tests/unit/test_comms_*.py` / `test_release_acceptance.py` use a
+**clean configuration**: tmp `admin.json`, synthetic GUIDs, fake IMAP /
+Graph responses, no live mailbox, no production LLM. They prove the
+gate (secret / unknown / missing / revoke / workspace isolation) on
+those fixtures.
+
+They do **not** prove your tenant's MIP label GUIDs, Exchange
+`MSIP_Labels` blob shape, Gmail label set, or Graph application
+permissions. IT still needs a real-tenant pass: drop the production
+secret label ids into `comms.tenant_label_ids`, connect a non-prod
+mailbox, confirm Secret mail is blocked before body fetch, confirm a
+normal-sensitivity thread stays pending until explicit Approve, and
+confirm Revoke stops a subsequent poll. Do not treat a green unit suite
+as tenant certification.
+
+Release notes for this cut: [`releases/v0.12.19.md`](releases/v0.12.19.md).
 
 ## SentinelOne / EDR
 
@@ -152,7 +256,7 @@ The employee machine then starts Python. No `uv`, no `pnpm`, no
 | In-app git pull of Switch Bay + skills | Supply-chain, unexpected network | Default `in_app_update: false` (portal package). IT may bake `--in-app-update` so git checkouts pull `updates.repo` and restore `admin.baked.json` / `admin.json`. Skills stay off unless `updates.include_skills` is true. |
 | Hosted LLM API keys (Anthropic, OpenAI, xAI, Gemini, Meta) | Data leaving the tenant | Hidden. Copilot stays inside the existing GitHub Enterprise / EMU subscription. |
 | Coding CLIs (Claude Code, Grok, Codex, Muse) | Extra binaries, shell | Hidden. Copilot is HTTP; local models are HTTP to `localhost`. |
-| Comms streams (mail, Slack, …) | OAuth, mailbox read | Off. |
+| Comms streams (mail, Slack, …) | OAuth, mailbox read | Off. Even when enabled: metadata discovery only; explicit per-workspace approve; Secret / unknown / missing refused before body; Teams/Slack bodies stay blocked. |
 | GitHub share (`gh repo create`) | Unapproved egress | Off. |
 | FSL-1.1 license | Legal review | Internal use is in-scope. A Competing Use (reselling Switch Bay as a product) is not. Point counsel at `LICENSE`. |
 | PWA vs signed `.app` | Portal wants a signed pkg | macOS stub + `build-package.sh` (Safari). Windows `SwitchBay.exe` (Edge `--app`). Company notarize / Authenticode on the bake machine. |

@@ -23,6 +23,8 @@ def test_pdf_renderer_script_exists_and_prints_16x9():
     assert "printBackground" in text
     assert "preferCSSPageSize" in text
     assert "document.fonts.ready" in text
+    assert "@playwright/test" in text
+    assert 'require.resolve("playwright"' in text or "playwright-core" in text
 
 
 @pytest.mark.asyncio
@@ -53,7 +55,8 @@ async def test_pdf_handler_writes_vault_export(tmp_path: Path, monkeypatch):
         return None
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", _exec)
-    monkeypatch.setattr(daemon.shutil, "which", lambda _name: "/usr/bin/node")
+    monkeypatch.setattr("switchbay.runtime.resolve_node", lambda *_a, **_k: "/usr/bin/node")
+    monkeypatch.setattr("switchbay.runtime.spawn_env", lambda *_a, **_k: {"PATH": "/usr/bin"})
     monkeypatch.setattr(daemon, "_broadcast", _broadcast)
 
     app = web.Application()

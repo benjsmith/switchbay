@@ -72,7 +72,7 @@ window.Sidebar = (function () {
     searchEl = document.querySelector('#sidebar-search');
     allPages = data.pages || {};
 
-    allRecords = data.nodes.map(n => {
+    allRecords = (data.nodes || []).map(n => {
       const page = allPages[n.id] || {};
       const props = Object.values(page.properties || {})
         .map(v => Array.isArray(v) ? v.join(' ') : String(v))

@@ -20,6 +20,7 @@ page only keeps the one-line workarounds.
 | Local 4B | Worker, not Copilot: short grounded answers + `[[wikilink]]`, not long synthesis. | Copilot for fleet agentic work; 4B for offline wiki lookup. |
 | Enterprise | GitHub release archives are unsigned packaging inputs, not fleet installers. | Run bake, then deploy with Intune or Jamf (unsigned plus a path allowlist, or organization-signed). [`enterprise/packaging/README.md`](../enterprise/packaging/README.md). |
 | Ingest | CE still UTF-8-prefixes large tagged HTML at 200 KiB. Switch Bay stages visible text first; tagged-fact extraction (iXBRL, JATS) is a future CE change. | Use `ce_ingest` (file or directory). Re-read old snippet-capped extracts with `read_source`. |
+| PPTX | Historic extracts may say `PPTX extraction unavailable` because CE `local_ingest.py` ran in a workspace venv without `python-pptx`. Switch Bay now picks the interpreter that already has each extractor (workspace pypdf/openpyxl when present; host `python-pptx` when the workspace lacks it). Existing placeholder extracts are **not** rewritten. | Re-ingest the original `.pptx` via `ce_ingest` or drop it in a watch folder / `vault/raw/`. |
 
 ## Platform support
 

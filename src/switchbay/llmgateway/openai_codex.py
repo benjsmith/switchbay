@@ -406,13 +406,24 @@ def sandbox_for(req: base.ChatRequest, workspace: Path) -> str:
 def web_search_overrides(workspace: Path) -> list[str]:
     """Codex has no PreToolUse hook, so native web_search cannot card.
 
-    Always set ``tools.web_search`` explicitly. A globally disabled
-    default would otherwise stay off when Settings says enabled.
-    The Switch Bay ``research_*`` MCP tools remain the vault-ingest path.
+    Always disable native search, including leftover ``_codex:web-search``
+    sentinels, ``--search``, and ``~/.codex/config.toml``. Switch Bay
+    ``research_*`` tools are the vault-ingest path and go through the
+    per-call web policy.
     """
-    if permissions.is_pre_approved(workspace, permissions.CODEX_WEB_SEARCH_SENTINEL):
-        return ["-c", "tools.web_search=true"]
-    return ["-c", "tools.web_search=false"]
+    _ = workspace
+    # Authoritative Codex setting is top-level web_search = "disabled"
+    # (developers.openai.com/codex/config-basic). `-c` TOML overrides
+    # beat ~/.codex/config.toml, including a pre-existing
+    # web_search = "live". Legacy tools/features flags stay as belt
+    # and braces for older CLIs.
+    return [
+        "-c", 'web_search="disabled"',
+        "-c", "tools.web_search=false",
+        "-c", "features.web_search_request=false",
+        "-c", "features.standalone_web_search=false",
+        "-c", "features.web_search_cached=false",
+    ]
 
 
 def _mcp_overrides(

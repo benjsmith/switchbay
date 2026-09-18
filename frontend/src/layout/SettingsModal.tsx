@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import WebPolicyToggle from "../widgets/WebPolicyToggle";
 
 type ProviderInfo = {
   auth_flow?: string;
@@ -773,7 +774,8 @@ function McpServersPanel({ open }: { open: boolean }) {
 
   const refresh = () =>
     fetch("/api/mcp-servers").then((r) => r.json())
-      .then((b) => setServers(b.servers as McpServer[])).catch(() => setServers([]));
+      .then((b) => setServers(Array.isArray(b?.servers) ? b.servers as McpServer[] : []))
+      .catch(() => setServers([]));
   useEffect(() => { if (open) refresh(); }, [open]);
 
   const add = async () => {
@@ -920,8 +922,8 @@ function PacksPanel({ open }: { open: boolean }) {
     try {
       const r = await fetch("/api/packs");
       if (!r.ok) return;
-      const body = (await r.json()) as { packs: PackInfo[] };
-      setPacks(body.packs);
+      const body = (await r.json()) as { packs?: PackInfo[] };
+      setPacks(Array.isArray(body.packs) ? body.packs : []);
     } catch {
       /* swallow — empty state covers it */
     }
@@ -1357,8 +1359,8 @@ function UserTabsPanel({ open }: { open: boolean }) {
     try {
       const r = await fetch("/api/user-tabs");
       if (!r.ok) return;
-      const body = (await r.json()) as { tabs: UserTab[] };
-      setTabs(body.tabs);
+      const body = (await r.json()) as { tabs?: UserTab[] };
+      setTabs(Array.isArray(body.tabs) ? body.tabs : []);
     } catch {
       /* empty state covers it */
     }
@@ -1551,8 +1553,8 @@ function PermissionsPanel({ open }: { open: boolean }) {
     try {
       const r = await fetch("/api/permission/allow");
       if (!r.ok) return;
-      const body = (await r.json()) as { patterns: string[] };
-      setPatterns(body.patterns);
+      const body = (await r.json()) as { patterns?: string[] };
+      setPatterns(Array.isArray(body.patterns) ? body.patterns : []);
     } catch {
       setPatterns([]);
     }
@@ -1586,7 +1588,6 @@ function PermissionsPanel({ open }: { open: boolean }) {
   // directly via the allow-list endpoint; codex's next spawn picks
   // up the change without further plumbing.
   const codexFullAccess = (patterns ?? []).includes("_codex:full-access");
-  const codexWebSearch = (patterns ?? []).includes("_codex:web-search");
   const toggleCodexFullAccess = async () => {
     if (codexFullAccess) {
       await revoke("_codex:full-access");
@@ -1602,34 +1603,6 @@ function PermissionsPanel({ open }: { open: boolean }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ pattern: "_codex:full-access" }),
-      });
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({} as Record<string, string>));
-        setStatus({ ok: false, msg: body.error || `HTTP ${r.status}` });
-        return;
-      }
-      await reload();
-    } catch (e) {
-      setStatus({ ok: false, msg: (e as Error).message });
-    }
-  };
-
-  const toggleCodexWebSearch = async () => {
-    if (codexWebSearch) {
-      await revoke("_codex:web-search");
-      return;
-    }
-    if (!window.confirm(
-      "Allow Codex native web_search in this workspace? Codex has no "
-      + "per-call rail card, so this is an all-or-nothing grant. Prefer "
-      + "Switch Bay research tools (search → vault → ingest) when you "
-      + "want sources in the wiki.",
-    )) return;
-    try {
-      const r = await fetch("/api/permission/allow", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pattern: "_codex:web-search" }),
       });
       if (!r.ok) {
         const body = await r.json().catch(() => ({} as Record<string, string>));
@@ -1710,32 +1683,17 @@ function PermissionsPanel({ open }: { open: boolean }) {
       </div>
       <div className="sy-settings-perm-row sy-settings-perm-row--codex">
         <span>
-          <strong>Codex web search:</strong>{" "}
-          {codexWebSearch ? "native web_search enabled" : "disabled (default)"}
+          <strong>Web search / fetch:</strong>{" "}
+          off by default. On means each search or fetch may ask once —
+          never a blanket grant. Codex native search stays disabled.
         </span>
         <span className="sy-spacer" />
-        <button
-          type="button"
-          className={
-            "sy-settings-pill"
-            + (codexWebSearch ? " sy-settings-pill--on" : "")
-          }
-          onClick={() => void toggleCodexWebSearch()}
-          title={
-            codexWebSearch
-              ? "Disable Codex native web_search — next spawn forces web_search=disabled"
-              : "Allow Codex native web_search for this workspace (no per-call card)"
-          }
-        >
-          {codexWebSearch ? "on" : "off"}
-        </button>
+        <WebPolicyToggle />
       </div>
       <p className="sy-settings-blurb" style={{ marginTop: 8 }}>
-        Codex has no per-tool hook surface like Claude Code, so
-        per-command gating isn't possible. Sandbox and web search are
-        spawn-time knobs. Claude Code and Grok Build web search still
-        card on the rail. Prefer Switch Bay research tools when the
-        result should land in the vault.
+        Native CLI web tools and Switch Bay research_search / research_fetch
+        share this workspace policy. Codex has no per-call hook, so its
+        native web_search stays off. Model API traffic is unrelated.
       </p>
     </section>
   );
@@ -1766,6 +1724,14 @@ type SettingsBody = {
   workspace_synced: string | null;
   embedding_backend?: string;
   embedding_vendors_keyed?: Record<string, boolean>;
+  desk_max_live_workers?: number;
+  requested?: number;
+  min?: number;
+  default?: number;
+  hard_max?: number;
+  admin_ceiling?: number | null;
+  chief_counted?: boolean;
+  note?: string;
   media?: {
     modalities?: Record<string, MediaModalityState>;
     note?: string;
@@ -2352,7 +2318,12 @@ function LocalModelPanel({
     if (!open) return;
     void fetch("/api/localllm/harness")
       .then((r) => (r.ok ? r.json() : null))
-      .then((h) => { if (h) { setHarness(h); setHarnessDraft(h.text); } })
+      .then((h) => {
+        if (h && typeof h.text === "string") {
+          setHarness(h);
+          setHarnessDraft(h.text);
+        }
+      })
       .catch(() => { /* older daemon */ });
   }, [open]);
 
@@ -3218,7 +3189,8 @@ function WorkspacesHomePanel({ open }: { open: boolean }) {
         const r = await fetch("/api/workspaces/home");
         if (!r.ok) return;
         const b = (await r.json()) as WorkspacesHomeBody;
-        setBody(b);
+        if (!b || typeof b.home !== "string") return;
+        setBody({ ...b, candidates: Array.isArray(b.candidates) ? b.candidates : [] });
         setDraft(b.home);
         setStatus(null);
       } catch { /* older daemon — panel stays hidden */ }
@@ -3545,7 +3517,7 @@ function CuratorPanel({ open }: { open: boolean }) {
     }
   };
 
-  if (body === null) return null;
+  if (body === null || typeof body.profile !== "string") return null;
   const dirty = draft !== body.profile;
   // The cap is measured in estimated tokens (server uses the same
   // chars/4 approximation), 2.5k per the 2026-07-05 ruling.
@@ -3817,7 +3789,7 @@ type OrchPolicy = {
   updated_at?: number;
   totals?: { orchestrations?: number; explorations?: number; resets?: number };
   buckets?: { bucket: string; arms: { arm: string; n: number; mean_reward?: number | null }[] }[];
-  hard_bounds?: Record<string, number>;
+  hard_bounds?: Record<string, number | Record<string, unknown>>;
 };
 
 function OrchestrationPolicyPanel({ open }: { open: boolean }) {
@@ -3923,12 +3895,77 @@ function OrchestrationPolicyPanel({ open }: { open: boolean }) {
           ))}
         </p>
       )}
+      <DeskLiveCapControl />
       {status && (
         <p className={"sy-settings-status" + (status.ok ? "" : " sy-settings-status--err")}>
           {status.msg}
         </p>
       )}
     </section>
+  );
+}
+
+function DeskLiveCapControl() {
+  const [cap, setCap] = useState<number>(8);
+  const [meta, setMeta] = useState<{ min: number; hard_max: number; chief_counted: boolean; note?: string }>({
+    min: 4, hard_max: 8, chief_counted: true,
+  });
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await fetch("/api/settings");
+        if (!r.ok) return;
+        const b = await r.json() as SettingsBody;
+        if (typeof b.desk_max_live_workers === "number") setCap(b.desk_max_live_workers);
+        setMeta({
+          min: b.min ?? 4,
+          hard_max: b.hard_max ?? 8,
+          chief_counted: b.chief_counted !== false,
+          note: b.note,
+        });
+      } catch { /* older daemon */ }
+    })();
+  }, []);
+  const save = async (n: number) => {
+    setBusy(true);
+    try {
+      const r = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ desk_max_live_workers: n }),
+      });
+      if (r.ok) {
+        const b = await r.json() as SettingsBody;
+        if (typeof b.desk_max_live_workers === "number") setCap(b.desk_max_live_workers);
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="sy-settings-perm-row" style={{ marginTop: 10, flexWrap: "wrap" }}>
+      <label htmlFor="sy-desk-live-cap">
+        <strong>Live workers per desk</strong>
+        {meta.chief_counted ? " (chief counted)" : ""}
+      </label>
+      <input
+        id="sy-desk-live-cap"
+        type="number"
+        min={meta.min}
+        max={meta.hard_max}
+        value={cap}
+        disabled={busy}
+        className="sy-settings-input"
+        style={{ width: 72 }}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          if (Number.isFinite(n)) void save(n);
+        }}
+      />
+      <span className="sy-purge-meta">min {meta.min} · max {meta.hard_max}</span>
+      {meta.note && <p className="sy-settings-blurb" style={{ flexBasis: "100%" }}>{meta.note}</p>}
+    </div>
   );
 }
 
@@ -4098,6 +4135,7 @@ type StreamAccount = {
   pending: number;
   auto_curate: boolean;
   last_poll: number | null;
+  last_error?: string | null;
   tenant?: string;
   workspace: string;
   triage?: boolean;
@@ -4122,14 +4160,22 @@ type StreamsBody = {
 // ── Watch folders panel (D5) ────────────────────────────────────────
 // Auto-ingest NEW files from user-chosen external directories. Adding
 // a folder baselines its current contents (only files arriving after
-// that point ingest); each new file dispatches one background ingest
-// agent, capped per beat so a folder-dump can't stampede.
+// that point ingest). Supported types are CE-extracted (not an LLM
+// describing the filename). Capped per beat so a folder-dump can't stampede.
 
 type WatchFolder = { path: string; enabled: boolean; added_at: number };
+type WatchPending = {
+  path: string;
+  state: string;
+  error?: string | null;
+  retryable?: boolean;
+  attempts?: number;
+};
 
 function WatchFoldersPanel({ open }: { open: boolean }) {
   const [folders, setFolders] = useState<WatchFolder[] | null>(null);
-  const [meta, setMeta] = useState<{ cap: number; interval: number } | null>(null);
+  const [pending, setPending] = useState<WatchPending[]>([]);
+  const [meta, setMeta] = useState<{ cap: number; interval: number; icloud?: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
 
@@ -4140,10 +4186,19 @@ function WatchFoldersPanel({ open }: { open: boolean }) {
         const r = await fetch("/api/watch-folders");
         if (!r.ok) return;
         const b = (await r.json()) as {
-          folders: WatchFolder[]; cap_per_beat: number; interval_s: number;
+          folders: WatchFolder[];
+          pending?: WatchPending[];
+          cap_per_beat: number;
+          interval_s: number;
+          icloud_download?: boolean;
         };
         setFolders(b.folders);
-        setMeta({ cap: b.cap_per_beat, interval: b.interval_s });
+        setPending(Array.isArray(b.pending) ? b.pending : []);
+        setMeta({
+          cap: b.cap_per_beat,
+          interval: b.interval_s,
+          icloud: !!b.icloud_download,
+        });
         setStatus(null);
       } catch { /* older daemon — panel stays hidden */ }
     })();
@@ -4172,6 +4227,9 @@ function WatchFoldersPanel({ open }: { open: boolean }) {
       if (Array.isArray((b as { folders?: WatchFolder[] }).folders)) {
         setFolders((b as { folders: WatchFolder[] }).folders);
       }
+      if (Array.isArray((b as { pending?: WatchPending[] }).pending)) {
+        setPending((b as { pending: WatchPending[] }).pending);
+      }
       if (okMsg) setStatus({ ok: true, msg: okMsg });
     } catch (e) {
       setStatus({ ok: false, msg: (e as Error).message });
@@ -4187,12 +4245,15 @@ function WatchFoldersPanel({ open }: { open: boolean }) {
       <h3 className="sy-settings-h3">Watch folders</h3>
       <p className="sy-settings-blurb">
         Folders Switch Bay keeps an eye on: any <em>new</em> file that
-        appears gets staged into the vault and a background ingest agent
-        extracts a wiki page, with provenance pointing at the original
-        (see the Browser's Sources view). Existing contents are left
-        alone when you add a folder — this is a tap on the shoulder for
-        new material, not a bulk import
+        appears is staged into the vault and extracted with curiosity-engine
+        (text, HTML, PDF, CSV, XLSX, PPTX — not a model guessing from the
+        filename). Vault extracts land now; wiki pages are a later Curate
+        pass. Existing contents are left alone when you add a folder —
+        this is new material from now on, not a bulk import
         {meta ? ` (checked ~every ${meta.interval}s, at most ${meta.cap} files per check)` : ""}.
+        {meta?.icloud
+          ? " On this Mac, iCloud Drive placeholders in a folder you already authorized are downloaded on demand (that file only) before ingest."
+          : " iCloud download-on-demand is macOS-only; other cloud placeholders stay pending until the file is local."}
       </p>
       {folders.length === 0 && (
         <p className="sy-settings-blurb" style={{ opacity: 0.75 }}>
@@ -4227,6 +4288,25 @@ function WatchFoldersPanel({ open }: { open: boolean }) {
           </button>
         </div>
       ))}
+      {pending.length > 0 && (
+        <div className="sy-settings-blurb" style={{ marginTop: 8 }}>
+          <div style={{ fontSize: 11, opacity: 0.8, marginBottom: 4 }}>
+            Pending / retrying ({pending.length})
+          </div>
+          {pending.slice(0, 20).map((p) => (
+            <div
+              key={p.path}
+              style={{ fontSize: 11, marginBottom: 4, opacity: 0.9 }}
+              title={p.path}
+            >
+              <code style={{ fontSize: 10 }}>{p.path}</code>
+              {" — "}
+              {p.state}{p.error ? `: ${p.error}` : ""}
+              {p.retryable === false ? " (not retried)" : ""}
+            </div>
+          ))}
+        </div>
+      )}
       <button
         type="button"
         className="sy-settings-pill"
@@ -4323,19 +4403,24 @@ function StreamsPanel({ open }: { open: boolean }) {
     <section className="sy-settings-packs">
       <h3 className="sy-settings-h3">Comms streams</h3>
       <p className="sy-settings-blurb">
-        Connect email / chat streams as <strong>curation sources</strong>:
-        new messages are captured to a machine-local transit buffer,
-        a curation pass extracts durable knowledge into the wiki with
-        deep-links back to the source, and the buffer is then deleted —
-        conversations are never archived here. Two ways in:{" "}
-        <strong>Email (IMAP)</strong> is the simple path — any mail
-        provider, just your address + an app password, nothing to
-        register. The <strong>OAuth</strong> providers are the
-        enterprise path: login happens in your browser on the
-        provider's own pages (OAuth + PKCE, loopback redirect) against
-        your own app registration, so consent, scopes and tenant
-        policy stay under your (or your org's) control.
+        Connect email / chat streams as <strong>curation sources</strong>.
+        Discovery pulls headers and channel metadata only. Threads and
+        channels appear in the <strong>Comms</strong> tab for review —
+        relevant mail is suggested, never auto-added. Approve Gmail /
+        Outlook / IMAP for a specific workspace to pull currently clear
+        mail; revoke to stop future retrieval. Secret / unknown /
+        unclassified enterprise mail is refused before any body fetch.
+        Teams and Slack can be listed; their message bodies cannot be
+        retrieved (the providers have no pre-body classification).
       </p>
+      <button
+        type="button"
+        className="sy-confirm-btn"
+        disabled={busy !== null}
+        onClick={() => void call("open-comms", "/api/comms/review/open", { method: "POST" })}
+      >
+        Open Comms
+      </button>
       {body.accounts.map((a) => (
         <div key={a.id} className="sy-settings-perm-row" style={{ flexWrap: "wrap", gap: 6 }}>
           <strong>{a.label}</strong>
@@ -4346,6 +4431,7 @@ function StreamsPanel({ open }: { open: boolean }) {
               : "not connected"}
             {a.pending > 0 && ` · ${a.pending} pending`}
             {a.last_poll ? ` · polled ${new Date(a.last_poll * 1000).toLocaleTimeString()}` : ""}
+            {a.last_error ? ` · ${a.last_error}` : ""}
           </span>
           <span className="sy-spacer" />
           {a.status !== "connected" && (
@@ -4362,29 +4448,10 @@ function StreamsPanel({ open }: { open: boolean }) {
                 {busy === "poll" ? "Polling…" : "Poll now"}
               </button>
               <button type="button" className="sy-confirm-btn"
-                disabled={busy !== null || a.pending === 0}
-                title="Run the curation pass over pending messages (triage first when smart routing is on)"
-                onClick={() => void call("curate", `/api/streams/${a.id}/curate`, { method: "POST" })
-                  .then((b) => b && setStatus({
-                    ok: true,
-                    msg: `Curated ${String(b.curated)} message${b.curated === 1 ? "" : "s"}`
-                      + (Array.isArray(b.workspaces) && b.workspaces.length
-                        ? ` into ${(b.workspaces as string[]).join(", ")}` : "")
-                      + (Number(b.skipped) > 0 ? `; ${String(b.skipped)} skipped as irrelevant` : "")
-                      + ".",
-                  }))}>
-                {busy === "curate" ? "Curating…" : "Curate now"}
-              </button>
-              <button type="button"
-                className={"sy-settings-pill" + (a.auto_curate ? " sy-settings-pill--on" : "")}
-                title="Automatically curate after each poll cycle"
                 disabled={busy !== null}
-                onClick={() => void call("auto", `/api/streams/${a.id}/auto`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ auto_curate: !a.auto_curate }),
-                })}>
-                {a.auto_curate ? "auto" : "manual"}
+                title="Open the Comms review queue (approve/revoke threads and channels)"
+                onClick={() => void call("open-comms", "/api/comms/review/open", { method: "POST" })}>
+                Review in Comms
               </button>
               <button type="button"
                 className={"sy-settings-pill"

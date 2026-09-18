@@ -332,6 +332,7 @@ _PACKAGES: dict[str, Package] = {
         family="knowledge",
         writes=WRITES_PRODUCT,
         needed_skills=("vault-ingest-research",),
+        desks=("research", "auto"),
     ),
     CODE_EXPLORE_ID: _pkg(
         CODE_EXPLORE_ID, CODE_EXPLORE_TOOLS, CODE_EXPLORE_SYSTEM,

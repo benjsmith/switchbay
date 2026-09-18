@@ -96,7 +96,7 @@ export default function ReasoningPicker() {
   // Nothing to choose between → no control. This is the honest signal
   // that the current model has no reasoning dial, rather than showing a
   // dead menu.
-  if (!state || state.options.length === 0) return null;
+  if (!state || !Array.isArray(state.options) || state.options.length === 0) return null;
 
   const current = state.options.find((o) => o.id === state.selected);
   const label = current ? current.label.toLowerCase() : "effort";

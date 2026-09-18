@@ -27,9 +27,12 @@ preserves remembered approvals.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import fnmatch
 import json
 import logging
+import os
 import re
 import time
 import uuid
@@ -43,18 +46,202 @@ log = logging.getLogger("switchbay.permissions")
 
 ALLOW_FILE = "permission-allow.json"
 
-# Native CLI web tools — never on the builtin allow floor. They must
-# hit the rail card (or a remembered Approve+remember). Grok's
-# internal names are web_search / web_fetch; Claude uses WebSearch /
-# WebFetch. Codex has no PreToolUse: see `_codex:web-search`.
+# Native CLI web tools and Switch Bay research tools — never on the
+# builtin allow floor, never session-cached, never remembered. They
+# hit a once/deny card only when the workspace web policy is on.
+# Grok's internal names are web_search / web_fetch; Claude uses
+# WebSearch / WebFetch. Codex has no PreToolUse: native search is
+# always disabled (the `_codex:web-search` sentinel is ignored).
 WEB_SEARCH_TOOLS = frozenset({
     "WebSearch", "WebFetch", "web_search", "web_fetch",
+})
+RESEARCH_EGRESS_TOOLS = frozenset({
+    "research_search", "research_fetch",
 })
 CODEX_WEB_SEARCH_SENTINEL = "_codex:web-search"
 
 
 def is_web_search_tool(tool: str) -> bool:
     return str(tool or "") in WEB_SEARCH_TOOLS
+
+
+def _tool_basename(tool: str) -> str:
+    t = str(tool or "")
+    if t.startswith("mcp__"):
+        parts = t.split("__")
+        if len(parts) >= 3:
+            return parts[-1]
+    if t.startswith("switchbay__"):
+        return t.split("__", 1)[-1]
+    return t
+
+
+def is_protected_egress(tool: str) -> bool:
+    """True for native web search/fetch, research_*, and MCP aliases."""
+    t = str(tool or "")
+    if t in WEB_SEARCH_TOOLS or t in RESEARCH_EGRESS_TOOLS:
+        return True
+    if t == CODEX_WEB_SEARCH_SENTINEL:
+        return True
+    base = _tool_basename(t)
+    if base in WEB_SEARCH_TOOLS or base in RESEARCH_EGRESS_TOOLS:
+        return True
+    low = base.lower().replace("-", "_")
+    if low in {"websearch", "webfetch", "web_search", "web_fetch"}:
+        return True
+    return False
+
+
+def is_protected_pattern(pattern: str) -> bool:
+    p = str(pattern or "").strip()
+    if not p:
+        return False
+    if p == CODEX_WEB_SEARCH_SENTINEL:
+        return True
+    tool = p.split("(", 1)[0]
+    return is_protected_egress(tool)
+
+
+_HTTP_URL_RE = re.compile(r"https?://", re.IGNORECASE)
+_CE_URL_TOOLS = frozenset({"ce_run", "ce_ingest"})
+_FETCH_SCRIPT_HINT = re.compile(
+    r"(fetch|download|http|url)", re.IGNORECASE,
+)
+_CE_NETWORK_SCRIPTS = frozenset({
+    "identifier_resolve.py",
+})
+_CE_RESOLVE_LOCAL_MODES = frozenset({"status", "review"})
+
+# Unforgeable in-process consent. Never constructed from payload/env.
+_CONSENT_MARK = object()
+_invocation_consent: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "switchbay_web_invocation_consent", default=False,
+)
+
+
+class TrustedConsent:
+    """Invocation-local consent that JSON/env cannot represent."""
+
+    __slots__ = ("_mark",)
+
+    def __init__(self, mark: object) -> None:
+        self._mark = mark
+
+
+def trusted_consent() -> TrustedConsent:
+    return TrustedConsent(_CONSENT_MARK)
+
+
+def is_trusted_consent(obj: Any) -> bool:
+    return isinstance(obj, TrustedConsent) and obj._mark is _CONSENT_MARK
+
+
+def invocation_approved() -> bool:
+    return bool(_invocation_consent.get())
+
+
+@contextlib.contextmanager
+def approved_invocation():
+    token = _invocation_consent.set(True)
+    try:
+        yield
+    finally:
+        _invocation_consent.reset(token)
+
+
+def _payload_has_http_url(payload: dict[str, Any] | None) -> bool:
+    data = payload or {}
+    for key in ("url", "href", "path", "directory", "uri"):
+        val = str(data.get(key) or "").strip()
+        if val.lower().startswith(("http://", "https://")):
+            return True
+    args = data.get("args")
+    if isinstance(args, str):
+        blob = args
+    elif isinstance(args, list):
+        blob = " ".join(str(a) for a in args)
+    else:
+        blob = ""
+    script = str(data.get("script") or "")
+    return bool(_HTTP_URL_RE.search(blob) or _HTTP_URL_RE.search(script))
+
+
+def needs_web_consent(tool: str, tool_input: dict[str, Any] | None = None) -> bool:
+    """True when this call may hit the network and needs a once/deny card."""
+    if is_protected_egress(tool):
+        return True
+    base = _tool_basename(tool)
+    if base in _CE_URL_TOOLS or str(tool or "") in _CE_URL_TOOLS:
+        payload = tool_input or {}
+        script = Path(str(payload.get("script") or "")).name
+        if script and not script.endswith(".py"):
+            script = f"{script}.py"
+        args = payload.get("args")
+        if isinstance(args, str):
+            arg_list = args.split()
+        elif isinstance(args, list):
+            arg_list = [str(a) for a in args]
+        else:
+            arg_list = []
+        if script == "identifier_resolve.py":
+            # Network only on `run --yes`. status/review are local.
+            tokens = {a.strip() for a in arg_list}
+            if tokens & _CE_RESOLVE_LOCAL_MODES and "run" not in tokens:
+                return False
+            return "run" in tokens and ("--yes" in tokens or "-y" in tokens)
+        if script in _CE_NETWORK_SCRIPTS or _FETCH_SCRIPT_HINT.search(script):
+            return True
+        return _payload_has_http_url(payload)
+    return False
+
+
+def strip_forged_approval(payload: dict[str, Any] | None) -> dict[str, Any]:
+    """Drop model-supplied approval flags. Never treat them as consent."""
+    data = dict(payload or {})
+    for key in ("_approved", "approved", "_consent", "consent", "_web_approved"):
+        data.pop(key, None)
+    return data
+
+
+def request_protected_sync(
+    workspace: Path,
+    tool: str,
+    tool_input: dict[str, Any] | None = None,
+    *,
+    timeout: float | None = None,
+) -> str:
+    """Long-poll the daemon permission card. Fail closed. Never skip."""
+    import urllib.error
+    import urllib.request
+
+    port = os.environ.get("CSWY_DAEMON_PORT") or "8765"
+    wait = float(timeout if timeout is not None else min(REQUEST_TIMEOUT_S, 120.0))
+    body = json.dumps({
+        "provider": "registry",
+        "tool": tool,
+        "input": tool_input or {},
+        "cwd": str(workspace),
+        "origin_thread": os.environ.get("CSWY_THREAD_ID") or "",
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/permission/request",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=wait) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError, ValueError):
+        return "deny"
+    if not isinstance(payload, dict):
+        return "deny"
+    decision = str(payload.get("decision") or "deny")
+    if decision == "skip":
+        return "deny"
+    return "approve" if decision == "approve" else "deny"
+
+
 # Generous: a single-user local app shouldn't auto-deny while the user
 # reads the request or works through a backlog of prompts from several
 # concurrent agents. 30 min; the frontend is told when it lapses so the
@@ -151,8 +338,14 @@ def add_pattern(workspace: Path, pattern: str) -> list[str]:
     """Append a pattern to the workspace's allow list without going
     through the request/decide dance. Used by Settings UI controls
     (e.g. the Codex elevated-sandbox toggle) that directly express
-    "I want this pattern allowed forever". Returns the new list."""
+    "I want this pattern allowed forever". Returns the new list.
+
+    Protected egress patterns are ignored — web search/fetch must
+    never become a remembered blanket grant.
+    """
     cur = _load_allow(workspace)
+    if is_protected_pattern(pattern):
+        return cur
     if pattern not in cur:
         cur.append(pattern)
     _save_allow(workspace, cur)
@@ -291,6 +484,10 @@ def is_pre_approved(
     "Approve + remember" saved `Bash(find*)`."""
     if tool and tool_input is not None and hard_deny_reason(tool, tool_input):
         return False
+    # Protected web egress never pre-approves — not via the builtin
+    # MCP wildcard, not via a remembered pattern, not via session.
+    if is_protected_egress(tool or "") or is_protected_pattern(pattern):
+        return False
     # CE/CM scope is checked on the full call, before the coarse
     # pattern comparison below (which cannot express it).
     if tool and tool_input is not None and ce_scope_allows(
@@ -303,7 +500,11 @@ def is_pre_approved(
     allows.extend(_load_allow(workspace))
     allows.extend(_SESSION_ALLOW.get(str(workspace), ()))
     for allow in allows:
+        if is_protected_pattern(allow):
+            continue
         if fnmatch.fnmatch(pattern, allow) or fnmatch.fnmatch(allow, pattern):
+            if is_protected_egress(tool or "") or is_protected_pattern(pattern):
+                return False
             return True
     return False
 
@@ -506,9 +707,27 @@ def resolve(
     if rec is None:
         return None
     rec.decision = decision
-    rec.remember = remember
-    if decision == "approve" and (remember or session):
+    protected = (
+        is_protected_egress(rec.tool)
+        or is_protected_pattern(rec.pattern)
+        or needs_web_consent(rec.tool, rec.tool_input)
+    )
+    if protected and decision == "skip":
+        rec.decision = "deny"
+        decision = "deny"
+    if protected:
+        # Forged remember / pattern / session overrides are ignored.
+        rec.remember = False
+        remember = False
+        session = False
+        pattern = None
+    else:
+        rec.remember = remember
+    if decision == "approve" and (remember or session) and not protected:
         pat = (pattern or "").strip() or rec.pattern
+        if is_protected_pattern(pat):
+            rec.event.set()
+            return rec
         if session:
             _SESSION_ALLOW.setdefault(str(rec.workspace), set()).add(pat)
         else:
@@ -518,6 +737,72 @@ def resolve(
             _save_allow(Path(rec.workspace), cur)
     rec.event.set()
     return rec
+
+
+async def mediate_protected_call(
+    *,
+    workspace: Path,
+    tool: str,
+    tool_input: dict[str, Any],
+    provider: str = "switchbay",
+    run_id: str | None = None,
+    thread_id: str | None = None,
+    broadcast: Any = None,
+) -> tuple[str, str]:
+    """Gate a protected web call. Returns (approve|deny, reason).
+
+    Policy off / admin deny / timeout fail closed. Policy on shows a
+    once/deny card (never remembered).
+    """
+    from . import protocol
+    blocked = web_egress_block_reason(workspace, tool, tool_input)
+    if blocked:
+        return "deny", blocked
+    rec = register(
+        workspace=workspace, provider=provider, tool=tool,
+        tool_input=tool_input, run_id=run_id, thread_id=thread_id,
+    )
+    if broadcast is not None:
+        await broadcast(protocol.permission_request(
+            req_id=rec.req_id, provider=provider, tool=tool,
+            tool_input=tool_input, pattern=rec.pattern, run_id=run_id,
+            thread_id=thread_id, protected=True,
+        ))
+    decision = await await_decision(rec)
+    if broadcast is not None:
+        await broadcast(protocol.permission_resolved(rec.req_id, decision))
+    if decision != "approve":
+        return "deny", "web egress denied"
+    # Toggle-off while the card was pending must still fail closed.
+    blocked = web_egress_block_reason(workspace, tool, tool_input)
+    if blocked:
+        return "deny", blocked
+    return "approve", ""
+
+
+def web_egress_block_reason(
+    workspace: Path,
+    tool: str,
+    tool_input: dict[str, Any] | None = None,
+) -> str | None:
+    """Deny reason when web egress must fail closed without a card.
+
+    None means the call may proceed to a once/deny card (policy on).
+    """
+    from . import web_policy
+    if not needs_web_consent(tool, tool_input):
+        return None
+    if not web_policy.admin_allows():
+        return "web egress is disabled by admin policy"
+    if not web_policy.is_enabled(workspace):
+        return "web egress is off for this workspace"
+    payload = tool_input or {}
+    url = str(payload.get("url") or payload.get("href") or "").strip()
+    if url:
+        from . import admin_policy
+        if not admin_policy.egress_allowed(url):
+            return f"web egress blocked by admin allowlist: {url}"
+    return None
 
 
 async def await_decision(rec: PendingRequest) -> str:

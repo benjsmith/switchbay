@@ -178,7 +178,7 @@ export default function HelpModal({ open, onClose }: Props) {
             <dt>sources / provenance</dt>
             <dd>Where a wiki page came from (<code>extracted_from</code>). The Browser's bottom pane has a Sources view of external origins; extracted pages show a "from …" chip.</dd>
             <dt>watch folder</dt>
-            <dd>An outside directory Switch Bay polls; new files auto-ingest into the vault + wiki (Settings → Watch folders).</dd>
+            <dd>An outside directory Switch Bay polls; new files are staged and extracted into the vault (CE local ingest, including PPTX). Wiki pages come from a later Curate pass — watch ingest does not write wiki pages. iCloud placeholders in an authorized folder download on demand on macOS. Settings → Watch folders.</dd>
             <dt>skill / pack</dt>
             <dd>A skill is an instruction bundle agents load for a task; a pack bundles skills + tabs + file actions as an installable extension.</dd>
           </dl>

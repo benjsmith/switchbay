@@ -17,7 +17,7 @@ from ..agents import orchestration_policy as policy
 from .packages import (
     CODE_EDIT_ID, CODE_EXPLORE_ID, CODE_PLAN_ID, CODE_REVIEW_ID,
     CODING_FAMILY, PROJECT_COMMS_ID, PROJECT_PLAN_ID, PROJECT_REVIEW_ID,
-    PROJECT_SENSE_ID, PROJECTS_FAMILY,
+    PROJECT_SENSE_ID, PROJECTS_FAMILY, RESEARCH_ID,
     WRITES_COMMS, WRITES_PLANS, WRITES_PRODUCT, WRITES_REVIEW, get_package,
 )
 
@@ -526,6 +526,49 @@ def pick_family_hires(
         if d.accepted:
             out.append(d)
             org.append({"package": pid})
+    return out
+
+
+def pick_auto_hires(
+    text: str,
+    *,
+    preference: float,
+    chief: tuple[str, str | None],
+    workspace: Path | None = None,
+    available: list[tuple[str, str | None]] | None = None,
+    denied: list[str] | None = None,
+    chief_tools: list[str] | tuple[str, ...] | None = None,
+    pi_available: bool = False,
+    research: bool = False,
+    web_ingest: bool = False,
+) -> list[HireDecision]:
+    """Auto candidate packages. Research is hired for explicit web ingest."""
+    _ = text
+    s = policy.clamp_preference(preference)
+    out: list[HireDecision] = []
+    org: list[dict[str, Any]] = []
+    if research or web_ingest:
+        d = decide_hire(
+            HireRequest(
+                package_id=RESEARCH_ID,
+                justification="auto: web research / vault ingest",
+                needed_tools=["research_search", "research_fetch"],
+                needed_skills=["vault-ingest-research"],
+                desk_prior=False,
+                kind="specialist",
+            ),
+            preference=s,
+            chief=chief,
+            org=org,
+            workspace=workspace,
+            available=available,
+            denied=denied,
+            chief_tools=chief_tools,
+            pi_available=pi_available,
+        )
+        if d.accepted:
+            out.append(d)
+            org.append({"package": RESEARCH_ID})
     return out
 
 

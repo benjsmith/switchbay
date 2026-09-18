@@ -2,11 +2,25 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const frontendRoot = path.resolve(here, "..");
 const require = createRequire(fileURLToPath(import.meta.url));
-const playwrightRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const { chromium } = require(
-  require.resolve("playwright", { paths: [playwrightRoot] }),
-);
+
+function resolvePlaywright() {
+  // pnpm strict: `playwright` is a transitive of declared `@playwright/test`.
+  // Resolve through that package so we never depend on a hoisted/global copy.
+  const testPkg = require.resolve("@playwright/test/package.json", {
+    paths: [frontendRoot],
+  });
+  const testDir = path.dirname(testPkg);
+  try {
+    return require(require.resolve("playwright", { paths: [testDir, frontendRoot] }));
+  } catch {
+    return require(require.resolve("playwright-core", { paths: [testDir, frontendRoot] }));
+  }
+}
+
+const { chromium } = resolvePlaywright();
 
 const [url, output] = process.argv.slice(2);
 if (!url || !output) {

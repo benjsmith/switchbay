@@ -88,6 +88,14 @@ SHIPPED: dict[str, tuple[str, ...] | None] = {
         "list_threads",
         "save_plot",
     ),
+    "research": _WIKI_READ + (
+        "research_search",
+        "research_fetch",
+        "ce_ingest",
+        "ce_query",
+        "ce_graph_retrieve",
+        "read_source",
+    ),
     "code": _WIKI_READ + (
         "read_workspace_plan",
         "update_work_plan",
@@ -126,6 +134,7 @@ DESCRIPTIONS: dict[str, str] = {
     "report": "Rich HTML report (dropped on small local rungs)",
     "work": "Work desk — projects + portfolio (not /project)",
     "code": "Code desk — explore / plan / edit / review",
+    "research": "Research desk — search, fetch, ingest, cited brief",
 }
 
 # Keyword → shipped palette when a user command doesn't name tools.

@@ -83,14 +83,19 @@ def save_health(data: dict[str, Any]) -> None:
 
 # Tight patterns for *streaming* assistant text. classify_error is
 # looser (a "quota" in a traceback is enough) because it runs on
-# exceptions. Investigator prose about "import quotas" must not
-# kill the worker.
+# exceptions. Investigator prose about "import quotas" or research
+# that *mentions* HTTP 429 / rate limits must not kill the worker.
+# Only provider *banners* (weekly-limit, billing, HTTP error framing)
+# count as a channel outage.
 _OUTAGE_TEXT_RE = re.compile(
     r"hit your weekly limit|you've hit your (?:usage |rate )?limit"
     r"|weekly limit\b.*\bresets"
     r"|insufficient[_ ](?:quota|funds)|out of credits?"
-    r"|\b429\b|rate[_ ]limit(?:ed)?(?: exceeded)?"
-    r"|too many requests",
+    r"|HTTP\s*429"
+    r"|(?:error|failed|exception|providererror)[:\s].{0,60}"
+    r"(?:\b429\b|rate[_ ]limit|too many requests)"
+    r"|rate[_ ]limit(?:ed)? exceeded"
+    r"|^\s*(?:429|too many requests|rate[_ ]limited?)\s*[.!]?\s*$",
     re.I | re.S,
 )
 
@@ -123,14 +128,31 @@ def classify_error(err: str) -> str:
 
 
 def looks_like_outage(text: str) -> str | None:
-    """If streaming text *is* a channel outage, return its kind.
+    """If streaming text *is* a channel outage banner, return its kind.
 
-    Used mid-stream so a weekly-limit banner aborts the worker
-    immediately instead of being filed as a successful finding.
-    Returns None for ordinary assistant prose.
+    Research that mentions 429 / rate limits / a quoted weekly-limit
+    banner is not an outage. Only a short provider banner (or an
+    error: framing whose body *is* the banner) counts.
     """
     blob = (text or "").strip()
-    if not blob or not _OUTAGE_TEXT_RE.search(blob):
+    if not blob:
+        return None
+    if blob.startswith("{") and ("findings" in blob or "claim" in blob):
+        return None
+    m = _OUTAGE_TEXT_RE.search(blob)
+    if not m:
+        return None
+    low = blob.lower()
+    if (
+        '"' in blob
+        or "the source" in low
+        or "this page documents" in low
+        or "protocol returns" in low
+        or "prescribes" in low
+        or "this is evidence" in low
+    ):
+        return None
+    if len(blob) > len(m.group(0)) + 100:
         return None
     kind = classify_error(blob)
     return kind if kind in CHANNEL_RETRY_KINDS else None

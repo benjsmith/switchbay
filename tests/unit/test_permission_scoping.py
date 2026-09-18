@@ -123,6 +123,14 @@ def test_hook_grok_daemon_unreachable_fails_closed(tmp_path):
     assert out.get("decision") == "deny"
 
 
+def test_hook_protected_unreachable_denies(tmp_path):
+    out = _run_hook(tmp_path, {
+        "tool_name": "WebSearch", "tool_input": {"query": "q"},
+        "session_id": "s1", "cwd": str(tmp_path),
+    }, port=1)
+    assert out.get("decision") == "deny"
+
+
 def test_hook_empty_tool_is_passthrough(tmp_path):
     # claude dialect, no tool name → {} (nothing to adjudicate).
     out = _run_hook(tmp_path, {"tool_name": "", "tool_input": {}}, port=1)

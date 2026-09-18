@@ -27,6 +27,12 @@ from __future__ import annotations
 import pytest
 
 
+_KEY_ENV = (
+    "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "XAI_API_KEY",
+    "GEMINI_API_KEY", "GOOGLE_API_KEY", "MODEL_API_KEY", "META_API_KEY",
+)
+
+
 @pytest.fixture(autouse=True)
 def _isolate_user_state(tmp_path_factory, monkeypatch):
     """Point user-global config + state at throwaway dirs."""
@@ -46,6 +52,34 @@ def _isolate_user_state(tmp_path_factory, monkeypatch):
     # shell doesn't flip the whole suite. Policy tests opt in.
     monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
     monkeypatch.delenv("SWITCHBAY_ADMIN_POLICY", raising=False)
+    for key in _KEY_ENV:
+        monkeypatch.delenv(key, raising=False)
     from switchbay import admin_policy
     admin_policy.reset_cache()
     return {"config": config, "state": state}
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_discovery(monkeypatch):
+    """No live keychain, CLI login, or local-server probes in the suite."""
+    monkeypatch.setattr("switchbay.secrets.has", lambda *_a, **_k: False)
+    monkeypatch.setattr("switchbay.secrets.get", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        "switchbay.agents.orchestration_policy.list_keyed_providers",
+        lambda **_k: [],
+    )
+    monkeypatch.setattr(
+        "switchbay.llmgateway.ollama.has_key", lambda: False,
+    )
+    # HF cache / Ollama tag walks hang the suite when list_providers()
+    # or mlx/llamacpp.has_key run. Tests that need installed weights
+    # patch this symbol themselves.
+    monkeypatch.setattr("switchbay.local_models.list_installed", lambda: [])
+    from switchbay.agents import desk_admission as seats
+    from switchbay.agents import orchestration as orch
+    monkeypatch.setattr(orch, "WAIT_POLL_SEC", 0.05)
+    monkeypatch.setattr(orch, "IDLE_WAIT_SEC", 0.05)
+    monkeypatch.setattr(orch, "SNAPSHOT_INTERVAL_SEC", 0.05)
+    monkeypatch.setattr(orch, "cleanup_retire_tasks", True)
+    monkeypatch.setattr(seats, "ACQUIRE_WAIT_TIMEOUT", 0.05)
+    monkeypatch.setattr("switchbay.agents.fast_lookup.lookup_retire_tasks", False)

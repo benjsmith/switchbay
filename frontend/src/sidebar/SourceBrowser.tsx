@@ -117,7 +117,15 @@ export default function SourceBrowser({
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         return (await r.json()) as SourcesBody;
       })
-      .then((b) => { if (!cancelled) setBody(b); })
+      .then((b) => {
+        if (!cancelled) {
+          setBody({
+            sources: Array.isArray(b.sources) ? b.sources : [],
+            internal_pages: Number(b.internal_pages) || 0,
+            pages_scanned: Number(b.pages_scanned) || 0,
+          });
+        }
+      })
       .catch((e: Error) => { if (!cancelled) setError(e.message); });
     return () => { cancelled = true; };
   }, [refreshKey]);

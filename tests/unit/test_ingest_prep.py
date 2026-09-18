@@ -203,10 +203,12 @@ def test_ce_ingest_passes_directory_or_file_to_bridge(tmp_path: Path, monkeypatc
     src.write_text("<html><body><h1>Abstract</h1><p>Hello lab.</p></body></html>")
     seen: dict = {}
 
-    def fake_run(script, args=None, *, cwd, timeout=120.0, require_json=True):
+    def fake_run(script, args=None, *, cwd, timeout=120.0, require_json=True, python=None):
         seen["script"] = script
         seen["args"] = list(args or [])
         seen["cwd"] = Path(cwd)
+        seen["timeout"] = timeout
+        seen["python"] = python
         return {"ok": True, "results": []}
 
     monkeypatch.setattr(ce_tools.cebridge, "run_script", fake_run)

@@ -297,8 +297,9 @@ def test_spawn_env_path_includes_homebrew(tmp_path: Path, monkeypatch):
     brew.mkdir(parents=True)
     env = {"PATH": os.pathsep.join(["/usr/bin", "/bin"])}
     enrich_path(env, extra_dirs=(str(brew),))
-    assert str(brew) in env["PATH"].split(os.pathsep)
-    assert env["PATH"].split(os.pathsep)[0] == str(brew)
+    parts = env["PATH"].split(os.pathsep)
+    assert str(brew) in parts
+    assert parts[0] == "/usr/bin"
     script = tmp_path / "pi"
     script.write_text("#!/usr/bin/env node\nconsole.log(1)\n", encoding="utf-8")
     assert shebang_wants_node(str(script)) is True
