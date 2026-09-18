@@ -1,6 +1,8 @@
 import { lazy } from "react";
 import SketchErrorBoundary from "../widgets/sketch/ErrorBoundary";
 import { registerTabKind, type TabComponent } from "./tabRegistry";
+import ProxiedSkillPanel from "../widgets/embed/ProxiedSkillPanel";
+import { useProxiedSkillEmbeds } from "../widgets/embed/useProxiedSkillEmbeds";
 
 /**
  * Wire each built-in tab kind into the registry. Called once from
@@ -39,9 +41,11 @@ const ReportDocTab = lazy(() => import("../widgets/library/ReportDocTab"));
 const ThrustersTab = lazy(() => import("../widgets/thrusters/ThrustersTab"));
 const OwidTab = lazy(() => import("../widgets/owid/OwidTab"));
 
-const GraphAdapter: TabComponent = ({ graphData, graphError }) => (
-  <GraphTab data={graphData} error={graphError} />
-);
+const GraphAdapter: TabComponent = ({ graphData, graphError }) => {
+  const proxied = useProxiedSkillEmbeds();
+  if (proxied) return <ProxiedSkillPanel kind="ce" />;
+  return <GraphTab data={graphData} error={graphError} />;
+};
 const EditorAdapter: TabComponent = ({ tab }) => <EditorTab tab={tab} />;
 const DuckDBAdapter: TabComponent = () => <DuckDBTab />;
 const SheetAdapter: TabComponent = () => <SheetTab />;
@@ -49,7 +53,11 @@ const VegaAdapter: TabComponent = () => <VegaTab />;
 const SketchAdapter: TabComponent = () => (
   <SketchErrorBoundary><SketchTab /></SketchErrorBoundary>
 );
-const AgentsAdapter: TabComponent = () => <AgentDashboardTab />;
+const AgentsAdapter: TabComponent = () => {
+  const proxied = useProxiedSkillEmbeds();
+  if (proxied) return <ProxiedSkillPanel kind="okstratr" />;
+  return <AgentDashboardTab />;
+};
 const ProjectsAdapter: TabComponent = () => <ProjectsTab />;
 const PackFileListAdapter: TabComponent = ({ tab }) => <PackFileListTab tab={tab} />;
 

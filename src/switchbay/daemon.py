@@ -37,7 +37,7 @@ from . import (
     ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect,
     demo_workspace,
-    duckdb_starters, file_state, fileops, llm_config, llmgateway,
+    duckdb_starters, embed_proxy, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
     mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
@@ -899,6 +899,7 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "media": media,
         "orchestration_preference": orchestration_policy.get_preference(),
         "orchestration_denied_models": orchestration_policy.get_denied_models(workspace),
+        "proxied_skill_embeds": app_settings.get_proxied_skill_embeds(),
     })
 
 
@@ -946,6 +947,8 @@ async def handle_settings_post(request: web.Request) -> web.Response:
         # Re-select the backend on next use; the drain's reconcile then
         # rebuilds the index if the vector space changed.
         conversations.reset_embedder()
+    if "proxied_skill_embeds" in body:
+        app_settings.set_proxied_skill_embeds(bool(body["proxied_skill_embeds"]))
     # Media: { media: { image?: {provider, model}|null, video?: …, voice?: … } }
     if "media" in body and isinstance(body["media"], dict):
         if not admin_policy.feature_enabled("media_generation"):
@@ -16211,7 +16214,11 @@ async def handle_spa(request: web.Request) -> web.StreamResponse:
     # Never serve the SPA for API/WS paths — an unregistered /api GET
     # must 404 (so clients that probe GET-then-POST fall back correctly),
     # not silently receive index.html.
-    if rel == "api" or rel.startswith("api/") or rel == "ws" or rel.startswith("ws/"):
+    if (
+        rel == "api" or rel.startswith("api/")
+        or rel == "ws" or rel.startswith("ws/")
+        or rel == "embed" or rel.startswith("embed/")
+    ):
         return web.Response(status=404)
     if rel:
         candidate = (dist / rel).resolve()
@@ -16564,6 +16571,9 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/tabs/vault-doc", handle_tab_vault_doc_add)
     app.router.add_post("/api/tabs/vault-doc/remove", handle_tab_vault_doc_remove)
     app.router.add_get("/ws", handle_ws)
+    # Phase 4a: same-origin reverse proxy for CE (:8766) and okstratr
+    # (:8767). Must register BEFORE the SPA catch-all.
+    embed_proxy.register_routes(app)
     # Catch-all LAST: serves the built SPA + PWA assets (manifest, icons)
     # for any non-API GET. aiohttp matches in registration order, so the
     # specific /api and /ws routes above always take precedence.

@@ -1766,6 +1766,7 @@ type SettingsBody = {
   workspace_synced: string | null;
   embedding_backend?: string;
   embedding_vendors_keyed?: Record<string, boolean>;
+  proxied_skill_embeds?: boolean;
   media?: {
     modalities?: Record<string, MediaModalityState>;
     note?: string;
@@ -3674,6 +3675,42 @@ function StoragePanel({ open }: { open: boolean }) {
     }
   };
 
+  const toggleProxiedEmbeds = async () => {
+    if (!settings || busy) return;
+    const next = !settings.proxied_skill_embeds;
+    setBusy(true);
+    setStatus(null);
+    try {
+      const r = await fetch("/api/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proxied_skill_embeds: next }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({} as Record<string, string>));
+        setStatus({ ok: false, msg: body.error || `HTTP ${r.status}` });
+        return;
+      }
+      const body = (await r.json()) as SettingsBody;
+      setSettings(body);
+      window.dispatchEvent(
+        new CustomEvent("sy:proxied-skill-embeds", {
+          detail: { enabled: !!body.proxied_skill_embeds },
+        }),
+      );
+      setStatus({
+        ok: true,
+        msg: next
+          ? "Graph/Agents now use same-origin /embed/* panels (no iframe)."
+          : "Graph/Agents restored to built-in tabs.",
+      });
+    } catch (e) {
+      setStatus({ ok: false, msg: (e as Error).message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const setEmbeddingBackend = async (backend: string) => {
     if (!settings || busy) return;
     setBusy(true);
@@ -3755,6 +3792,35 @@ function StoragePanel({ open }: { open: boolean }) {
         on the sync service, which can corrupt under concurrent edits.
         Machine-local avoids that at the cost of per-machine history.
       </p>
+
+      <h4 className="sy-settings-h4" style={{ marginTop: 22 }}>
+        Proxied skill embeds (Phase 4a)
+      </h4>
+      <p className="sy-settings-blurb">
+        When on, Graph and Agents load CE / okstratr through the daemon
+        same-origin reverse proxy (<code>/embed/ce/</code>,{" "}
+        <code>/embed/okstratr/</code>) — in-app panels, no iframes.
+        Default off keeps the built-in tabs. Settings will later write the
+        okstratr harness registry (TODO).
+      </p>
+      <div className="sy-settings-perm-row">
+        <span>
+          <strong>Proxied embeds:</strong>{" "}
+          {settings.proxied_skill_embeds ? "on (Graph→CE, Agents→okstratr)" : "off (built-in)"}
+        </span>
+        <span className="sy-spacer" />
+        <button
+          type="button"
+          className={
+            "sy-settings-pill"
+            + (settings.proxied_skill_embeds ? " sy-settings-pill--on" : "")
+          }
+          onClick={() => void toggleProxiedEmbeds()}
+          disabled={busy}
+        >
+          {settings.proxied_skill_embeds ? "on" : "off"}
+        </button>
+      </div>
 
       <h4 className="sy-settings-h4" style={{ marginTop: 22 }}>
         Semantic recall (conversation memory)

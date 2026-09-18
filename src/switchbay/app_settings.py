@@ -13,6 +13,7 @@ Shape (all keys optional; absent → documented default):
     "workspaces_home": "~/Workspaces",   # see below
     "orchestration_preference": 0.5,  # 0 Economy … 1 Maximum
     "orchestration_denied_models": []  # seed until a workspace file exists
+    "proxied_skill_embeds": false  # Phase 4a: Graph/Agents via /embed/*
   }
 
 `rail_history_local` — where the per-workspace rail-history DB
@@ -32,6 +33,7 @@ Shape (all keys optional; absent → documented default):
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from . import workspaces
@@ -130,4 +132,24 @@ def workspaces_home_path():
 def set_workspaces_home(value: str) -> None:
     data = load()
     data["workspaces_home"] = str(value).strip() or _WORKSPACES_HOME_DEFAULT
+    save(data)
+
+
+# `proxied_skill_embeds` — Phase 4a feature flag. When true, the Graph and
+# Agents tabs use same-origin proxied panels under `/embed/ce/` and
+# `/embed/okstratr/` instead of the built-in implementations. Default
+# false so existing UX is unchanged. Env SWITCHBAY_PROXIED_SKILL_EMBEDS=1
+# overrides settings.json to true (useful for local E2E).
+def get_proxied_skill_embeds() -> bool:
+    env = (os.environ.get("SWITCHBAY_PROXIED_SKILL_EMBEDS") or "").strip().lower()
+    if env in ("1", "true", "yes", "on"):
+        return True
+    if env in ("0", "false", "no", "off"):
+        return False
+    return bool(load().get("proxied_skill_embeds", False))
+
+
+def set_proxied_skill_embeds(value: bool) -> None:
+    data = load()
+    data["proxied_skill_embeds"] = bool(value)
     save(data)
