@@ -139,9 +139,12 @@ export default function ProxiedSkillPanel({ kind }: Props) {
             </p>
             <pre>{state.message}</pre>
             <p className="sy-proxied-skill-muted">
-              Start the skill daemon on loopback
-              {kind === "ce" ? " :8766" : " :8767"} (charter), or turn off
-              Settings → “Proxied skill embeds” to use the built-in tab.
+              Start the skill upstream on loopback
+              {kind === "ce"
+                ? " (CE viewer — default :8766, or whatever SWITCHBAY_CE_UPSTREAM points at)"
+                : " (okstratr :8767)"}
+              , or turn off Settings → Storage → “Proxied skill embeds” for the built-in tab.
+              A 502 almost always means that upstream process exited.
             </p>
           </div>
         )}

@@ -2,23 +2,27 @@ import { useEffect, useState } from "react";
 
 /**
  * Phase 4a feature flag: when true, Graph/Agents use `/embed/*` panels.
- * Default false (built-in tabs). Reads `/api/settings` once; listens for
- * `sy:proxied-skill-embeds` so Settings can flip without reload.
+ * Returns `null` until `/api/settings` resolves so adapters do not flash the
+ * built-in (lazy) tabs — that flash caused "Importing a module script failed"
+ * when Agents opened while proxied was actually on.
  */
-export function useProxiedSkillEmbeds(): boolean {
-  const [on, setOn] = useState(false);
+export function useProxiedSkillEmbeds(): boolean | null {
+  const [on, setOn] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     void fetch("/api/settings")
       .then((r) => (r.ok ? r.json() : null))
       .then((j) => {
-        if (!cancelled && j && typeof j.proxied_skill_embeds === "boolean") {
+        if (cancelled) return;
+        if (j && typeof j.proxied_skill_embeds === "boolean") {
           setOn(j.proxied_skill_embeds);
+        } else {
+          setOn(false);
         }
       })
       .catch(() => {
-        /* older daemon — leave off */
+        if (!cancelled) setOn(false);
       });
 
     const onEvt = (ev: Event) => {

@@ -44,6 +44,9 @@ const OwidTab = lazy(() => import("../widgets/owid/OwidTab"));
 
 const GraphAdapter: TabComponent = ({ graphData, graphError }) => {
   const proxied = useProxiedSkillEmbeds();
+  if (proxied === null) {
+    return <div className="sy-placeholder"><p>Loading…</p></div>;
+  }
   if (proxied) return <ProxiedSkillPanel kind="ce" />;
   return <GraphTab data={graphData} error={graphError} />;
 };
@@ -56,6 +59,9 @@ const SketchAdapter: TabComponent = () => (
 );
 const AgentsAdapter: TabComponent = () => {
   const proxied = useProxiedSkillEmbeds();
+  if (proxied === null) {
+    return <div className="sy-placeholder"><p>Loading…</p></div>;
+  }
   if (proxied) return <ProxiedSkillPanel kind="okstratr" />;
   return <AgentDashboardTab />;
 };
