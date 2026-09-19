@@ -39,7 +39,7 @@ from . import (
     demo_workspace,
     duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, okstratr_harness, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
-    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, packstore, pasteboard, permissions, plots,
+    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, ingest_run_drain, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
@@ -4176,6 +4176,17 @@ async def handle_packs_drain(request: web.Request) -> web.Response:
     ``{drained, skipped, errors, …}``.
     """
     summary = await pack_run_drain.drain_once(request.app)
+    return web.json_response(summary)
+
+
+async def handle_ingest_drain(request: web.Request) -> web.Response:
+    """Drain CE-queued ``.workbench/ingest-runs/*.json``.
+
+    Prefer deterministic ``local_ingest``; escalate to rail LLM only when
+    run metadata opts in (see ADR-007). Returns
+    ``{drained, skipped, errors, …}``.
+    """
+    summary = await ingest_run_drain.drain_once(request.app)
     return web.json_response(summary)
 
 
@@ -15314,6 +15325,8 @@ def _broadcast_files_changed_soon(app: web.Application) -> None:
         ws = app.get("workspace")
         if ws and pack_run_drain.runs_dir(Path(ws)).is_dir():
             pack_run_drain.kick_drain(app)
+        if ws and ingest_run_drain.runs_dir(Path(ws)).is_dir():
+            ingest_run_drain.kick_drain(app)
     except Exception:  # noqa: BLE001
         pass
 
@@ -16568,6 +16581,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/chat/upload", handle_chat_upload)
     app.router.add_post("/api/ingest/from-upload", handle_ingest_from_upload)
     app.router.add_post("/api/ingest/from-path", handle_ingest_from_path)
+    app.router.add_post("/api/ingest/drain", handle_ingest_drain)
     app.router.add_get("/api/action-buttons", handle_action_buttons_list)
     app.router.add_post("/api/action-buttons", handle_action_buttons_add)
     app.router.add_delete("/api/action-buttons", handle_action_buttons_delete)
@@ -17083,6 +17097,29 @@ def build_app(workspace: Path) -> web.Application:
 
     app.on_startup.append(_start_pack_drain)
     app.on_cleanup.append(_stop_pack_drain)
+
+
+    # CE ingest-run drain: poll ``.workbench/ingest-runs/`` so proxied CE
+    # drop-ingest queues actually run local_ingest (or rail when metadata
+    # opts in). Also exposed as POST /api/ingest/drain.
+    async def _start_ingest_drain(_app: web.Application) -> None:
+        _app["ingest_run_inflight"] = set()
+        _app["ingest_run_drain_task"] = asyncio.create_task(
+            ingest_run_drain.ingest_run_drain_loop(_app),
+        )
+
+    async def _stop_ingest_drain(_app: web.Application) -> None:
+        t = _app.get("ingest_run_drain_task")
+        if t:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    app.on_startup.append(_start_ingest_drain)
+    app.on_cleanup.append(_stop_ingest_drain)
+
 
     # Event-loop watchdog. A daemon thread watches a heartbeat that an
     # asyncio task bumps every 250ms; if the loop blocks past 1s the
