@@ -37,7 +37,7 @@ from . import (
     ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect,
     demo_workspace,
-    duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, file_state, fileops, llm_config, llmgateway,
+    duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, okstratr_harness, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
     mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
@@ -1014,6 +1014,67 @@ async def handle_okstratr_host_notify(request: web.Request) -> web.Response:
     result = await host_notify.apply_host_notify(request.app, body)
     status = 200 if result.get("ok") else 400
     return web.json_response(result, status=status)
+
+
+async def handle_okstratr_harness_get(request: web.Request) -> web.Response:
+    """Thin client: GET okstratr harness registry (SSOT). No Switchbay allowlist."""
+    try:
+        data = await okstratr_harness.list_harnesses(request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_enable(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    hid = str((body or {}).get("id") or (body or {}).get("harness") or "").strip()
+    try:
+        data = await okstratr_harness.enable_harness(hid, app=request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_disable(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    hid = str((body or {}).get("id") or (body or {}).get("harness") or "").strip()
+    try:
+        data = await okstratr_harness.disable_harness(hid, app=request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_set(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    key = str((body or {}).get("key") or "").strip()
+    value = (body or {}).get("value")
+    if value is None:
+        value = ""
+    try:
+        data = await okstratr_harness.set_harness_value(
+            key, str(value), app=request.app
+        )
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_reload(request: web.Request) -> web.Response:
+    try:
+        data = await okstratr_harness.reload_harnesses(request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
 
 
 async def handle_orchestration_policy_get(request: web.Request) -> web.Response:
@@ -16527,6 +16588,11 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/settings", handle_settings_get)
     app.router.add_get("/api/core-skills/status", handle_core_skills_status)
     app.router.add_post("/api/okstratr/host-notify", handle_okstratr_host_notify)
+    app.router.add_get("/api/okstratr/harness", handle_okstratr_harness_get)
+    app.router.add_post("/api/okstratr/harness/enable", handle_okstratr_harness_enable)
+    app.router.add_post("/api/okstratr/harness/disable", handle_okstratr_harness_disable)
+    app.router.add_post("/api/okstratr/harness/set", handle_okstratr_harness_set)
+    app.router.add_post("/api/okstratr/harness/reload", handle_okstratr_harness_reload)
     app.router.add_get("/api/curator-profile", handle_curator_profile_get)
     app.router.add_post("/api/curator-profile", handle_curator_profile_post)
     app.router.add_post("/api/curator-profile/draft", handle_curator_profile_draft)

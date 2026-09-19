@@ -425,6 +425,7 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             setBusy={setBusy}
             onRefresh={refresh}
           />
+          <OkstratrHarnessPanel open={open} />
           <LocalModelPanel
             open={open}
             onClose={onClose}
@@ -1492,15 +1493,17 @@ function PiHarnessPanel({
 
   return (
     <section className="sy-settings-section">
-      <h3 className="sy-settings-h">Optional harness · Pi</h3>
+      <h3 className="sy-settings-h">Optional rail harness · Pi</h3>
       <p className="sy-settings-blurb">
-        Turns on the <code>pi</code> CLI as a harness for hired specialist
-        nodes — the same class of coding-agent CLI as Claude Code, Codex,
-        or Grok Build. Switch Bay will not stack Pi on top of a signed-in
-        CLI: those keep using their own harness. Pi is the alternative
-        when a local model or an API key is doing the work instead.
-        The rail stays the chat and HTTP tool loop; Pi only runs the
-        hired package, then hands the result back. Install{" "}
+        Switch Bay <strong>rail / hire</strong> only — not the desk/agent
+        harness SSOT (that lives in{" "}
+        <em>Harness registry · okstratr</em> below). Turns on the{" "}
+        <code>pi</code> CLI for hired specialist nodes — same class as
+        Claude Code, Codex, or Grok Build. Switch Bay will not stack Pi on
+        top of a signed-in CLI: those keep using their own harness. Pi is
+        the alternative when a local model or an API key is doing the work
+        instead. The rail stays the chat and HTTP tool loop; Pi only runs
+        the hired package, then hands the result back. Install{" "}
         <code>pi</code> yourself or set <code>SWITCHBAY_PI</code>. Not a
         lockfile pin.
       </p>
@@ -1535,6 +1538,287 @@ function PiHarnessPanel({
           {!adminOn ? "locked" : userOn ? "on" : "off"}
         </button>
       </div>
+    </section>
+  );
+}
+
+
+
+// ── Harness registry (okstratr SSOT) ───────────────────────────────
+
+
+type OkstratrHarnessRow = {
+  id: string;
+  label: string;
+  enabled: boolean;
+  installed: boolean;
+  default_model?: string | null;
+  models?: string[];
+  notes?: string;
+};
+
+type OkstratrHarnessView = {
+  ok?: boolean;
+  ssot?: string;
+  path?: string | null;
+  backend?: string;
+  enabled?: string[];
+  preference?: string[];
+  harnesses?: OkstratrHarnessRow[];
+  error?: string;
+  embed_paths?: Record<string, string>;
+};
+
+
+function OkstratrHarnessPanel({ open }: { open: boolean }) {
+  const [view, setView] = useState<OkstratrHarnessView | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [draftModels, setDraftModels] = useState<Record<string, string>>({});
+
+  const reload = async () => {
+    try {
+      const r = await fetch("/api/okstratr/harness");
+      const body = (await r.json().catch(() => ({}))) as OkstratrHarnessView;
+      if (!r.ok) {
+        setView({
+          ok: false,
+          ssot: "okstratr",
+          harnesses: [],
+          error: body.error ?? `HTTP ${r.status}`,
+        });
+        return;
+      }
+      setView(body);
+      const drafts: Record<string, string> = {};
+      for (const h of body.harnesses ?? []) {
+        drafts[h.id] = h.default_model ?? "";
+      }
+      setDraftModels(drafts);
+    } catch (e) {
+      setView({
+        ok: false,
+        ssot: "okstratr",
+        harnesses: [],
+        error: e instanceof Error ? e.message : "unreachable",
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    void reload();
+  }, [open]);
+
+  if (!open) return null;
+
+  const toggle = async (h: OkstratrHarnessRow) => {
+    setBusy(h.id);
+    setStatus(null);
+    try {
+      const path = h.enabled
+        ? "/api/okstratr/harness/disable"
+        : "/api/okstratr/harness/enable";
+      const r = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: h.id }),
+      });
+      const body = (await r.json().catch(() => ({}))) as OkstratrHarnessView;
+      if (!r.ok) {
+        setStatus({ ok: false, msg: body.error ?? `HTTP ${r.status}` });
+        return;
+      }
+      setView(body);
+      setStatus({
+        ok: true,
+        msg: h.enabled ? `disabled ${h.id}` : `enabled ${h.id}`,
+      });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveDefaultModel = async (h: OkstratrHarnessRow) => {
+    const value = (draftModels[h.id] ?? "").trim();
+    if (!value) return;
+    setBusy(`set:${h.id}`);
+    setStatus(null);
+    try {
+      const r = await fetch("/api/okstratr/harness/set", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          key: `harness.${h.id}.default_model`,
+          value,
+        }),
+      });
+      const body = (await r.json().catch(() => ({}))) as OkstratrHarnessView;
+      if (!r.ok) {
+        setStatus({ ok: false, msg: body.error ?? `HTTP ${r.status}` });
+        return;
+      }
+      setView(body);
+      setStatus({ ok: true, msg: `default model → ${value}` });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doReload = async () => {
+    setBusy("reload");
+    setStatus(null);
+    try {
+      const r = await fetch("/api/okstratr/harness/reload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const body = (await r.json().catch(() => ({}))) as OkstratrHarnessView;
+      if (!r.ok) {
+        setStatus({ ok: false, msg: body.error ?? `HTTP ${r.status}` });
+        return;
+      }
+      setView(body);
+      setStatus({ ok: true, msg: "reloaded from disk" });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const rows = view?.harnesses ?? [];
+
+  return (
+    <section className="sy-settings-packs">
+      <h3 className="sy-settings-h3">Harness registry · okstratr</h3>
+      <p className="sy-settings-blurb">
+        Desk / agent harness allowlist and model pools —{" "}
+        <strong>okstratr is the SSOT</strong> (<code>harnesses.toml</code>).
+        Switch Bay does not keep a second allowlist. Writes go through{" "}
+        <code>/api/okstratr/harness</code> (daemon thin client over{" "}
+        <code>/embed/okstratr/api/harness</code>). Hosted mode keeps okstratr
+        HTML settings off.
+      </p>
+      {view === null ? (
+        <p className="sy-settings-help">Loading registry…</p>
+      ) : view.error ? (
+        <p className="sy-settings-status sy-settings-status--err">
+          {view.error}
+          {" — "}start okstratr (core skill) or check{" "}
+          <code>SWITCHBAY_OKSTRATR_UPSTREAM</code>.
+        </p>
+      ) : (
+        <>
+          <p className="sy-settings-help">
+            backend=<code>{view.backend || "—"}</code>
+            {view.path ? (
+              <>
+                {" · "}
+                <code>{view.path}</code>
+              </>
+            ) : null}
+            {" · "}
+            enabled:{" "}
+            <code>{(view.enabled ?? []).join(", ") || "(none)"}</code>
+          </p>
+          <div className="sy-settings-row" style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              className="sy-confirm-btn"
+              onClick={() => void doReload()}
+              disabled={busy !== null}
+            >
+              {busy === "reload" ? "Reloading…" : "Reload from disk"}
+            </button>
+          </div>
+          {rows.length === 0 ? (
+            <p className="sy-settings-help">
+              <em>No harnesses returned.</em>
+            </p>
+          ) : (
+            rows.map((h) => (
+              <div key={h.id} className="sy-settings-provider">
+                <div className="sy-settings-provider-head">
+                  <span className="sy-settings-provider-label">{h.label}</span>
+                  <span className="sy-settings-provider-meta">
+                    {h.id}
+                    {h.default_model ? ` · ${h.default_model}` : ""}
+                  </span>
+                  {h.installed ? (
+                    <span className="sy-settings-badge sy-settings-badge--ok">
+                      installed
+                    </span>
+                  ) : (
+                    <span className="sy-settings-badge">not installed</span>
+                  )}
+                  <span className="sy-spacer" />
+                  <button
+                    type="button"
+                    className={
+                      "sy-settings-pill"
+                      + (h.enabled ? " sy-settings-pill--on" : "")
+                    }
+                    onClick={() => void toggle(h)}
+                    disabled={busy !== null}
+                    title={
+                      h.enabled
+                        ? `Disable ${h.id} in okstratr registry`
+                        : `Enable ${h.id} in okstratr registry`
+                    }
+                  >
+                    {busy === h.id ? "…" : h.enabled ? "on" : "off"}
+                  </button>
+                </div>
+                {h.notes ? (
+                  <p className="sy-settings-help" style={{ margin: "4px 0" }}>
+                    {h.notes}
+                  </p>
+                ) : null}
+                <div className="sy-settings-row">
+                  <input
+                    className="sy-ws-input"
+                    style={{ flex: 1, marginTop: 0 }}
+                    placeholder="default model"
+                    value={draftModels[h.id] ?? ""}
+                    onChange={(e) =>
+                      setDraftModels((d) => ({ ...d, [h.id]: e.target.value }))
+                    }
+                    spellCheck={false}
+                    list={`sy-okstratr-models-${h.id}`}
+                  />
+                  <datalist id={`sy-okstratr-models-${h.id}`}>
+                    {(h.models ?? []).map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                  <button
+                    type="button"
+                    className="sy-confirm-btn"
+                    onClick={() => void saveDefaultModel(h)}
+                    disabled={
+                      busy !== null
+                      || !(draftModels[h.id] ?? "").trim()
+                      || (draftModels[h.id] ?? "").trim() === (h.default_model ?? "")
+                    }
+                  >
+                    {busy === `set:${h.id}` ? "Saving…" : "Set default"}
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </>
+      )}
+      {status && (
+        <p
+          className={
+            "sy-settings-status"
+            + (status.ok ? "" : " sy-settings-status--err")
+          }
+        >
+          {status.msg}
+        </p>
+      )}
     </section>
   );
 }
@@ -2703,7 +2987,7 @@ function LocalModelPanel({
     <section className="sy-settings-packs" ref={sectionRef}>
       <h3 className="sy-settings-h3">Local agent model</h3>
       <p className="sy-settings-blurb">
-        Run models on this machine (~{ram} GB RAM). Pick a server type.
+        Run models on this machine (Switch Bay rail LLM — not okstratr desk SSOT) (~{ram} GB RAM). Pick a server type.
         Installing pins CE curate workers to this local model.
       </p>
       {body.local_rung && (
