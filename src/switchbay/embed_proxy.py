@@ -173,7 +173,12 @@ def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     for k, v in headers.items():
         if k.lower() in _HOP_BY_HOP:
             continue
+        # Drop upstream cache directives — proxied Graph soft-reloads on
+        # wiki changes and must not keep a stale HTML shell.
+        if k.lower() in {"cache-control", "etag", "last-modified", "expires"}:
+            continue
         out[k] = v
+    out["Cache-Control"] = "no-store"
     return out
 
 

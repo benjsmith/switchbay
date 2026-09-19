@@ -16629,6 +16629,9 @@ def build_app(workspace: Path) -> web.Application:
     async def _start_ce_viewer_supervisor(_app: web.Application) -> None:
         # Keep CE HTML viewer alive for /embed/ce when proxied embeds are on.
         # Never block bind — spawn the poll loop as a background task.
+        # Expose broadcast to CE supervisor without import cycles at module load.
+        _app["_broadcast_fn"] = _broadcast
+
         async def _go() -> None:
             # First-chance start if the flag is already on.
             if app_settings.get_proxied_skill_embeds():

@@ -993,6 +993,8 @@ export default function App() {
         });
       } else if (msg.type === "files_changed") {
         setFilesVersion((v) => v + 1);
+        // Proxied Graph/Agents panels listen for this to soft-refetch /embed/*.
+        window.dispatchEvent(new CustomEvent("sy:files-changed"));
       } else if (msg.type === "artifact") {
         // Pend a pulse badge (Zen) AND switch to the surface the
         // agent just wrote — sheet/plot requests used to finish
