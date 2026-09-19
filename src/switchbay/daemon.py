@@ -37,7 +37,7 @@ from . import (
     ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect,
     demo_workspace,
-    duckdb_starters, embed_proxy, ce_viewer_supervisor, file_state, fileops, llm_config, llmgateway,
+    duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
     mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
@@ -951,22 +951,18 @@ async def handle_settings_post(request: web.Request) -> web.Response:
         want = bool(body["proxied_skill_embeds"])
         had = app_settings.get_proxied_skill_embeds()
         app_settings.set_proxied_skill_embeds(want)
+        # Proxied flag only switches Graph/Agents UI panels. Core skills
+        # (CE + okstratr) stay supervised either way (Ben lock / C1).
         if want and not had:
-            # Kick CE keep-alive immediately (supervisor also polls).
             async def _kick() -> None:
-                out = await asyncio.to_thread(
+                ce_out = await asyncio.to_thread(
                     ce_viewer_supervisor.start, workspace,
                 )
-                if out.get("ok"):
-                    log.info("CE viewer started via settings: %s", out)
-                else:
-                    log.warning("CE viewer start via settings failed: %s", out)
+                oks_out = await asyncio.to_thread(
+                    okstratr_supervisor.start, workspace,
+                )
+                log.info("core skills kick via settings: ce=%s oks=%s", ce_out, oks_out)
             asyncio.create_task(_kick())
-        elif had and not want:
-            async def _halt() -> None:
-                out = await asyncio.to_thread(ce_viewer_supervisor.stop)
-                log.info("CE viewer stopped via settings: %s", out)
-            asyncio.create_task(_halt())
     # Media: { media: { image?: {provider, model}|null, video?: …, voice?: … } }
     if "media" in body and isinstance(body["media"], dict):
         if not admin_policy.feature_enabled("media_generation"):
@@ -1000,6 +996,24 @@ async def handle_settings_post(request: web.Request) -> web.Response:
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=400)
     return await handle_settings_get(request)
+
+
+
+async def handle_core_skills_status(request: web.Request) -> web.Response:
+    """C1 shared status: CE + okstratr + wiki_build."""
+    workspace: Path = request.app["workspace"]
+    return web.json_response(core_skills.status(workspace))
+
+
+async def handle_okstratr_host_notify(request: web.Request) -> web.Response:
+    """C2 path-native notify: okstratr → Switchbay rail (protocol.notice)."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    result = await host_notify.apply_host_notify(request.app, body)
+    status = 200 if result.get("ok") else 400
+    return web.json_response(result, status=status)
 
 
 async def handle_orchestration_policy_get(request: web.Request) -> web.Response:
@@ -16511,6 +16525,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/llm/refresh_models", handle_llm_refresh_models)
     app.router.add_get("/api/rail/events", handle_rail_events)
     app.router.add_get("/api/settings", handle_settings_get)
+    app.router.add_get("/api/core-skills/status", handle_core_skills_status)
+    app.router.add_post("/api/okstratr/host-notify", handle_okstratr_host_notify)
     app.router.add_get("/api/curator-profile", handle_curator_profile_get)
     app.router.add_post("/api/curator-profile", handle_curator_profile_post)
     app.router.add_post("/api/curator-profile/draft", handle_curator_profile_draft)
@@ -16626,43 +16642,53 @@ def build_app(workspace: Path) -> web.Application:
         _app["_ce_skill_task"] = asyncio.create_task(_go())
     app.on_startup.append(_ensure_ce_skill)
 
-    async def _start_ce_viewer_supervisor(_app: web.Application) -> None:
-        # Keep CE HTML viewer alive for /embed/ce when proxied embeds are on.
-        # Never block bind — spawn the poll loop as a background task.
-        # Expose broadcast to CE supervisor without import cycles at module load.
+    async def _start_core_skill_supervisors(_app: web.Application) -> None:
+        # C1: always auto-start CE + okstratr with the shell (Ben lock).
+        # Proxied embeds only choose which UI panels load /embed/* — supervisors
+        # still bring skills up. Never block bind — background tasks only.
         _app["_broadcast_fn"] = _broadcast
 
-        async def _go() -> None:
-            # First-chance start if the flag is already on.
-            if app_settings.get_proxied_skill_embeds():
-                ws = Path(_app["workspace"])
-                out = await asyncio.to_thread(ce_viewer_supervisor.start, ws)
-                if out.get("ok"):
-                    log.info("CE viewer supervisor initial start: %s", out)
-                else:
-                    log.warning(
-                        "CE viewer supervisor initial start failed: %s",
-                        out.get("error"),
-                    )
+        async def _go_ce() -> None:
+            ws = Path(_app["workspace"])
+            out = await asyncio.to_thread(ce_viewer_supervisor.start, ws)
+            if out.get("ok"):
+                log.info("CE viewer supervisor initial start: %s", out)
+            else:
+                log.warning(
+                    "CE viewer supervisor initial start failed: %s",
+                    out.get("error"),
+                )
             await ce_viewer_supervisor.run_supervisor(_app)
 
-        async def _stop(_a: web.Application) -> None:
-            t = _a.get("_ce_viewer_supervisor_task")
-            if t:
-                t.cancel()
-                try:
-                    await t
-                except (asyncio.CancelledError, Exception):
-                    pass
-            # Leave the CE process running across daemon restarts only if
-            # proxied embeds stay on; otherwise tear it down with the daemon.
-            if not app_settings.get_proxied_skill_embeds():
-                await asyncio.to_thread(ce_viewer_supervisor.stop)
+        async def _go_oks() -> None:
+            ws = Path(_app["workspace"])
+            out = await asyncio.to_thread(okstratr_supervisor.start, ws)
+            if out.get("ok"):
+                log.info("okstratr supervisor initial start: %s", out)
+            else:
+                log.warning(
+                    "okstratr supervisor initial start failed: %s",
+                    out.get("error"),
+                )
+            await okstratr_supervisor.run_supervisor(_app)
 
-        _app["_ce_viewer_supervisor_task"] = asyncio.create_task(_go())
+        async def _stop(_a: web.Application) -> None:
+            for key in ("_ce_viewer_supervisor_task", "_okstratr_supervisor_task"):
+                t = _a.get(key)
+                if t:
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+            # Leave skill processes up across daemon restarts (supervisors
+            # re-attach via health check). Matches prior CE-when-proxied-on.
+
+        _app["_ce_viewer_supervisor_task"] = asyncio.create_task(_go_ce())
+        _app["_okstratr_supervisor_task"] = asyncio.create_task(_go_oks())
         _app.on_cleanup.append(_stop)
 
-    app.on_startup.append(_start_ce_viewer_supervisor)
+    app.on_startup.append(_start_core_skill_supervisors)
 
     # The launch workspace is set directly (no _activate), so relocate
     # its rail-history DB to match the current setting on startup too.
