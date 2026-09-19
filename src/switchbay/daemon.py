@@ -37,7 +37,7 @@ from . import (
     ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect,
     demo_workspace,
-    duckdb_starters, embed_proxy, file_state, fileops, llm_config, llmgateway,
+    duckdb_starters, embed_proxy, ce_viewer_supervisor, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
     mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
@@ -948,7 +948,25 @@ async def handle_settings_post(request: web.Request) -> web.Response:
         # rebuilds the index if the vector space changed.
         conversations.reset_embedder()
     if "proxied_skill_embeds" in body:
-        app_settings.set_proxied_skill_embeds(bool(body["proxied_skill_embeds"]))
+        want = bool(body["proxied_skill_embeds"])
+        had = app_settings.get_proxied_skill_embeds()
+        app_settings.set_proxied_skill_embeds(want)
+        if want and not had:
+            # Kick CE keep-alive immediately (supervisor also polls).
+            async def _kick() -> None:
+                out = await asyncio.to_thread(
+                    ce_viewer_supervisor.start, workspace,
+                )
+                if out.get("ok"):
+                    log.info("CE viewer started via settings: %s", out)
+                else:
+                    log.warning("CE viewer start via settings failed: %s", out)
+            asyncio.create_task(_kick())
+        elif had and not want:
+            async def _halt() -> None:
+                out = await asyncio.to_thread(ce_viewer_supervisor.stop)
+                log.info("CE viewer stopped via settings: %s", out)
+            asyncio.create_task(_halt())
     # Media: { media: { image?: {provider, model}|null, video?: …, voice?: … } }
     if "media" in body and isinstance(body["media"], dict):
         if not admin_policy.feature_enabled("media_generation"):
@@ -16607,6 +16625,41 @@ def build_app(workspace: Path) -> web.Application:
                 log.info("curiosity-engine skill: %s", msg.split("\n", 1)[0])
         _app["_ce_skill_task"] = asyncio.create_task(_go())
     app.on_startup.append(_ensure_ce_skill)
+
+    async def _start_ce_viewer_supervisor(_app: web.Application) -> None:
+        # Keep CE HTML viewer alive for /embed/ce when proxied embeds are on.
+        # Never block bind — spawn the poll loop as a background task.
+        async def _go() -> None:
+            # First-chance start if the flag is already on.
+            if app_settings.get_proxied_skill_embeds():
+                ws = Path(_app["workspace"])
+                out = await asyncio.to_thread(ce_viewer_supervisor.start, ws)
+                if out.get("ok"):
+                    log.info("CE viewer supervisor initial start: %s", out)
+                else:
+                    log.warning(
+                        "CE viewer supervisor initial start failed: %s",
+                        out.get("error"),
+                    )
+            await ce_viewer_supervisor.run_supervisor(_app)
+
+        async def _stop(_a: web.Application) -> None:
+            t = _a.get("_ce_viewer_supervisor_task")
+            if t:
+                t.cancel()
+                try:
+                    await t
+                except (asyncio.CancelledError, Exception):
+                    pass
+            # Leave the CE process running across daemon restarts only if
+            # proxied embeds stay on; otherwise tear it down with the daemon.
+            if not app_settings.get_proxied_skill_embeds():
+                await asyncio.to_thread(ce_viewer_supervisor.stop)
+
+        _app["_ce_viewer_supervisor_task"] = asyncio.create_task(_go())
+        _app.on_cleanup.append(_stop)
+
+    app.on_startup.append(_start_ce_viewer_supervisor)
 
     # The launch workspace is set directly (no _activate), so relocate
     # its rail-history DB to match the current setting on startup too.
