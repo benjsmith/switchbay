@@ -36,10 +36,11 @@ frames**.
    Built-in GraphTab / AgentDashboardTab / filebrowser remain the
    default and are **not deleted**.
 
-3. **Settings → okstratr registry (TODO).** Switchbay settings will
-   become a client that writes okstratr's harness/model registry
-   (`harnesses.toml` via API). Out of scope for 4a; tracked here so the
-   shell does not grow a second allowlist.
+3. **Settings → okstratr registry (done — ADR-005).** Switchbay settings
+   is a thin client over okstratr's harness/model registry
+   (`harnesses.toml` via `/api/okstratr/harness…` / embed proxy). No
+   second Switchbay allowlist. See
+   [ADR-005](./ADR-005-okstratr-harness-registry-client.md).
 
 ## Consequences
 
