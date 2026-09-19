@@ -39,7 +39,7 @@ from . import (
     demo_workspace,
     duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, okstratr_harness, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
-    mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
+    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
@@ -4165,6 +4165,18 @@ async def handle_pack_action(request: web.Request) -> web.Response:
             r["vault_path"] = rel
     asyncio.create_task(_tag_run())
     return web.json_response({"run_id": run_id, "pack": pack, "action": action})
+
+
+async def handle_packs_drain(request: web.Request) -> web.Response:
+    """Drain CE-queued ``.workbench/pack-runs/*.json`` into rail LLM seats.
+
+    CE's proxied filebrowser only writes ``status: queued`` files; this
+    endpoint (and the background poll loop) seats ``_dispatch_chat`` the
+    same way ``handle_pack_action`` does. Returns
+    ``{drained, skipped, errors, …}``.
+    """
+    summary = await pack_run_drain.drain_once(request.app)
+    return web.json_response(summary)
 
 
 async def handle_packs_uninstall(request: web.Request) -> web.Response:
@@ -15295,6 +15307,15 @@ def _broadcast_files_changed_soon(app: web.Application) -> None:
     except RuntimeError:
         return  # not inside an event loop (test context, etc.)
     loop.create_task(_broadcast(app, protocol.files_changed()))
+    # Opportunistic pack-run drain when workspace files change (CE may
+    # have just written ``.workbench/pack-runs/*.json``). No-op if the
+    # dir is absent; dedupes via ``pack_run_inflight``.
+    try:
+        ws = app.get("workspace")
+        if ws and pack_run_drain.runs_dir(Path(ws)).is_dir():
+            pack_run_drain.kick_drain(app)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _check_external_edit(app: web.Application, rel: str) -> None:
@@ -16542,6 +16563,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post(
         "/api/packs/{pack}/action/{action}", handle_pack_action,
     )
+    app.router.add_post("/api/packs/drain", handle_packs_drain)
     app.router.add_get("/figures/{path:.*}", handle_figure_file)
     app.router.add_post("/api/chat/upload", handle_chat_upload)
     app.router.add_post("/api/ingest/from-upload", handle_ingest_from_upload)
@@ -17040,6 +17062,27 @@ def build_app(workspace: Path) -> web.Application:
 
     app.on_startup.append(_start_watch)
     app.on_cleanup.append(_stop_watch)
+
+    # CE pack-run drain: poll ``.workbench/pack-runs/`` so proxied CE
+    # filebrowser queues actually seat a Switchbay rail LLM (CE only
+    # writes status=queued JSON). Also exposed as POST /api/packs/drain.
+    async def _start_pack_drain(_app: web.Application) -> None:
+        _app["pack_run_inflight"] = set()
+        _app["pack_run_drain_task"] = asyncio.create_task(
+            pack_run_drain.pack_run_drain_loop(_app),
+        )
+
+    async def _stop_pack_drain(_app: web.Application) -> None:
+        t = _app.get("pack_run_drain_task")
+        if t:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    app.on_startup.append(_start_pack_drain)
+    app.on_cleanup.append(_stop_pack_drain)
 
     # Event-loop watchdog. A daemon thread watches a heartbeat that an
     # asyncio task bumps every 250ms; if the loop blocks past 1s the
