@@ -31,6 +31,57 @@ _HEALTH_PATH = "/"
 _POLL_SEC = 5.0
 _WIKI_POLL_SEC = 3.0
 
+# Contract C1 wiki_build + CE state (module-level; supervisor updates).
+_CE_STATE: dict[str, str] = {"state": "stopped", "detail": ""}
+_WIKI_BUILD: dict[str, object] = {
+    "state": "idle",  # idle|building|failed
+    "pages": None,
+    "detail": "",
+}
+
+
+def _set_ce_state(state: str, detail: str = "") -> None:
+    _CE_STATE["state"] = state
+    _CE_STATE["detail"] = detail
+
+
+def _set_wiki_build(state: str, *, pages=None, detail: str = "") -> None:
+    _WIKI_BUILD["state"] = state
+    _WIKI_BUILD["pages"] = pages
+    _WIKI_BUILD["detail"] = detail
+
+
+def contract_slice(workspace: Path | None = None) -> dict[str, Any]:
+    """C1 status slice for CE."""
+    healthy = is_healthy()
+    pid = _read_pid()
+    if healthy:
+        state = "healthy"
+        detail = _CE_STATE.get("detail") or "up"
+    elif _CE_STATE.get("state") == "starting":
+        state = "starting"
+        detail = _CE_STATE.get("detail") or "starting"
+    elif pid and _pid_alive(pid):
+        state = "unhealthy"
+        detail = _CE_STATE.get("detail") or "process up but health failing"
+    elif _CE_STATE.get("state") == "unhealthy":
+        state = "unhealthy"
+        detail = _CE_STATE.get("detail") or "unhealthy"
+    else:
+        state = "stopped"
+        detail = _CE_STATE.get("detail") or "stopped"
+    return {"state": state, "url": upstream_base(), "detail": detail}
+
+
+def wiki_build_slice() -> dict[str, Any]:
+    """C1 wiki_build slice."""
+    return {
+        "state": str(_WIKI_BUILD.get("state") or "idle"),
+        "pages": _WIKI_BUILD.get("pages"),
+        "detail": str(_WIKI_BUILD.get("detail") or ""),
+    }
+
+
 
 def _state_dir() -> Path:
     d = Path.home() / ".local" / "state" / "switchbay"
@@ -99,6 +150,7 @@ def start(workspace: Path) -> dict[str, Any]:
     """Start CE viewer.sh serve if not healthy. Idempotent."""
     workspace = Path(workspace).expanduser().resolve()
     if is_healthy():
+        _set_ce_state("healthy", "already running")
         return {
             "ok": True,
             "already_running": True,
@@ -132,6 +184,7 @@ def start(workspace: Path) -> dict[str, Any]:
         except OSError:
             pass
 
+    _set_ce_state("starting", "spawning viewer.sh serve")
     env = os.environ.copy()
     env["CE_PUBLIC_BASE"] = _public_base()
     # Prefer the same CE root Switchbay already resolved.
@@ -229,12 +282,15 @@ def rebuild_bundle(workspace: Path) -> dict[str, Any]:
     """Run viewer.sh build so the served bundle picks up wiki edits."""
     workspace = Path(workspace).expanduser().resolve()
     if not cebridge.has_wiki(workspace):
+        _set_wiki_build("failed", detail="no wiki/")
         return {"ok": False, "error": "no wiki/"}
     script = cebridge.ce_root() / "scripts" / "viewer.sh"
     if not script.is_file():
+        _set_wiki_build("failed", detail=f"viewer.sh missing under {cebridge.ce_root()}")
         return {"ok": False, "error": f"viewer.sh missing under {cebridge.ce_root()}"}
     env = os.environ.copy()
     env["CE_PUBLIC_BASE"] = _public_base()
+    _set_wiki_build("building", detail="viewer.sh build")
     try:
         proc = subprocess.run(  # noqa: S603
             ["bash", str(script), "build"],
@@ -246,10 +302,13 @@ def rebuild_bundle(workspace: Path) -> dict[str, Any]:
             check=False,
         )
     except (OSError, subprocess.TimeoutExpired) as e:
+        _set_wiki_build("failed", detail=str(e))
         return {"ok": False, "error": str(e)}
     if proc.returncode != 0:
         tail = (proc.stderr or proc.stdout or "")[-800:]
+        _set_wiki_build("failed", detail=f"build exit {proc.returncode}")
         return {"ok": False, "error": f"build exit {proc.returncode}", "detail": tail}
+    _set_wiki_build("idle", detail="rebuilt")
     return {"ok": True, "rebuilt": True}
 
 
@@ -287,21 +346,27 @@ async def _broadcast_files_changed(app: Any) -> None:
 
 
 async def run_supervisor(app: Any) -> None:
-    """Background task: keep CE up while proxied embeds are enabled."""
+    """Background task: always keep CE up (core experience; Ben lock).
+
+    Proxied-embeds flag still chooses the Graph UI panel; supervisors bring
+    the skill up regardless so status is never an empty Graph.
+    """
     last_wiki_mtime = 0.0
     last_rebuild = 0.0
     while True:
         try:
-            if not app_settings.get_proxied_skill_embeds():
-                await asyncio.sleep(_POLL_SEC)
-                continue
             ws = Path(app["workspace"])
             if not is_healthy():
                 log.info("CE viewer unhealthy — starting for %s", ws)
+                _set_ce_state("starting", "supervisor restart")
                 out = await asyncio.to_thread(start, ws)
                 if not out.get("ok"):
+                    _set_ce_state("unhealthy", str(out.get("error") or "start failed"))
                     log.warning("CE viewer start failed: %s", out.get("error"))
+                else:
+                    _set_ce_state("healthy", "supervisor")
             else:
+                _set_ce_state("healthy", "supervisor")
                 # Rebuild static bundle when wiki changes (Phase 4a panel
                 # still needs a browser reload; keep-alive is the hard part).
                 mtime = await asyncio.to_thread(_wiki_mtime, ws)
@@ -318,8 +383,6 @@ async def run_supervisor(app: Any) -> None:
                     if reb.get("ok"):
                         # Tell proxied Graph panels to soft-refetch /embed/ce.
                         try:
-                            from . import protocol
-
                             await _broadcast_files_changed(app)
                         except Exception:  # noqa: BLE001
                             log.exception("files_changed after CE rebuild failed")
@@ -329,4 +392,5 @@ async def run_supervisor(app: Any) -> None:
             raise
         except Exception:  # noqa: BLE001
             log.exception("CE viewer supervisor loop error")
+            _set_ce_state("unhealthy", "supervisor loop error")
         await asyncio.sleep(_POLL_SEC)
