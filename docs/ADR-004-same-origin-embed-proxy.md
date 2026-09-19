@@ -1,6 +1,6 @@
 # ADR-004: Same-origin embed reverse-proxy (no iframes)
 
-- **Status:** Accepted (Phase 4a)
+- **Status:** Accepted (Phase 4a); Embed v2 mount → [ADR-004b](./ADR-004b-embed-v2-same-document-mount.md)
 - **Date:** 2026-09-18
 - **Deciders:** Ben / skill-shell rationalization charter
 
@@ -32,7 +32,7 @@ frames**.
 2. **No iframes** for Graph/Agents skill surfaces. Feature flag
    `proxied_skill_embeds` (default **false**) switches Graph → CE panel
    and Agents → okstratr panel that navigate `/embed/*` via same-origin
-   `fetch` + same-document rendering (script-stripped HTML / JSON).
+   `fetch` + same-document rendering. Phase 4a was script-stripped HTML / JSON; Embed v2 (ADR-004b) executes skill scripts in-panel.
    Built-in GraphTab / AgentDashboardTab / filebrowser remain the
    default and are **not deleted**.
 
