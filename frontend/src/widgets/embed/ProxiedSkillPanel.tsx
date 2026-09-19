@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 /**
  * Phase 4a same-origin skill panel (NO iframe).
@@ -7,6 +7,8 @@ import { useCallback, useEffect, useState } from "react";
  * `/embed/ce/*` or `/embed/okstratr/*`. In-app path navigation uses
  * fetch + a same-document panel — never a nested frame.
  *
+ * Reloads automatically when the daemon broadcasts `files_changed`
+ * (wiki edits, curator, rescan) so the proxied Graph feels live.
  * Full atlas/observer chrome lands as those skills grow hosted-mode
  * fragment/API UIs; this panel proves the proxy path and stays usable
  * when upstream is down.
@@ -55,13 +57,25 @@ export default function ProxiedSkillPanel({ kind }: Props) {
   const [path, setPath] = useState(DEFAULT_PATH[kind]);
   const [draft, setDraft] = useState(DEFAULT_PATH[kind]);
   const [state, setState] = useState<LoadState>({ status: "loading" });
+  const [refreshing, setRefreshing] = useState(false);
+  const pathRef = useRef(path);
+  pathRef.current = path;
 
   const load = useCallback(
-    async (p: string) => {
-      setState({ status: "loading" });
-      const url = prefix + (p.startsWith("/") ? p : `/${p}`);
+    async (p: string, opts?: { soft?: boolean }) => {
+      const soft = !!opts?.soft;
+      if (soft) {
+        setRefreshing(true);
+      } else {
+        setState({ status: "loading" });
+      }
+      // Cache-bust so CE static bundle / proxy do not serve a stale shell.
+      const base = prefix + (p.startsWith("/") ? p : `/${p}`);
+      const sep = base.includes("?") ? "&" : "?";
+      const url = `${base}${sep}_sb=${Date.now()}`;
       try {
         const r = await fetch(url, {
+          cache: "no-store",
           headers: { Accept: "text/html, application/json;q=0.9, */*;q=0.8" },
         });
         const ct = r.headers.get("content-type") || "";
@@ -85,6 +99,8 @@ export default function ProxiedSkillPanel({ kind }: Props) {
           status: "error",
           message: (e as Error).message || "fetch failed",
         });
+      } finally {
+        if (soft) setRefreshing(false);
       }
     },
     [prefix],
@@ -93,6 +109,23 @@ export default function ProxiedSkillPanel({ kind }: Props) {
   useEffect(() => {
     void load(path);
   }, [load, path]);
+
+  // Live view: wiki / curator / rescan → daemon files_changed → soft refetch.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onFiles = () => {
+      if (timer) clearTimeout(timer);
+      // Debounce bursts (curator multi-write) into one refetch.
+      timer = setTimeout(() => {
+        void load(pathRef.current, { soft: true });
+      }, 400);
+    };
+    window.addEventListener("sy:files-changed", onFiles);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("sy:files-changed", onFiles);
+    };
+  }, [load]);
 
   const onNavigate = (ev: React.FormEvent) => {
     ev.preventDefault();
@@ -106,6 +139,7 @@ export default function ProxiedSkillPanel({ kind }: Props) {
         <strong>{LABEL[kind]}</strong>
         <span className="sy-proxied-skill-hint">
           same-origin via {prefix} (no iframe)
+          {refreshing ? " · updating…" : ""}
         </span>
         <form className="sy-proxied-skill-nav" onSubmit={onNavigate}>
           <input
@@ -119,7 +153,7 @@ export default function ProxiedSkillPanel({ kind }: Props) {
             type="button"
             onClick={() => {
               setDraft(path);
-              void load(path);
+              void load(path, { soft: true });
             }}
           >
             Reload

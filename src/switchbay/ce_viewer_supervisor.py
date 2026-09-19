@@ -28,8 +28,8 @@ log = logging.getLogger("switchbay.ce_viewer_supervisor")
 _PID_NAME = "ce-viewer.pid"
 _LOG_NAME = "ce-viewer.log"
 _HEALTH_PATH = "/"
-_POLL_SEC = 8.0
-_WIKI_POLL_SEC = 15.0
+_POLL_SEC = 5.0
+_WIKI_POLL_SEC = 3.0
 
 
 def _state_dir() -> Path:
@@ -270,6 +270,22 @@ def _wiki_mtime(workspace: Path) -> float:
     return newest
 
 
+
+async def _broadcast_files_changed(app: Any) -> None:
+    """Notify connected clients (proxied panel listens via App → CustomEvent)."""
+    from . import protocol
+
+    # Prefer the daemon's own _broadcast if the app stored a bound helper.
+    bc = app.get("_broadcast_fn")
+    if callable(bc):
+        await bc(app, protocol.files_changed())
+        return
+    # Fallback: import daemon._broadcast (circular-import safe at call time).
+    from . import daemon as _daemon
+
+    await _daemon._broadcast(app, protocol.files_changed())
+
+
 async def run_supervisor(app: Any) -> None:
     """Background task: keep CE up while proxied embeds are enabled."""
     last_wiki_mtime = 0.0
@@ -296,11 +312,18 @@ async def run_supervisor(app: Any) -> None:
                     and (now - last_rebuild) > _WIKI_POLL_SEC
                 ):
                     last_rebuild = now
+                    last_wiki_mtime = mtime
                     reb = await asyncio.to_thread(rebuild_bundle, ws)
                     log.info("CE viewer rebuild after wiki change: %s", reb)
-                if last_wiki_mtime == 0.0:
-                    last_wiki_mtime = mtime
-                elif mtime > last_wiki_mtime:
+                    if reb.get("ok"):
+                        # Tell proxied Graph panels to soft-refetch /embed/ce.
+                        try:
+                            from . import protocol
+
+                            await _broadcast_files_changed(app)
+                        except Exception:  # noqa: BLE001
+                            log.exception("files_changed after CE rebuild failed")
+                elif last_wiki_mtime == 0.0:
                     last_wiki_mtime = mtime
         except asyncio.CancelledError:
             raise
