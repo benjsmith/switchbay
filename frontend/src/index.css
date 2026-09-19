@@ -9041,7 +9041,38 @@ a.sy-source-cite { color: var(--accent); }
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 0.85em;
 }
+.sy-proxied-skill-status {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  font-size: 0.85em;
+  border-bottom: 1px solid var(--sy-border, #2a2f3a);
+  background: rgba(255, 255, 255, 0.03);
+}
+.sy-proxied-skill-status--starting,
+.sy-proxied-skill-status--unknown {
+  color: #c9a227;
+}
+.sy-proxied-skill-status--unhealthy {
+  color: #e07070;
+  background: rgba(160, 40, 40, 0.12);
+}
+.sy-proxied-skill-status--building_wiki {
+  color: #6bb3e8;
+}
+.sy-proxied-skill-status--live {
+  color: #6be8a0;
+  opacity: 0.85;
+}
 .sy-proxied-skill-html {
-  /* Hosted skill HTML body, scripts stripped — same-document panel. */
+  /* Embed v2: interactive same-document mount (scripts executed). */
   max-width: 100%;
+  min-height: 0;
+  flex: 1;
+}
+.sy-proxied-skill-html[hidden] {
+  display: none !important;
+}
+.sy-proxied-skill-body {
+  display: flex;
+  flex-direction: column;
 }
