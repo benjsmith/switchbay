@@ -37,9 +37,9 @@ from . import (
     ce_tools, command_palettes,
     commands, conversations, curation_history, dbintrospect,
     demo_workspace,
-    duckdb_starters, file_state, fileops, llm_config, llmgateway,
+    duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, okstratr_harness, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
-    mcpstore, merging, model_cache, modestore, owid, packstore, pasteboard, permissions, plots,
+    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, ingest_run_drain, packstore, pasteboard, permissions, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
@@ -899,6 +899,7 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "media": media,
         "orchestration_preference": orchestration_policy.get_preference(),
         "orchestration_denied_models": orchestration_policy.get_denied_models(workspace),
+        "proxied_skill_embeds": app_settings.get_proxied_skill_embeds(),
     })
 
 
@@ -946,6 +947,22 @@ async def handle_settings_post(request: web.Request) -> web.Response:
         # Re-select the backend on next use; the drain's reconcile then
         # rebuilds the index if the vector space changed.
         conversations.reset_embedder()
+    if "proxied_skill_embeds" in body:
+        want = bool(body["proxied_skill_embeds"])
+        had = app_settings.get_proxied_skill_embeds()
+        app_settings.set_proxied_skill_embeds(want)
+        # Proxied flag only switches Graph/Agents UI panels. Core skills
+        # (CE + okstratr) stay supervised either way (Ben lock / C1).
+        if want and not had:
+            async def _kick() -> None:
+                ce_out = await asyncio.to_thread(
+                    ce_viewer_supervisor.start, workspace,
+                )
+                oks_out = await asyncio.to_thread(
+                    okstratr_supervisor.start, workspace,
+                )
+                log.info("core skills kick via settings: ce=%s oks=%s", ce_out, oks_out)
+            asyncio.create_task(_kick())
     # Media: { media: { image?: {provider, model}|null, video?: …, voice?: … } }
     if "media" in body and isinstance(body["media"], dict):
         if not admin_policy.feature_enabled("media_generation"):
@@ -979,6 +996,85 @@ async def handle_settings_post(request: web.Request) -> web.Response:
             except ValueError as e:
                 return web.json_response({"error": str(e)}, status=400)
     return await handle_settings_get(request)
+
+
+
+async def handle_core_skills_status(request: web.Request) -> web.Response:
+    """C1 shared status: CE + okstratr + wiki_build."""
+    workspace: Path = request.app["workspace"]
+    return web.json_response(core_skills.status(workspace))
+
+
+async def handle_okstratr_host_notify(request: web.Request) -> web.Response:
+    """C2 path-native notify: okstratr → Switchbay rail (protocol.notice)."""
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    result = await host_notify.apply_host_notify(request.app, body)
+    status = 200 if result.get("ok") else 400
+    return web.json_response(result, status=status)
+
+
+async def handle_okstratr_harness_get(request: web.Request) -> web.Response:
+    """Thin client: GET okstratr harness registry (SSOT). No Switchbay allowlist."""
+    try:
+        data = await okstratr_harness.list_harnesses(request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_enable(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    hid = str((body or {}).get("id") or (body or {}).get("harness") or "").strip()
+    try:
+        data = await okstratr_harness.enable_harness(hid, app=request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_disable(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    hid = str((body or {}).get("id") or (body or {}).get("harness") or "").strip()
+    try:
+        data = await okstratr_harness.disable_harness(hid, app=request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_set(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        return web.json_response({"ok": False, "error": "invalid json"}, status=400)
+    key = str((body or {}).get("key") or "").strip()
+    value = (body or {}).get("value")
+    if value is None:
+        value = ""
+    try:
+        data = await okstratr_harness.set_harness_value(
+            key, str(value), app=request.app
+        )
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
+
+
+async def handle_okstratr_harness_reload(request: web.Request) -> web.Response:
+    try:
+        data = await okstratr_harness.reload_harnesses(request.app)
+    except okstratr_harness.OkstratrHarnessError as e:
+        return okstratr_harness.error_response(e)
+    return web.json_response(data)
 
 
 async def handle_orchestration_policy_get(request: web.Request) -> web.Response:
@@ -4069,6 +4165,29 @@ async def handle_pack_action(request: web.Request) -> web.Response:
             r["vault_path"] = rel
     asyncio.create_task(_tag_run())
     return web.json_response({"run_id": run_id, "pack": pack, "action": action})
+
+
+async def handle_packs_drain(request: web.Request) -> web.Response:
+    """Drain CE-queued ``.workbench/pack-runs/*.json`` into rail LLM seats.
+
+    CE's proxied filebrowser only writes ``status: queued`` files; this
+    endpoint (and the background poll loop) seats ``_dispatch_chat`` the
+    same way ``handle_pack_action`` does. Returns
+    ``{drained, skipped, errors, …}``.
+    """
+    summary = await pack_run_drain.drain_once(request.app)
+    return web.json_response(summary)
+
+
+async def handle_ingest_drain(request: web.Request) -> web.Response:
+    """Drain CE-queued ``.workbench/ingest-runs/*.json``.
+
+    Prefer deterministic ``local_ingest``; escalate to rail LLM only when
+    run metadata opts in (see ADR-007). Returns
+    ``{drained, skipped, errors, …}``.
+    """
+    summary = await ingest_run_drain.drain_once(request.app)
+    return web.json_response(summary)
 
 
 async def handle_packs_uninstall(request: web.Request) -> web.Response:
@@ -15199,6 +15318,17 @@ def _broadcast_files_changed_soon(app: web.Application) -> None:
     except RuntimeError:
         return  # not inside an event loop (test context, etc.)
     loop.create_task(_broadcast(app, protocol.files_changed()))
+    # Opportunistic pack-run drain when workspace files change (CE may
+    # have just written ``.workbench/pack-runs/*.json``). No-op if the
+    # dir is absent; dedupes via ``pack_run_inflight``.
+    try:
+        ws = app.get("workspace")
+        if ws and pack_run_drain.runs_dir(Path(ws)).is_dir():
+            pack_run_drain.kick_drain(app)
+        if ws and ingest_run_drain.runs_dir(Path(ws)).is_dir():
+            ingest_run_drain.kick_drain(app)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _check_external_edit(app: web.Application, rel: str) -> None:
@@ -16211,7 +16341,11 @@ async def handle_spa(request: web.Request) -> web.StreamResponse:
     # Never serve the SPA for API/WS paths — an unregistered /api GET
     # must 404 (so clients that probe GET-then-POST fall back correctly),
     # not silently receive index.html.
-    if rel == "api" or rel.startswith("api/") or rel == "ws" or rel.startswith("ws/"):
+    if (
+        rel == "api" or rel.startswith("api/")
+        or rel == "ws" or rel.startswith("ws/")
+        or rel == "embed" or rel.startswith("embed/")
+    ):
         return web.Response(status=404)
     if rel:
         candidate = (dist / rel).resolve()
@@ -16442,10 +16576,12 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post(
         "/api/packs/{pack}/action/{action}", handle_pack_action,
     )
+    app.router.add_post("/api/packs/drain", handle_packs_drain)
     app.router.add_get("/figures/{path:.*}", handle_figure_file)
     app.router.add_post("/api/chat/upload", handle_chat_upload)
     app.router.add_post("/api/ingest/from-upload", handle_ingest_from_upload)
     app.router.add_post("/api/ingest/from-path", handle_ingest_from_path)
+    app.router.add_post("/api/ingest/drain", handle_ingest_drain)
     app.router.add_get("/api/action-buttons", handle_action_buttons_list)
     app.router.add_post("/api/action-buttons", handle_action_buttons_add)
     app.router.add_delete("/api/action-buttons", handle_action_buttons_delete)
@@ -16486,6 +16622,13 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/llm/refresh_models", handle_llm_refresh_models)
     app.router.add_get("/api/rail/events", handle_rail_events)
     app.router.add_get("/api/settings", handle_settings_get)
+    app.router.add_get("/api/core-skills/status", handle_core_skills_status)
+    app.router.add_post("/api/okstratr/host-notify", handle_okstratr_host_notify)
+    app.router.add_get("/api/okstratr/harness", handle_okstratr_harness_get)
+    app.router.add_post("/api/okstratr/harness/enable", handle_okstratr_harness_enable)
+    app.router.add_post("/api/okstratr/harness/disable", handle_okstratr_harness_disable)
+    app.router.add_post("/api/okstratr/harness/set", handle_okstratr_harness_set)
+    app.router.add_post("/api/okstratr/harness/reload", handle_okstratr_harness_reload)
     app.router.add_get("/api/curator-profile", handle_curator_profile_get)
     app.router.add_post("/api/curator-profile", handle_curator_profile_post)
     app.router.add_post("/api/curator-profile/draft", handle_curator_profile_draft)
@@ -16564,6 +16707,9 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/tabs/vault-doc", handle_tab_vault_doc_add)
     app.router.add_post("/api/tabs/vault-doc/remove", handle_tab_vault_doc_remove)
     app.router.add_get("/ws", handle_ws)
+    # Phase 4a: same-origin reverse proxy for CE (:8766) and okstratr
+    # (:8767). Must register BEFORE the SPA catch-all.
+    embed_proxy.register_routes(app)
     # Catch-all LAST: serves the built SPA + PWA assets (manifest, icons)
     # for any non-API GET. aiohttp matches in registration order, so the
     # specific /api and /ws routes above always take precedence.
@@ -16597,6 +16743,54 @@ def build_app(workspace: Path) -> web.Application:
                 log.info("curiosity-engine skill: %s", msg.split("\n", 1)[0])
         _app["_ce_skill_task"] = asyncio.create_task(_go())
     app.on_startup.append(_ensure_ce_skill)
+
+    async def _start_core_skill_supervisors(_app: web.Application) -> None:
+        # C1: always auto-start CE + okstratr with the shell (Ben lock).
+        # Proxied embeds only choose which UI panels load /embed/* — supervisors
+        # still bring skills up. Never block bind — background tasks only.
+        _app["_broadcast_fn"] = _broadcast
+
+        async def _go_ce() -> None:
+            ws = Path(_app["workspace"])
+            out = await asyncio.to_thread(ce_viewer_supervisor.start, ws)
+            if out.get("ok"):
+                log.info("CE viewer supervisor initial start: %s", out)
+            else:
+                log.warning(
+                    "CE viewer supervisor initial start failed: %s",
+                    out.get("error"),
+                )
+            await ce_viewer_supervisor.run_supervisor(_app)
+
+        async def _go_oks() -> None:
+            ws = Path(_app["workspace"])
+            out = await asyncio.to_thread(okstratr_supervisor.start, ws)
+            if out.get("ok"):
+                log.info("okstratr supervisor initial start: %s", out)
+            else:
+                log.warning(
+                    "okstratr supervisor initial start failed: %s",
+                    out.get("error"),
+                )
+            await okstratr_supervisor.run_supervisor(_app)
+
+        async def _stop(_a: web.Application) -> None:
+            for key in ("_ce_viewer_supervisor_task", "_okstratr_supervisor_task"):
+                t = _a.get(key)
+                if t:
+                    t.cancel()
+                    try:
+                        await t
+                    except (asyncio.CancelledError, Exception):
+                        pass
+            # Leave skill processes up across daemon restarts (supervisors
+            # re-attach via health check). Matches prior CE-when-proxied-on.
+
+        _app["_ce_viewer_supervisor_task"] = asyncio.create_task(_go_ce())
+        _app["_okstratr_supervisor_task"] = asyncio.create_task(_go_oks())
+        _app.on_cleanup.append(_stop)
+
+    app.on_startup.append(_start_core_skill_supervisors)
 
     # The launch workspace is set directly (no _activate), so relocate
     # its rail-history DB to match the current setting on startup too.
@@ -16882,6 +17076,50 @@ def build_app(workspace: Path) -> web.Application:
 
     app.on_startup.append(_start_watch)
     app.on_cleanup.append(_stop_watch)
+
+    # CE pack-run drain: poll ``.workbench/pack-runs/`` so proxied CE
+    # filebrowser queues actually seat a Switchbay rail LLM (CE only
+    # writes status=queued JSON). Also exposed as POST /api/packs/drain.
+    async def _start_pack_drain(_app: web.Application) -> None:
+        _app["pack_run_inflight"] = set()
+        _app["pack_run_drain_task"] = asyncio.create_task(
+            pack_run_drain.pack_run_drain_loop(_app),
+        )
+
+    async def _stop_pack_drain(_app: web.Application) -> None:
+        t = _app.get("pack_run_drain_task")
+        if t:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    app.on_startup.append(_start_pack_drain)
+    app.on_cleanup.append(_stop_pack_drain)
+
+
+    # CE ingest-run drain: poll ``.workbench/ingest-runs/`` so proxied CE
+    # drop-ingest queues actually run local_ingest (or rail when metadata
+    # opts in). Also exposed as POST /api/ingest/drain.
+    async def _start_ingest_drain(_app: web.Application) -> None:
+        _app["ingest_run_inflight"] = set()
+        _app["ingest_run_drain_task"] = asyncio.create_task(
+            ingest_run_drain.ingest_run_drain_loop(_app),
+        )
+
+    async def _stop_ingest_drain(_app: web.Application) -> None:
+        t = _app.get("ingest_run_drain_task")
+        if t:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+    app.on_startup.append(_start_ingest_drain)
+    app.on_cleanup.append(_stop_ingest_drain)
+
 
     # Event-loop watchdog. A daemon thread watches a heartbeat that an
     # asyncio task bumps every 250ms; if the loop blocks past 1s the
