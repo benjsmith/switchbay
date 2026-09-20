@@ -2,11 +2,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { TabSpec, Workspaces } from "../ws";
 import type { GraphData } from "../widgets/graph/types";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
-import type { RailEntry } from "../rail/Rail";
 import type { ActiveRun } from "../center/activeRun";
 import GraphTab from "../widgets/graph/GraphTab";
 import ZenSurfaceHost, { type ZenArtifact } from "./ZenSurfaceHost";
 import ZenChatBox from "./ZenChatBox";
+import Rail, { type RailEntry } from "../rail/Rail";
 import ThemeToggle from "../layout/ThemeToggle";
 import ModeToggle from "../layout/ModeToggle";
 import PasteboardButton from "../layout/PasteboardButton";
@@ -66,6 +66,9 @@ type Props = {
   onLoadOlder: () => void;
   onOpenSettings: () => void;
   onOpenHelp: () => void;
+  onReset: () => void;
+  otherPerms?: Extract<RailEntry, { source: "permission" }>[];
+  pinnedAction?: { text: string; label: string; command: string } | null;
 };
 
 export default function ZenShell({
@@ -75,6 +78,7 @@ export default function ZenShell({
   onSwitchThread, onNewThread, termWs, activeRunIds, activeRuns,
   hasMoreHistory, loadingOlder, onLoadOlder,
   onOpenSettings, onOpenHelp,
+  onReset, otherPerms, pinnedAction,
 }: Props) {
   // ── Divider ────────────────────────────────────────────────────
   const [split, setSplit] = useState(readSplit);
@@ -134,6 +138,27 @@ export default function ZenShell({
     const prev = prevSurfaceRef.current;
     setSurface(prev && prev !== "chat" ? prev : "browser");
   }, [setSurface]);
+
+  const dockedRail = (
+    <Rail
+      entries={entries}
+      onSubmit={onSubmit}
+      onReset={onReset}
+      onLoadOlder={onLoadOlder}
+      hasMoreHistory={hasMoreHistory}
+      loadingOlder={loadingOlder}
+      pinnedAction={pinnedAction ?? null}
+      otherPerms={otherPerms}
+      activeRunIds={activeRunIds}
+      focusedThread={focusedThread}
+      focusedThreadKind={focusedThreadKind}
+      onSwitchThread={onSwitchThread}
+      onNewThread={onNewThread}
+      termWs={termWs}
+      embedded
+      onFloat={floatChat}
+    />
+  );
 
   const chatBox = (
     <ZenChatBox
@@ -214,7 +239,7 @@ export default function ZenShell({
               : null
           }
           onReturnPty={() => setPtyPromoted(false)}
-          chatSurface={chatDocked ? chatBox : null}
+          chatSurface={chatDocked ? dockedRail : null}
         />
       </div>
 

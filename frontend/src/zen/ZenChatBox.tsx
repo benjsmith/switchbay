@@ -14,6 +14,7 @@ import VoiceButton from "../rail/VoiceButton";
 import ReasoningPicker from "../rail/ReasoningPicker";
 import { useOrchestrationControl } from "../rail/OrchestrationSlider";
 import { useComposerDraft } from "../lib/composerDraft";
+import WebPolicyToggle from "../widgets/WebPolicyToggle";
 
 // One persisted, drag-resizable height for BOTH the chat and the pty
 // view — so the box no longer jumps between a content-sized chat and a
@@ -293,7 +294,7 @@ export default function ZenChatBox({
   useEffect(() => {
     fetch("/api/verbs")
       .then((r) => r.json())
-      .then((b: { verbs: VerbInfo[] }) => setVerbs(b.verbs))
+      .then((b: { verbs: VerbInfo[] }) => setVerbs(Array.isArray(b.verbs) ? b.verbs : []))
       .catch(() => setVerbs([]));
   }, [focusedThread]);
 
@@ -654,6 +655,7 @@ export default function ZenChatBox({
             </div>
             <div className="sy-zen-composer-meta">
               {orch.node}
+              <WebPolicyToggle compact />
               <div className="sy-zen-composer-end">
                 <ReasoningPicker />
                 <VoiceButton

@@ -290,6 +290,29 @@ def load(*, force: bool = False) -> dict[str, Any]:
         raw = src.get("updates")
         if isinstance(raw, dict):
             updates.update(raw)
+    comms: dict[str, Any] = {}
+    for src in (baked_data, overlay):
+        raw = src.get("comms")
+        if isinstance(raw, dict):
+            comms.update(raw)
+    orchestration_admin: dict[str, Any] = {}
+    for src in (baked_data, overlay):
+        raw = src.get("orchestration")
+        if isinstance(raw, dict):
+            orchestration_admin.update(raw)
+    baked_orch = baked_data.get("orchestration") if isinstance(baked_data.get("orchestration"), dict) else {}
+    overlay_orch = overlay.get("orchestration") if isinstance(overlay.get("orchestration"), dict) else {}
+    baked_cap = _positive_int_cap(baked_orch.get("max_live_workers"))
+    overlay_cap = _positive_int_cap(overlay_orch.get("max_live_workers"))
+    if baked_cap is not None and overlay_cap is not None:
+        # Overlay may only tighten (lower) a baked ceiling.
+        orchestration_admin["max_live_workers"] = min(baked_cap, overlay_cap)
+    elif baked_cap is not None:
+        orchestration_admin["max_live_workers"] = baked_cap
+    elif overlay_cap is not None:
+        orchestration_admin["max_live_workers"] = overlay_cap
+    else:
+        orchestration_admin.pop("max_live_workers", None)
 
     resolved = {
         "profile": profile,
@@ -303,6 +326,8 @@ def load(*, force: bool = False) -> dict[str, Any]:
         "skills": skills,
         "paths": paths,
         "updates": updates,
+        "comms": comms,
+        "orchestration": orchestration_admin,
         "allow_profile_override": allow_override,
         "tighten": tighten,
     }
@@ -453,6 +478,39 @@ def update_repo() -> str:
     if raw.count("/") == 1 and ".." not in raw and " " not in raw:
         return raw
     return DEFAULT_UPDATE_REPO
+
+
+def _positive_int_cap(raw: Any) -> int | None:
+    """Valid positive live-seat cap, or None if unset/malformed.
+
+    Rejects bools (a subclass of int) and non-integral numbers so
+    ``True`` / ``4.9`` never become 1 / 4. Decimal digit strings such
+    as ``"5"`` are accepted. Zero and negatives are not caps.
+    """
+    if raw is None or isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw if raw > 0 else None
+    if isinstance(raw, str):
+        s = raw.strip()
+        if s.startswith("+"):
+            s = s[1:]
+        if s.isdigit():
+            try:
+                n = int(s, 10)
+            except ValueError:
+                # isdigit also accepts characters int cannot parse; very
+                # long digit strings can exceed Python's conversion limit.
+                return None
+            return n if n > 0 else None
+        return None
+    return None
+
+
+def max_live_workers_ceiling() -> int | None:
+    """Admin live-seat ceiling, or None if unset. May only tighten."""
+    raw = (load().get("orchestration") or {}).get("max_live_workers")
+    return _positive_int_cap(raw)
 
 
 def update_include_skills() -> bool:

@@ -194,14 +194,22 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "Outlook / Teams (M365, OAuth)",
         "auth": "oauth",
         "needs_secret": False,
-        "scopes": "offline_access User.Read Mail.Read Chat.Read",
+        "scopes": (
+            "offline_access User.Read Mail.Read Chat.Read "
+            "Team.ReadBasic.All Channel.ReadBasic.All"
+        ),
         "setup_help": (
             "Entra admin center → App registrations → New registration "
             "(public client; redirect URI type 'Mobile and desktop "
             "applications' with the loopback URI shown after you add "
             "the account). Delegated permissions: User.Read, Mail.Read, "
-            "Chat.Read. Paste the Application (client) ID; set tenant "
-            "to your tenant ID (or 'common'). "
+            "Chat.Read, Team.ReadBasic.All, Channel.ReadBasic.All. "
+            "Paste the Application (client) ID; set tenant to your "
+            "tenant ID (or 'common'). Teams discovery uses GET "
+            "/me/joinedTeams (no OData query options) and GET "
+            "/teams/{id}/channels ($select/$filter only — never $top). "
+            "https://learn.microsoft.com/en-us/graph/api/user-list-joinedteams?view=graph-rest-1.0 "
+            "https://learn.microsoft.com/en-us/graph/api/channel-list?view=graph-rest-1.0 "
             "https://entra.microsoft.com"
         ),
     },
@@ -227,6 +235,29 @@ PROVIDERS: dict[str, dict[str, Any]] = {
 _TRANSIT_CAP = 2000          # events kept per account before oldest drop
 _POLL_CHANNEL_CAP = 25       # slack channels / teams chats per cycle
 _POLL_PAGE = 50
+
+# Official Gmail partial-response projection. format=metadata still
+# returns `snippet` unless `fields` excludes it.
+_GMAIL_METADATA_FIELDS = "id,threadId,labelIds,internalDate,payload/headers"
+_GMAIL_METADATA_HEADERS = [
+    "From", "Subject", "Date", "Message-ID", "References", "In-Reply-To",
+    "Sensitivity", "Classification",
+    "X-MS-Exchange-Organization-Classification", "MSIP_Labels",
+    "X-Microsoft-Classification", "X-Sensitivity",
+]
+_IMAP_HEADER_SPEC = (
+    "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID REFERENCES "
+    "IN-REPLY-TO SENSITIVITY CLASSIFICATION "
+    "X-MS-EXCHANGE-ORGANIZATION-CLASSIFICATION MSIP_LABELS "
+    "X-MICROSOFT-CLASSIFICATION X-SENSITIVITY)])"
+)
+# Graph mail $select — internetMessageHeaders is documented selectable.
+# Do not include body, bodyPreview, uniqueBody.
+_GRAPH_MAIL_SELECT = (
+    "id,subject,from,webLink,receivedDateTime,conversationId,"
+    "internetMessageId,internetMessageHeaders,inferenceClassification,"
+    "importance,isDraft,parentFolderId,hasAttachments"
+)
 
 
 # ── account config ──────────────────────────────────────────────────
@@ -481,6 +512,22 @@ def remove_account(account_id: str) -> bool:
     return True
 
 
+def live_account(acct: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Prefer the stored account so allowlist/revocation races are visible."""
+    if not isinstance(acct, dict):
+        return acct
+    aid = str(acct.get("id") or "")
+    if not aid:
+        return acct
+    live = get_account(aid)
+    return live if isinstance(live, dict) else acct
+
+
+def live_allowed_workspaces(acct: dict[str, Any] | None) -> list[str]:
+    live = live_account(acct)
+    return allowed_workspaces(live) if isinstance(live, dict) else []
+
+
 def allowed_workspaces(acct: dict[str, Any]) -> list[str]:
     """The stream's target-workspace ALLOWLIST — the only routing
     authority (no privileged/default workspace). Migrates legacy
@@ -560,6 +607,37 @@ def pending_events(account_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def quarantine_legacy_transit(account_id: str) -> int:
+    """Move pre-review body transit aside without parsing or classifying it."""
+    p = _state_dir(account_id) / "transit.jsonl"
+    if not p.is_file():
+        return 0
+    dest = _state_dir(account_id) / "transit.quarantine.jsonl"
+    try:
+        raw = p.read_bytes()
+    except OSError:
+        return 0
+    if not raw.strip():
+        try:
+            p.unlink()
+        except OSError:
+            pass
+        return 0
+    try:
+        with dest.open("ab") as fh:
+            fh.write(raw)
+            if not raw.endswith(b"\n"):
+                fh.write(b"\n")
+        dest.chmod(0o600)
+    except OSError:
+        log.exception("comms transit quarantine write failed")
+    try:
+        p.unlink()
+    except OSError:
+        pass
+    return raw.count(b"\n") or 1
+
+
 def consume_transit(account_id: str, ids: list[str]) -> int:
     """Remove exactly the given events from transit (post-curation).
     Anything not consumed — a tail beyond the batch cap, or messages
@@ -609,6 +687,55 @@ def _append_transit(account_id: str, events: list[dict[str, Any]]) -> None:
         p.chmod(0o600)
     except OSError:
         pass
+
+
+def _receipts_path(account_id: str) -> Path:
+    return _state_dir(account_id) / "receipts.json"
+
+
+def _load_receipts(account_id: str) -> dict[str, float]:
+    try:
+        raw = json.loads(_receipts_path(account_id).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, float] = {}
+    for k, v in raw.items():
+        try:
+            out[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _save_receipts(account_id: str, data: dict[str, float]) -> None:
+    p = _receipts_path(account_id)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    atomicio.write_json_atomic(p, data)
+    try:
+        p.chmod(0o600)
+    except OSError:
+        pass
+
+
+def receipt_key(source_event_id: str, workspace: str) -> str:
+    return f"{source_event_id}::{workspace}"
+
+
+def has_receipt(account_id: str, source_event_id: str, workspace: str) -> bool:
+    return receipt_key(source_event_id, workspace) in _load_receipts(account_id)
+
+
+def record_receipts(account_id: str, pairs: list[tuple[str, str]]) -> None:
+    if not pairs:
+        return
+    data = _load_receipts(account_id)
+    now = time.time()
+    for source_event_id, workspace in pairs:
+        if source_event_id and workspace:
+            data[receipt_key(source_event_id, workspace)] = now
+    _save_receipts(account_id, data)
 
 
 # ── OAuth: loopback + PKCE ──────────────────────────────────────────
@@ -851,12 +978,70 @@ def _decode_header(raw: str) -> str:
         return raw
 
 
+def _headers_from_list(raw: Any) -> dict[str, str]:
+    """Gmail/Graph header arrays — keep duplicate names (any Secret wins)."""
+    from . import comms_review
+    pairs: list[dict[str, str]] = []
+    if not isinstance(raw, list):
+        return {}
+    for h in raw:
+        if isinstance(h, dict) and h.get("name"):
+            pairs.append({str(h["name"]): str(h.get("value") or "")})
+    merged: dict[str, str] = {}
+    for p in pairs:
+        merged = comms_review.merge_header_maps(merged, p)
+    return merged
+
+
+def _header_map(msg: email.message.Message) -> dict[str, str]:
+    """Preserve duplicate classification headers (any Secret wins)."""
+    from . import comms_review
+    out: dict[str, str] = {}
+    names: list[str] = []
+    seen: set[str] = set()
+    for k, _v in msg.items():
+        if not k:
+            continue
+        lk = str(k)
+        if lk.lower() in seen:
+            continue
+        seen.add(lk.lower())
+        names.append(lk)
+    for name in names:
+        vals = msg.get_all(name) or [msg.get(name)]
+        decoded = [_decode_header(str(v or "")) for v in vals if v is not None]
+        out[name] = "\n".join(decoded)
+    return comms_review.merge_header_maps(out)
+
+
+def _gmail_metadata_headers() -> list[str]:
+    from . import comms_review
+    base = list(_GMAIL_METADATA_HEADERS)
+    seen = {h.lower() for h in base}
+    for h in comms_review.classification_policy()["headers"]:
+        if h.lower() not in seen:
+            base.append(h)
+            seen.add(h.lower())
+    return base
+
+
+def _imap_header_spec() -> str:
+    from . import comms_review
+    fields = [
+        "FROM", "SUBJECT", "DATE", "MESSAGE-ID", "REFERENCES", "IN-REPLY-TO",
+    ]
+    seen = {f.lower() for f in fields}
+    for h in comms_review.classification_policy()["headers"]:
+        token = h.upper().replace("_", "-") if "_" in h and " " not in h else h.upper()
+        if token.lower() not in seen:
+            fields.append(token)
+            seen.add(token.lower())
+    return "(BODY.PEEK[HEADER.FIELDS (" + " ".join(fields) + ")])"
+
+
 def _poll_imap(acct: dict[str, Any], cur: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    """Blocking IMAP fetch (call via to_thread). Cursor = last seen
-    UID per folder (INBOX only in v1); first run backfills one day by
-    date. Fetches headers + a short text preview; deep link is the
-    Gmail search URL on Gmail hosts, the message: URL scheme (opens
-    Apple Mail / compatible clients) elsewhere."""
+    """Blocking IMAP discovery (call via to_thread). Headers only — never TEXT/RFC822."""
+    from . import comms_review
     pw = secretstore.get(f"stream-secret:{acct['id']}") or ""
     if not pw:
         raise ValueError("not connected — re-add the account")
@@ -865,6 +1050,14 @@ def _poll_imap(acct: dict[str, Any], cur: dict[str, Any]) -> tuple[list[dict[str
     try:
         conn.login(acct["username"], pw)
         conn.select("INBOX", readonly=True)
+        uidvalidity = "0"
+        try:
+            _typ, dat = conn.response("UIDVALIDITY")
+            if dat and dat[0]:
+                uidvalidity = str(dat[0].decode() if isinstance(dat[0], bytes) else dat[0])
+        except Exception:  # noqa: BLE001
+            uidvalidity = str(cur.get("uidvalidity") or "0")
+        cur["uidvalidity"] = uidvalidity
         last_uid = int(cur.get("imap_uid") or 0)
         if last_uid:
             typ, data = conn.uid("SEARCH", None, f"UID {last_uid + 1}:*")
@@ -875,44 +1068,57 @@ def _poll_imap(acct: dict[str, Any], cur: dict[str, Any]) -> tuple[list[dict[str
             raise ValueError(f"IMAP search failed: {typ}")
         uids = [int(u) for u in (data[0] or b"").split() if int(u) > last_uid]
         for uid in uids[-_POLL_PAGE:]:
-            typ, msg_data = conn.uid(
-                "FETCH", str(uid),
-                "(BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE MESSAGE-ID)] "
-                "BODY.PEEK[TEXT]<0.2048>)",
-            )
+            typ, msg_data = conn.uid("FETCH", str(uid), _imap_header_spec())
             if typ != "OK" or not msg_data:
                 continue
             header_bytes = b""
-            body_bytes = b""
             for part in msg_data:
                 if isinstance(part, tuple) and len(part) == 2:
-                    if b"HEADER" in part[0]:
-                        header_bytes = part[1]
-                    elif b"TEXT" in part[0]:
-                        body_bytes = part[1]
-            msg = email.message_from_bytes(header_bytes)
+                    header_bytes = part[1] or header_bytes
+            msg = email.message_from_bytes(header_bytes or b"")
             ts = time.time()
             try:
                 from email.utils import parsedate_to_datetime
                 ts = parsedate_to_datetime(msg.get("Date", "")).timestamp()
             except Exception:  # noqa: BLE001
                 pass
-            preview = body_bytes.decode("utf-8", errors="replace")
-            preview = _strip_html(preview) if "<" in preview else re.sub(r"\s+", " ", preview)
+            headers = _header_map(msg)
             mid = (msg.get("Message-ID") or "").strip().strip("<>")
-            if mid and "gmail" in acct["host"]:
+            stable = comms_review.imap_thread_stable_id(
+                message_id=msg.get("Message-ID") or "",
+                references=msg.get("References") or "",
+                in_reply_to=msg.get("In-Reply-To") or "",
+                uidvalidity=uidvalidity,
+                fallback_uid=str(uid),
+            )
+            if mid and "gmail" in str(acct.get("host") or ""):
                 link = f"https://mail.google.com/mail/u/0/#search/rfc822msgid:{mid}"
             elif mid:
                 link = f"message://%3C{mid}%3E"
             else:
                 link = ""
-            events.append(_ev(
-                acct, eid=f"{acct['host']}:{uid}", stream="inbox", ts=ts,
-                sender=_decode_header(msg.get("From", "")),
-                subject=_decode_header(msg.get("Subject", "")),
-                text=preview[:1500],
-                deep_link=link,
-            ))
+            events.append({
+                "provider": "imap",
+                "account_id": acct["id"],
+                "stable_id": stable,
+                "kind": comms_review.KIND_EMAIL,
+                "sender": _decode_header(msg.get("From", "")),
+                "subject": _decode_header(msg.get("Subject", "")),
+                "deep_link": link,
+                "ts": ts,
+                "headers": headers,
+                "labels": [],
+                "text": "",
+                "uid": uid,
+                "uidvalidity": uidvalidity,
+                "imap_uid": uid,
+                "fetch_ref": {
+                    "id": str(uid),
+                    "uid": str(uid),
+                    "uidvalidity": uidvalidity,
+                    "message_id": msg.get("Message-ID") or "",
+                },
+            })
             last_uid = max(last_uid, uid)
         cur["imap_uid"] = last_uid
     finally:
@@ -1045,22 +1251,123 @@ def _parse_feed(acct: dict[str, Any], raw: str, cur: dict[str, Any]) -> list[dic
     return out
 
 
+def _record_discovery(records: list[dict[str, Any]]) -> int:
+    """Safe metadata → Comms review. Never writes body transit. Suggests only."""
+    from . import comms_review
+    n = 0
+    allow: list[str] = []
+    acct_id = ""
+    for rec in records:
+        rec = dict(rec)
+        rec.pop("text", None)
+        rec.pop("snippet", None)
+        rec.pop("body", None)
+        pub = comms_review.upsert_discovery(rec)
+        n += 1
+        acct_id = str(rec.get("account_id") or acct_id)
+        if not allow and acct_id:
+            acct = get_account(acct_id)
+            allow = allowed_workspaces(acct) if acct else []
+        key = str(pub.get("key") or "")
+        if not key or comms_review.is_revoked(key):
+            continue
+        if pub.get("status") == comms_review.STATUS_BLOCKED:
+            continue
+        sugg = comms_review.suggest_relevance(rec, allow)
+        if sugg:
+            comms_review.set_suggestions(key, workspaces=sugg)
+    return n
+
+
+def _graph_headers(raw: Any) -> dict[str, str]:
+    return _headers_from_list(raw)
+
+
+def _graph_raise_if_error(data: Any, url: str) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        raise ValueError(f"graph {url}: unexpected payload")
+    err = data.get("error")
+    if err:
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise ValueError(f"graph {url}: {msg}")
+    return data
+
+
+async def _graph_collect(
+    sess: aiohttp.ClientSession,
+    acct: dict[str, Any],
+    url: str,
+    *,
+    params: dict[str, str] | None = None,
+    cap: int,
+) -> tuple[list[dict[str, Any]], str]:
+    """Page Graph lists. Pass OData only on the first URL, never on nextLink.
+
+    ``joinedTeams`` must be called with no query parameters.
+    ``/channels`` may use ``$select`` / ``$filter`` only — never ``$top``.
+    """
+    items: list[dict[str, Any]] = []
+    next_url: str | None = url
+    send_params = dict(params) if params else None
+    while next_url and len(items) < cap:
+        if send_params:
+            data = await _api_get(sess, acct, next_url, **send_params)
+            send_params = None
+        else:
+            data = await _api_get(sess, acct, next_url)
+        data = _graph_raise_if_error(data, next_url)
+        items.extend(data.get("value") or [])
+        next_url = str(data.get("@odata.nextLink") or "") or None
+    return items[:cap], next_url or ""
+
+
 async def poll_account(acct: dict[str, Any]) -> int:
-    """One poll cycle: fetch messages newer than the cursor, normalise
-    into transit, advance the cursor. Returns the number of NEW events.
-    Raises ValueError with a human message on auth/config problems."""
+    """Discovery poll: headers/container metadata only. Never auto-approves.
+
+    Unapproved sources do not enter body transit. Legacy body transit is
+    quarantined without parsing.
+    """
+    from . import admin_policy, comms_review
+    if not admin_policy.feature_enabled("comms_streams"):
+        raise ValueError(admin_policy.feature_error("comms_streams"))
+    quarantine_legacy_transit(acct["id"])
     cur = _cursor(acct["id"])
     since = float(cur.get("since") or (time.time() - 86400))  # first run: 1 day
-    if acct["provider"] in ("imap", "imessage"):
-        sync_poll = _poll_imap if acct["provider"] == "imap" else _poll_imessage
-        events, cur = await asyncio.to_thread(sync_poll, acct, cur)
-        before = len(pending_events(acct["id"]))
-        _append_transit(acct["id"], events)
-        new = len(pending_events(acct["id"])) - before
+    discovered: list[dict[str, Any]] = []
+    if acct["provider"] == "imap":
+        events, cur = await asyncio.to_thread(_poll_imap, acct, cur)
+        n = _record_discovery(events)
+        if events:
+            cur["since"] = max([float(e.get("ts") or 0) for e in events] + [since])
         _save_cursor(acct["id"], cur)
         update_account(acct["id"], last_poll=time.time())
-        return max(0, new)
+        n += await ingest_approved_updates(acct)
+        return n
+    if acct["provider"] == "imessage":
+        # Local DB can yield bodies; refuse content, keep chat containers.
+        discovered.append({
+            "provider": "imessage",
+            "account_id": acct["id"],
+            "stable_id": "this-mac",
+            "kind": comms_review.KIND_CHAT,
+            "sender": "",
+            "subject": "iMessage (this Mac)",
+            "deep_link": "",
+            "ts": time.time(),
+            "headers": {},
+            "labels": [],
+            "content_capability": "fail_closed",
+            "content_capability_reason": (
+                "iMessage has no classification labels before body read"
+            ),
+        })
+        n = _record_discovery(discovered)
+        _save_cursor(acct["id"], cur)
+        update_account(acct["id"], last_poll=time.time())
+        n += await ingest_approved_updates(acct)
+        return n
     events: list[dict[str, Any]] = []
+    pre_recorded = 0
     async with aiohttp.ClientSession(
         timeout=aiohttp.ClientTimeout(total=60),
     ) as sess:
@@ -1075,65 +1382,160 @@ async def poll_account(acct: dict[str, Any]) -> int:
                     sess, acct,
                     f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{m['id']}",
                     format="metadata",
-                    metadataHeaders=["From", "Subject"],
+                    metadataHeaders=_gmail_metadata_headers(),
+                    fields=_GMAIL_METADATA_FIELDS,
                 )
-                headers = {
-                    h["name"].lower(): h["value"]
-                    for h in (msg.get("payload") or {}).get("headers") or []
-                }
+                hdrs = _headers_from_list((msg.get("payload") or {}).get("headers"))
                 ts = float(msg.get("internalDate") or 0) / 1000
-                events.append(_ev(
-                    acct, eid=m["id"], stream="inbox", ts=ts,
-                    sender=headers.get("from", ""),
-                    subject=headers.get("subject", ""),
-                    text=msg.get("snippet", ""),
-                    deep_link=f"https://mail.google.com/mail/u/0/#all/{m['id']}",
-                ))
+                thread_id = str(msg.get("threadId") or m.get("threadId") or m["id"])
+                events.append({
+                    "provider": "gmail",
+                    "account_id": acct["id"],
+                    "stable_id": thread_id,
+                    "kind": "email_thread",
+                    "sender": hdrs.get("From") or hdrs.get("from") or "",
+                    "subject": hdrs.get("Subject") or hdrs.get("subject") or "",
+                    "deep_link": f"https://mail.google.com/mail/u/0/#all/{thread_id}",
+                    "ts": ts,
+                    "headers": hdrs,
+                    "labels": list(msg.get("labelIds") or []),
+                    "text": "",
+                    "thread_id": thread_id,
+                    "fetch_ref": {
+                        "id": str(msg.get("id") or m["id"]),
+                        "thread_id": thread_id,
+                    },
+                })
         elif acct["provider"] == "msgraph":
             iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(since))
-            mail = await _api_get(
+            mail = _graph_raise_if_error(await _api_get(
                 sess, acct,
                 "https://graph.microsoft.com/v1.0/me/messages",
                 **{
                     "$filter": f"receivedDateTime gt {iso}",
                     "$orderby": "receivedDateTime desc",
                     "$top": str(_POLL_PAGE),
-                    "$select": "id,subject,from,bodyPreview,webLink,receivedDateTime",
+                    "$select": _GRAPH_MAIL_SELECT,
                 },
-            )
+            ), "https://graph.microsoft.com/v1.0/me/messages")
             for m in mail.get("value") or []:
                 ts = _parse_iso(m.get("receivedDateTime"))
                 sender = ((m.get("from") or {}).get("emailAddress") or {})
-                events.append(_ev(
-                    acct, eid=m["id"], stream="mail", ts=ts,
-                    sender=sender.get("address") or sender.get("name") or "",
-                    subject=m.get("subject") or "",
-                    text=m.get("bodyPreview") or "",
-                    deep_link=m.get("webLink") or "",
-                ))
-            chats = await _api_get(
-                sess, acct, "https://graph.microsoft.com/v1.0/me/chats",
-                **{"$top": str(_POLL_CHANNEL_CAP)},
-            )
-            for chat in chats.get("value") or []:
-                msgs = await _api_get(
-                    sess, acct,
-                    f"https://graph.microsoft.com/v1.0/me/chats/{chat['id']}/messages",
-                    **{"$top": "20"},
+                conv = str(m.get("conversationId") or m.get("id") or "")
+                events.append({
+                    "provider": "msgraph",
+                    "account_id": acct["id"],
+                    "stable_id": conv,
+                    "kind": "email_thread",
+                    "sender": sender.get("address") or sender.get("name") or "",
+                    "subject": m.get("subject") or "",
+                    "deep_link": m.get("webLink") or "",
+                    "ts": ts,
+                    "headers": _graph_headers(m.get("internetMessageHeaders")),
+                    "labels": [],
+                    "text": "",
+                    "conversation_id": conv,
+                    "fetch_ref": {
+                        "id": str(m.get("id") or ""),
+                        "conversation_id": conv,
+                    },
+                })
+            # Team channels (container metadata). Chat.Read lists chats
+            # without messages. Do NOT call /messages (no metadata-only
+            # $select on chat-list-messages).
+            # joinedTeams supports NO OData query parameters; channels
+            # support $filter/$select only — never $top. Page via
+            # @odata.nextLink and cap locally so later channels are
+            # not permanently hidden.
+            n_mail = _record_discovery(events)
+            events = []
+            try:
+                resume = str(cur.get("joined_teams_resume") or "")
+                teams_url = resume or "https://graph.microsoft.com/v1.0/me/joinedTeams"
+                teams, nxt = await _graph_collect(
+                    sess, acct, teams_url, params=None, cap=_POLL_CHANNEL_CAP,
                 )
-                topic = chat.get("topic") or "chat"
-                for m in msgs.get("value") or []:
-                    ts = _parse_iso(m.get("createdDateTime"))
-                    if ts <= since or m.get("messageType") != "message":
+                cur["joined_teams_resume"] = nxt
+                channel_resume = cur.get("channel_resume") if isinstance(cur.get("channel_resume"), dict) else {}
+                new_resume: dict[str, str] = dict(channel_resume)
+                for team in teams:
+                    tid = str(team.get("id") or "")
+                    if not tid:
                         continue
-                    frm = ((m.get("from") or {}).get("user") or {})
-                    events.append(_ev(
-                        acct, eid=m["id"], stream=f"teams:{topic}", ts=ts,
-                        sender=frm.get("displayName") or "",
-                        subject=topic,
-                        text=_strip_html((m.get("body") or {}).get("content") or ""),
-                        deep_link="",  # Graph exposes no webUrl for 1:1/group chats
-                    ))
+                    ch_resume = str(channel_resume.get(tid) or "")
+                    ch_url = ch_resume or (
+                        f"https://graph.microsoft.com/v1.0/teams/{tid}/channels"
+                    )
+                    ch_params = None if ch_resume else {
+                        "$select": "id,displayName,webUrl,membershipType",
+                    }
+                    chans, ch_nxt = await _graph_collect(
+                        sess, acct, ch_url, params=ch_params, cap=_POLL_CHANNEL_CAP,
+                    )
+                    if ch_nxt:
+                        new_resume[tid] = ch_nxt
+                    else:
+                        new_resume.pop(tid, None)
+                    for ch in chans:
+                        cid = str(ch.get("id") or "")
+                        if not cid:
+                            continue
+                        events.append({
+                            "provider": "msgraph",
+                            "account_id": acct["id"],
+                            "stable_id": f"team/{tid}/channel/{cid}",
+                            "kind": "channel",
+                            "sender": "",
+                            "subject": ch.get("displayName") or team.get("displayName") or "",
+                            "deep_link": ch.get("webUrl") or "",
+                            "ts": time.time(),
+                            "headers": {},
+                            "labels": [],
+                            "content_capability": "fail_closed",
+                            "content_capability_reason": (
+                                "Teams channel messages have no documented "
+                                "metadata-only projection; listing is supported, "
+                                "content fetch is refuse-closed. Approval does "
+                                "not retrieve Teams message bodies."
+                            ),
+                        })
+                cur["channel_resume"] = new_resume
+                if acct.get("id"):
+                    update_account(acct["id"], last_error=None)
+            except Exception as e:  # noqa: BLE001
+                log.exception("Teams metadata discovery failed")
+                if acct.get("id"):
+                    update_account(acct["id"], last_error=f"Teams metadata: {e}")
+            n_mail += _record_discovery(events)
+            pre_recorded = n_mail
+            events = []
+            try:
+                chats = await _api_get(
+                    sess, acct, "https://graph.microsoft.com/v1.0/me/chats",
+                    **{"$select": "id,topic,chatType,webUrl,createdDateTime",
+                       "$top": str(_POLL_CHANNEL_CAP)},
+                )
+            except Exception:  # noqa: BLE001
+                chats = {"value": []}
+            for chat in chats.get("value") or []:
+                events.append({
+                    "provider": "msgraph",
+                    "account_id": acct["id"],
+                    "stable_id": f"chat/{chat.get('id')}",
+                    "kind": "chat",
+                    "sender": "",
+                    "subject": chat.get("topic") or "chat",
+                    "deep_link": chat.get("webUrl") or "",
+                    "ts": _parse_iso(chat.get("createdDateTime")) or time.time(),
+                    "headers": {},
+                    "labels": [],
+                    "content_capability": "fail_closed",
+                    "content_capability_reason": (
+                        "Teams chat messages cannot be listed without body; "
+                        "listing is supported, content fetch is refuse-closed. "
+                        "Approval does not retrieve Teams message bodies."
+                    ),
+                })
         elif acct["provider"] == "slack":
             token = await _access_token(sess, acct)
             async with sess.get(
@@ -1150,29 +1552,27 @@ async def poll_account(acct: dict[str, Any]) -> int:
                 raise ValueError(f"slack users.conversations: {convs.get('error')}")
             team = _tokens(acct["id"]).get("team_id") or ""
             for ch in convs.get("channels") or []:
-                async with sess.get(
-                    "https://slack.com/api/conversations.history",
-                    headers=_bearer(token),
-                    params={"channel": ch["id"], "oldest": f"{since:.6f}",
-                            "limit": str(_POLL_PAGE)},
-                ) as r:
-                    hist = await r.json()
-                if not hist.get("ok"):
-                    continue  # not a member / no perms for this one
                 name = ch.get("name") or ch.get("user") or ch["id"]
-                for m in hist.get("messages") or []:
-                    if m.get("subtype"):
-                        continue  # joins, topic changes, bot noise
-                    ts = float(m.get("ts") or 0)
-                    plink = f"https://app.slack.com/client/{team}/{ch['id']}"
-                    events.append(_ev(
-                        acct, eid=f"{ch['id']}:{m.get('ts')}",
-                        stream=f"#{name}", ts=ts,
-                        sender=m.get("user") or "",
-                        subject=f"#{name}",
-                        text=m.get("text") or "",
-                        deep_link=plink,
-                    ))
+                plink = f"https://app.slack.com/client/{team}/{ch['id']}" if team else ""
+                events.append({
+                    "provider": "slack",
+                    "account_id": acct["id"],
+                    "stable_id": f"{team}/{ch['id']}" if team else str(ch["id"]),
+                    "kind": "channel",
+                    "sender": "",
+                    "subject": f"#{name}",
+                    "deep_link": plink,
+                    "ts": time.time(),
+                    "headers": {},
+                    "labels": [],
+                    "content_capability": "fail_closed",
+                    "content_capability_reason": (
+                        "Slack conversations.history returns message text; "
+                        "include_all_metadata is not metadata-only. Listing is "
+                        "supported; content fetch is refuse-closed. Approval "
+                        "does not retrieve Slack message bodies."
+                    ),
+                })
         elif acct["provider"] == "telegram":
             token = secretstore.get(f"stream-secret:{acct['id']}") or ""
             offset = int(cur.get("tg_offset") or 0)
@@ -1201,12 +1601,20 @@ async def poll_account(acct: dict[str, Any]) -> int:
                     link = f"https://t.me/c/{str(cid)[4:]}/{m.get('message_id')}"
                 else:
                     link = ""
-                events.append(_ev(
-                    acct, eid=f"{upd.get('update_id')}", stream=title,
-                    ts=float(m.get("date") or time.time()),
-                    sender=frm.get("username") or frm.get("first_name") or "",
-                    subject=title, text=textv, deep_link=link,
-                ))
+                events.append({
+                    "provider": "telegram",
+                    "account_id": acct["id"],
+                    "stable_id": str(cid or title),
+                    "kind": "chat",
+                    "sender": frm.get("username") or frm.get("first_name") or "",
+                    "subject": title,
+                    "deep_link": link,
+                    "ts": float(m.get("date") or time.time()),
+                    "headers": {},
+                    "labels": [],
+                    "content_capability": "fail_closed",
+                    "content_capability_reason": "Telegram getUpdates includes message text",
+                })
         elif acct["provider"] == "discord":
             token = secretstore.get(f"stream-secret:{acct['id']}") or ""
             hdrs = {"Authorization": f"Bot {token}"}
@@ -1230,34 +1638,22 @@ async def poll_account(acct: dict[str, Any]) -> int:
                     if scanned >= _POLL_CHANNEL_CAP:
                         break
                     scanned += 1
-                    params = {"limit": "50"}
-                    known = after.get(str(ch["id"]))
-                    if known:
-                        params["after"] = known
-                    async with sess.get(
-                        f"https://discord.com/api/v10/channels/{ch['id']}/messages",
-                        headers=hdrs, params=params,
-                    ) as r:
-                        msgs = await r.json()
-                    if not isinstance(msgs, list):
-                        continue  # no access to this channel
-                    for m in msgs:
-                        content = m.get("content") or ""
-                        ts = _parse_iso(m.get("timestamp"))
-                        prev = int(after.get(str(ch["id"])) or 0)
-                        after[str(ch["id"])] = str(max(prev, int(m["id"])))
-                        if not content:
-                            continue
-                        if not known and ts <= since:
-                            continue  # first run: last day only
-                        events.append(_ev(
-                            acct, eid=f"{m['id']}",
-                            stream=f"#{ch.get('name')}", ts=ts,
-                            sender=(m.get("author") or {}).get("username") or "",
-                            subject=f"{g.get('name')} #{ch.get('name')}",
-                            text=content,
-                            deep_link=f"https://discord.com/channels/{g['id']}/{ch['id']}/{m['id']}",
-                        ))
+                    events.append({
+                        "provider": "discord",
+                        "account_id": acct["id"],
+                        "stable_id": f"{g['id']}/{ch['id']}",
+                        "kind": "channel",
+                        "sender": "",
+                        "subject": f"{g.get('name')} #{ch.get('name')}",
+                        "deep_link": f"https://discord.com/channels/{g['id']}/{ch['id']}",
+                        "ts": time.time(),
+                        "headers": {},
+                        "labels": [],
+                        "content_capability": "fail_closed",
+                        "content_capability_reason": (
+                            "Discord channel message list returns body text"
+                        ),
+                    })
             cur["dc_after"] = after
         elif acct["provider"] == "github":
             token = secretstore.get(f"stream-secret:{acct['id']}") or ""
@@ -1281,32 +1677,494 @@ async def poll_account(acct: dict[str, Any]) -> int:
                     if api_url
                     else (n.get("repository") or {}).get("html_url") or ""
                 )
-                events.append(_ev(
-                    acct, eid=f"{n.get('id')}", stream=repo,
-                    ts=_parse_iso(n.get("updated_at")),
-                    sender=n.get("reason") or "",
-                    subject=f"{subj.get('type')}: {subj.get('title')}",
-                    text=subj.get("title") or "", deep_link=link,
-                ))
+                events.append({
+                    "provider": "github",
+                    "account_id": acct["id"],
+                    "stable_id": str(n.get("id") or ""),
+                    "kind": "channel",
+                    "sender": n.get("reason") or "",
+                    "subject": f"{subj.get('type')}: {subj.get('title')}",
+                    "deep_link": link,
+                    "ts": _parse_iso(n.get("updated_at")),
+                    "headers": {},
+                    "labels": [],
+                    "text": "",
+                })
         elif acct["provider"] == "rss":
             async with sess.get(acct["url"]) as r:
                 raw = await r.text()
             events.extend(_parse_feed(acct, raw, cur))
         else:
             raise ValueError(f"unknown provider: {acct['provider']}")
-    before = len(pending_events(acct["id"]))
-    _append_transit(acct["id"], events)
-    new = len(pending_events(acct["id"])) - before
-    if events:
-        cur["since"] = max([e["ts"] for e in events] + [since])
+    new = pre_recorded + _record_discovery(events)
+    ts_vals = [float(e.get("ts") or 0) for e in events if e.get("ts")]
+    if ts_vals:
+        cur["since"] = max(ts_vals + [since])
     else:
-        # No news: still advance modestly so a silent stream doesn't
-        # re-scan the same window forever (leave 1h of overlap; the
-        # transit id-dedupe absorbs re-reads).
         cur["since"] = max(since, time.time() - 3600)
     _save_cursor(acct["id"], cur)
     update_account(acct["id"], last_poll=time.time())
+    # Already-approved threads: new messages flow. Never auto-approves.
+    new += await ingest_approved_updates(acct)
     return max(0, new)
+
+
+# Tests may install these to assert body fetches / MIME parse never
+# happen too early (revocation and classification gates).
+body_fetch_hook: Any = None
+body_parse_hook: Any = None
+
+
+def _note_parse(provider: str, key: str) -> None:
+    hook = body_parse_hook
+    if hook:
+        hook(provider, key)
+
+
+async def ingest_approved_updates(
+    acct: dict[str, Any],
+    *,
+    keys: list[str] | None = None,
+    workspace: str | None = None,
+) -> int:
+    """Fetch bodies for approved threads only. Revocation wins at awaits."""
+    from . import admin_policy, comms_review
+    if not admin_policy.feature_enabled("comms_streams"):
+        return 0
+    if acct.get("provider") not in ("imap", "gmail", "msgraph"):
+        return 0
+    items = comms_review.approved_items_for_account(acct["id"])
+    allow = live_allowed_workspaces(acct)
+    n = 0
+    for raw in items:
+        key = str(raw.get("key") or "")
+        if keys is not None and key not in keys:
+            continue
+        if comms_review.is_revoked(key):
+            continue
+        if str(raw.get("content_capability") or "ok") == "fail_closed":
+            continue
+        targets = list(raw.get("approved_workspaces") or [])
+        if workspace:
+            targets = [w for w in targets if w == workspace]
+        targets = [w for w in targets if w in allow]
+        if not targets:
+            continue
+        for ws in targets:
+            result = await fetch_approved_thread(acct, key, ws)
+            if result.get("ok") and result.get("events"):
+                n += len(result["events"])
+    return n
+
+
+async def fetch_approved_thread(
+    acct: dict[str, Any],
+    key: str,
+    workspace: str,
+) -> dict[str, Any]:
+    """Production approved-content path.
+
+    Auth-only preflight (approval / allowlist / revocation / capability)
+    → fresh per-message headers → classify → body → revocation recheck
+    → MIME decode → receipted transit. Cached discovery headers never
+    override a fresh classification.
+    """
+    from . import admin_policy, comms_review
+    if not admin_policy.feature_enabled("comms_streams"):
+        return {"ok": False, "error": admin_policy.feature_error("comms_streams"), "events": []}
+    raw = comms_review.get_raw_item(key)
+    if raw is None:
+        return {"ok": False, "error": "unknown comms source", "events": []}
+    allow = live_allowed_workspaces(acct)
+    ok, reason, _pub = comms_review.authorize_content_fetch(
+        key, workspace, allowed=allow, classify=False,
+    )
+    if not ok:
+        return {"ok": False, "error": reason, "events": []}
+    if comms_review.is_revoked(key):
+        return {"ok": False, "error": "revoked", "events": []}
+    try:
+        events = await _fetch_bodies(acct, raw, workspace=workspace, allowed=allow)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": str(e), "events": []}
+    await asyncio.sleep(0)
+    if comms_review.is_revoked(key):
+        return {"ok": False, "error": "revoked", "events": []}
+    allow = live_allowed_workspaces(acct)
+    ok, reason, _pub = comms_review.authorize_content_fetch(
+        key, workspace, allowed=allow, classify=False,
+    )
+    if not ok:
+        return {"ok": False, "error": reason, "events": []}
+    tagged: list[dict[str, Any]] = []
+    receipt_pairs: list[tuple[str, str]] = []
+    for ev in events:
+        if comms_review.is_revoked(key):
+            return {"ok": False, "error": "revoked", "events": []}
+        src = str(ev.get("id") or "")
+        if has_receipt(acct["id"], src, workspace):
+            continue
+        row = dict(ev)
+        row["source_event_id"] = src
+        row["id"] = f"{src}::{workspace}"
+        row["comms_key"] = key
+        row["approved_workspace"] = workspace
+        row["approved"] = True
+        tagged.append(row)
+        receipt_pairs.append((src, workspace))
+    _append_transit(acct["id"], tagged)
+    record_receipts(acct["id"], receipt_pairs)
+    return {"ok": True, "events": tagged, "error": None}
+
+
+async def _fetch_bodies(
+    acct: dict[str, Any],
+    raw: dict[str, Any],
+    *,
+    workspace: str,
+    allowed: list[str],
+) -> list[dict[str, Any]]:
+    from . import comms_review
+    key = str(raw.get("key") or "")
+    refs = [r for r in (raw.get("fetch_refs") or []) if isinstance(r, dict)]
+    hook = body_fetch_hook
+    if hook:
+        hook(acct.get("provider"), key, refs)
+    if comms_review.is_revoked(key):
+        return []
+    prov = acct.get("provider")
+    if prov == "imap":
+        return await asyncio.to_thread(
+            _imap_fetch_bodies, acct, raw, workspace, allowed,
+        )
+    if prov == "gmail":
+        return await _gmail_fetch_bodies(acct, raw, workspace=workspace, allowed=allowed)
+    if prov == "msgraph":
+        return await _graph_fetch_bodies(acct, raw, workspace=workspace, allowed=allowed)
+    return []
+
+
+def _mime_plain_from_bytes(header_bytes: bytes, body_bytes: bytes) -> str:
+    """Decode a normal MIME plain/HTML body. Skip attachment parts."""
+    raw = (header_bytes or b"") + b"\r\n" + (body_bytes or b"")
+    try:
+        msg = email.message_from_bytes(raw)
+    except Exception:  # noqa: BLE001
+        return re.sub(r"\s+", " ", (body_bytes or b"").decode("utf-8", errors="replace")).strip()
+    plains: list[str] = []
+    htmls: list[str] = []
+    walked = False
+    for part in msg.walk():
+        walked = True
+        disp = str(part.get("Content-Disposition") or "").lower()
+        if "attachment" in disp:
+            continue
+        ctype = str(part.get_content_type() or "").lower()
+        if ctype not in ("text/plain", "text/html"):
+            continue
+        try:
+            payload = part.get_payload(decode=True) or b""
+        except Exception:  # noqa: BLE001
+            continue
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            text = payload.decode(charset, errors="replace")
+        except Exception:  # noqa: BLE001
+            text = payload.decode("utf-8", errors="replace")
+        if ctype == "text/plain":
+            plains.append(text)
+        else:
+            htmls.append(_strip_html(text))
+    if plains:
+        joined = "\n".join(plains)
+    elif htmls:
+        joined = "\n".join(htmls)
+    elif not walked:
+        joined = (body_bytes or b"").decode("utf-8", errors="replace")
+    else:
+        # Simple non-multipart body with no Content-Type.
+        payload = msg.get_payload(decode=True)
+        if isinstance(payload, bytes) and payload:
+            joined = payload.decode("utf-8", errors="replace")
+        else:
+            joined = (body_bytes or b"").decode("utf-8", errors="replace")
+    return re.sub(r"\s+", " ", joined).strip()
+
+
+def _imap_fetch_bodies(
+    acct: dict[str, Any],
+    raw: dict[str, Any],
+    workspace: str,
+    allowed: list[str],
+) -> list[dict[str, Any]]:
+    """Fresh HEADER (+ UIDVALIDITY / thread id) → gate → TEXT → recheck → MIME."""
+    from . import comms_review
+    key = str(raw.get("key") or "")
+    refs = [r for r in (raw.get("fetch_refs") or []) if isinstance(r, dict)]
+    pw = secretstore.get(f"stream-secret:{acct['id']}") or ""
+    if not pw:
+        raise ValueError("not connected")
+    events: list[dict[str, Any]] = []
+    conn = imaplib.IMAP4_SSL(acct["host"], 993, timeout=45)
+    try:
+        conn.login(acct["username"], pw)
+        conn.select("INBOX", readonly=True)
+        uidvalidity = "0"
+        try:
+            _typ, dat = conn.response("UIDVALIDITY")
+            if dat and dat[0]:
+                uidvalidity = str(dat[0].decode() if isinstance(dat[0], bytes) else dat[0])
+        except Exception:  # noqa: BLE001
+            uidvalidity = str(raw.get("uidvalidity") or "0")
+        expected_uv = str(raw.get("uidvalidity") or uidvalidity)
+        if expected_uv and uidvalidity != expected_uv:
+            return []
+        header_spec = "(BODY.PEEK[HEADER])"
+        for ref in refs:
+            if comms_review.is_revoked(key):
+                return []
+            uid = str(ref.get("uid") or ref.get("id") or "")
+            if not uid:
+                continue
+            src_id = f"{acct.get('provider')}:{acct.get('host')}:{uid}"
+            if has_receipt(acct["id"], src_id, workspace):
+                continue
+            typ, msg_data = conn.uid("FETCH", uid, header_spec)
+            if typ != "OK" or not msg_data:
+                continue
+            header_bytes = b""
+            for part in msg_data:
+                if not (isinstance(part, tuple) and len(part) == 2):
+                    continue
+                marker = part[0] if isinstance(part[0], bytes) else str(part[0]).encode()
+                # Never treat a TEXT payload that arrived with headers as a body.
+                if b"HEADER" in marker and b"TEXT" not in marker:
+                    header_bytes = part[1]
+            msg = email.message_from_bytes(header_bytes or b"")
+            headers = _header_map(msg)
+            stable = comms_review.imap_thread_stable_id(
+                message_id=msg.get("Message-ID") or "",
+                references=msg.get("References") or "",
+                in_reply_to=msg.get("In-Reply-To") or "",
+                uidvalidity=uidvalidity,
+                fallback_uid=uid,
+            )
+            if str(raw.get("stable_id") or "") and stable != str(raw.get("stable_id") or ""):
+                continue
+            ok, _reason, _pub = comms_review.authorize_content_fetch(
+                key, workspace, allowed=live_allowed_workspaces(acct),
+                headers=headers, label_ids=[],
+            )
+            if not ok:
+                if comms_review.is_revoked(key):
+                    return []
+                continue
+            if comms_review.is_revoked(key):
+                return []
+            typ, msg_data = conn.uid("FETCH", uid, "(BODY.PEEK[TEXT])")
+            if comms_review.is_revoked(key):
+                return []
+            ok, _reason, _pub = comms_review.authorize_content_fetch(
+                key, workspace, allowed=live_allowed_workspaces(acct), classify=False,
+            )
+            if not ok:
+                return []
+            if typ != "OK" or not msg_data:
+                continue
+            body_bytes = b""
+            for part in msg_data:
+                if not (isinstance(part, tuple) and len(part) == 2):
+                    continue
+                marker = part[0] if isinstance(part[0], bytes) else str(part[0]).encode()
+                if b"TEXT" in marker:
+                    body_bytes = part[1]
+            _note_parse("imap", key)
+            preview = _mime_plain_from_bytes(header_bytes, body_bytes)
+            events.append(_ev(
+                acct, eid=f"{acct.get('host')}:{uid}", stream="inbox",
+                ts=time.time(),
+                sender=_decode_header(msg.get("From", "")),
+                subject=_decode_header(msg.get("Subject", "")),
+                text=preview[:4000],
+                deep_link="",
+            ))
+    finally:
+        try:
+            conn.logout()
+        except Exception:  # noqa: BLE001
+            pass
+    return events
+
+
+async def _gmail_fetch_bodies(
+    acct: dict[str, Any],
+    raw: dict[str, Any],
+    *,
+    workspace: str,
+    allowed: list[str],
+) -> list[dict[str, Any]]:
+    from . import comms_review
+    key = str(raw.get("key") or "")
+    thread_id = str(raw.get("thread_id") or raw.get("stable_id") or "")
+    refs = [r for r in (raw.get("fetch_refs") or []) if isinstance(r, dict)]
+    ids = [str(r.get("id") or "") for r in refs if r.get("id")]
+    events: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as sess:
+        for mid in ids:
+            if comms_review.is_revoked(key):
+                return []
+            src_id = f"{acct.get('provider')}:{mid}"
+            if has_receipt(acct["id"], src_id, workspace):
+                continue
+            meta = await _api_get(
+                sess, acct,
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}",
+                format="metadata",
+                metadataHeaders=_gmail_metadata_headers(),
+                fields=_GMAIL_METADATA_FIELDS,
+            )
+            await asyncio.sleep(0)
+            hdrs = _headers_from_list((meta.get("payload") or {}).get("headers"))
+            labels = list(meta.get("labelIds") or [])
+            ok, _reason, _pub = comms_review.authorize_content_fetch(
+                key, workspace, allowed=live_allowed_workspaces(acct),
+                headers=hdrs, label_ids=labels,
+            )
+            if not ok:
+                if comms_review.is_revoked(key):
+                    return []
+                continue
+            if comms_review.is_revoked(key):
+                return []
+            full = await _api_get(
+                sess, acct,
+                f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}",
+                format="full",
+            )
+            await asyncio.sleep(0)
+            if comms_review.is_revoked(key):
+                return []
+            ok, _reason, _pub = comms_review.authorize_content_fetch(
+                key, workspace, allowed=live_allowed_workspaces(acct), classify=False,
+            )
+            if not ok:
+                return []
+            _note_parse("gmail", key)
+            text = _gmail_plain(full)
+            events.append(_ev(
+                acct, eid=mid, stream="inbox",
+                ts=float(full.get("internalDate") or 0) / 1000,
+                sender=hdrs.get("From") or hdrs.get("from") or "",
+                subject=hdrs.get("Subject") or hdrs.get("subject") or "",
+                text=text[:4000],
+                deep_link=f"https://mail.google.com/mail/u/0/#all/{thread_id or mid}",
+            ))
+    return events
+
+
+def _gmail_plain(msg: dict[str, Any]) -> str:
+    def walk(part: dict[str, Any]) -> tuple[list[str], list[str]]:
+        plains: list[str] = []
+        htmls: list[str] = []
+        if not isinstance(part, dict):
+            return plains, htmls
+        body = part.get("body") if isinstance(part.get("body"), dict) else {}
+        filename = str(part.get("filename") or "")
+        if filename or body.get("attachmentId"):
+            for child in part.get("parts") or []:
+                p, h = walk(child)
+                plains.extend(p)
+                htmls.extend(h)
+            return plains, htmls
+        mime = str(part.get("mimeType") or "")
+        data = body.get("data") or ""
+        if data and mime.startswith("text/plain"):
+            try:
+                plains.append(
+                    base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+                )
+            except Exception:  # noqa: BLE001
+                pass
+        elif data and mime.startswith("text/html"):
+            try:
+                htmls.append(_strip_html(
+                    base64.urlsafe_b64decode(data + "==").decode("utf-8", errors="replace")
+                ))
+            except Exception:  # noqa: BLE001
+                pass
+        for child in part.get("parts") or []:
+            p, h = walk(child)
+            plains.extend(p)
+            htmls.extend(h)
+        return plains, htmls
+    plains, htmls = walk(msg.get("payload") or {})
+    text = "\n".join(plains) if plains else "\n".join(htmls)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+async def _graph_fetch_bodies(
+    acct: dict[str, Any],
+    raw: dict[str, Any],
+    *,
+    workspace: str,
+    allowed: list[str],
+) -> list[dict[str, Any]]:
+    from . import comms_review
+    key = str(raw.get("key") or "")
+    refs = [r for r in (raw.get("fetch_refs") or []) if isinstance(r, dict)]
+    events: list[dict[str, Any]] = []
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=60)) as sess:
+        for ref in refs:
+            mid = str(ref.get("id") or "")
+            if not mid:
+                continue
+            if comms_review.is_revoked(key):
+                return []
+            src_id = f"{acct.get('provider')}:{mid}"
+            if has_receipt(acct["id"], src_id, workspace):
+                continue
+            meta = await _api_get(
+                sess, acct,
+                f"https://graph.microsoft.com/v1.0/me/messages/{mid}",
+                **{"$select": _GRAPH_MAIL_SELECT},
+            )
+            await asyncio.sleep(0)
+            headers = _graph_headers(meta.get("internetMessageHeaders"))
+            ok, _reason, _pub = comms_review.authorize_content_fetch(
+                key, workspace, allowed=live_allowed_workspaces(acct),
+                headers=headers, label_ids=[],
+            )
+            if not ok:
+                if comms_review.is_revoked(key):
+                    return []
+                continue
+            if comms_review.is_revoked(key):
+                return []
+            full = await _api_get(
+                sess, acct,
+                f"https://graph.microsoft.com/v1.0/me/messages/{mid}",
+                **{"$select": "id,subject,from,body,webLink,receivedDateTime,conversationId"},
+            )
+            await asyncio.sleep(0)
+            if comms_review.is_revoked(key):
+                return []
+            ok, _reason, _pub = comms_review.authorize_content_fetch(
+                key, workspace, allowed=live_allowed_workspaces(acct), classify=False,
+            )
+            if not ok:
+                return []
+            _note_parse("msgraph", key)
+            sender = ((full.get("from") or {}).get("emailAddress") or {})
+            text = _strip_html(((full.get("body") or {}).get("content") or ""))
+            events.append(_ev(
+                acct, eid=mid, stream="mail",
+                ts=_parse_iso(full.get("receivedDateTime")),
+                sender=sender.get("address") or "",
+                subject=full.get("subject") or "",
+                text=text[:4000],
+                deep_link=full.get("webLink") or "",
+            ))
+    return events
 
 
 def _parse_iso(s: str | None) -> float:
@@ -1461,7 +2319,10 @@ def curation_prompt(acct: dict[str, Any], events: list[dict[str, Any]],
             f"knowledge here):\n{profile}\n"
             if profile else ""
         )
-        + "· Extract only DURABLE, wiki-grade knowledge: decisions, "
+        + "· These sources were already explicitly approved for this "
+        "workspace. Do not ask the user to re-approve them; curate "
+        "the quoted knowledge into the wiki.\n"
+        "· Extract only DURABLE, wiki-grade knowledge: decisions, "
         "facts, commitments, deadlines, project updates relevant to "
         "this workspace. Routine chatter, pleasantries and one-off "
         "logistics are NOT knowledge — skip them; extracting nothing "

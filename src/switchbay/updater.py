@@ -158,17 +158,11 @@ def child_env() -> dict[str, str]:
     """PATH the launchd daemon's slim environment is missing.
 
     The installed service only sees /usr/bin + ~/.local/bin. git/npx/
-    pnpm/uv live in Homebrew or the user profile; without them an
-    in-app update can't fetch or rebuild.
+    pnpm/uv live in Homebrew, nvm, or the user profile; without them an
+    in-app update can't fetch or rebuild. Does not source shell profiles.
     """
-    env = os.environ.copy()
-    extras = [
-        "/opt/homebrew/bin",
-        "/usr/local/bin",
-        str(Path.home() / ".local" / "bin"),
-        str(Path.home() / "bin"),
-    ]
-    env["PATH"] = os.pathsep.join([*extras, env.get("PATH", "")])
+    from . import runtime
+    env = runtime.spawn_env()
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["NPM_CONFIG_YES"] = "true"
     return env

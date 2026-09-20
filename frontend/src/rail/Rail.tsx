@@ -59,6 +59,8 @@ export type RailEntry =
       /** Absolute cwd of an external source — enables "watch in shell".
        *  Unset for old hooks / thread-owned cards. */
       origin_path?: string | null;
+      /** Protected web egress: once/deny only. */
+      protected?: boolean;
       /** "pending" while awaiting click, then "approved" | "denied"
        *  briefly so the row can render an acknowledged-state before
        *  the WS `permission_resolved` drops it. */
@@ -165,6 +167,9 @@ type Props = {
   onPopOutTerminal?: (threadId: string) => void;
   onPopInTerminalTab?: (tabId: string) => void;
   onJumpToTab?: (tabId: string) => void;
+  /** Full-height single-column embed (Zen docked Chat). */
+  embedded?: boolean;
+  onFloat?: () => void;
 };
 
 type ThreadInfo = {
@@ -214,7 +219,7 @@ function ThreadBar({
       const r = await fetch("/api/threads");
       if (!r.ok) return;
       const body = (await r.json()) as { threads: ThreadInfo[] };
-      setThreads(body.threads);
+      setThreads(Array.isArray(body.threads) ? body.threads : []);
     } catch { /* daemon down — keep the stale list */ }
   };
   const loadProjects = async () => {
@@ -222,7 +227,7 @@ function ThreadBar({
       const r = await fetch("/api/projects");
       if (!r.ok) return;
       const body = (await r.json()) as { projects: ProjectInfo[] };
-      setProjects(body.projects.filter((p) => !p.archived && !p.synthetic));
+      setProjects((body.projects ?? []).filter((p) => !p.archived && !p.synthetic));
     } catch { /* daemon down — keep the stale list */ }
   };
   useEffect(() => { void load(); }, [focusedThread]);
@@ -442,6 +447,7 @@ export default function Rail({
   pinnedAction, otherPerms, activeRunIds,
   focusedThread, focusedThreadKind, onSwitchThread, onNewThread,
   termWs, poppedOutTab, onPopOutTerminal, onPopInTerminalTab, onJumpToTab,
+  embedded = false, onFloat,
 }: Props) {
   const [input, setInput] = useComposerDraft();
   const orch = useOrchestrationControl();
@@ -516,8 +522,8 @@ export default function Rail({
     try {
       const r = await fetch("/api/action-buttons");
       if (!r.ok) return;
-      const body = (await r.json()) as { buttons: typeof customButtons };
-      setCustomButtons(body.buttons);
+      const body = (await r.json()) as { buttons?: typeof customButtons };
+      setCustomButtons(Array.isArray(body.buttons) ? body.buttons : []);
     } catch { /* leave empty */ }
   };
   useEffect(() => { void reloadButtons(); }, []);
@@ -561,7 +567,7 @@ export default function Rail({
   useEffect(() => {
     fetch("/api/verbs")
       .then((r) => r.json())
-      .then((b: { verbs: VerbInfo[] }) => setVerbs(b.verbs))
+      .then((b: { verbs: VerbInfo[] }) => setVerbs(Array.isArray(b.verbs) ? b.verbs : []))
       .catch(() => setVerbs([]));
   }, [focusedThread]);
 
@@ -771,13 +777,23 @@ export default function Rail({
     setChatForced(false);
   };
 
-  return (
+  const railBody = (
     <>
       <div className="sy-rail-head">
         <span>RAIL</span>
         <span style={{ flex: 1 }} />
         <WebPolicyToggle compact />
         <ProviderPicker />
+        {embedded && onFloat && (
+          <button
+            type="button"
+            className="sy-rail-reset"
+            onClick={() => onFloat()}
+            title="Float this thread at the bottom of the window"
+          >
+            ⇱ float
+          </button>
+        )}
         <button
           type="button"
           className="sy-rail-reset"
@@ -1408,6 +1424,10 @@ export default function Rail({
       )}
     </>
   );
+  if (embedded) {
+    return <div className="sy-rail sy-rail--embedded">{railBody}</div>;
+  }
+  return railBody;
 }
 
 /** Switch to the Agents tab and auto-expand the given run. Two
@@ -2075,6 +2095,7 @@ export function PermissionRow(props: {
             >
               Approve once
             </button>
+            {entry.protected ? null : (
             <span className="sy-rail-permission-split">
               <button
                 type="button"
@@ -2121,6 +2142,7 @@ export function PermissionRow(props: {
                 </div>
               )}
             </span>
+            )}
             <button
               type="button"
               className="sy-rail-permission-btn sy-rail-permission-btn--deny"

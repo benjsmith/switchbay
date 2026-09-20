@@ -12,6 +12,7 @@ from .desk import (
     DESK_DECK,
     DESK_INFO,
     DESK_PROJECTS,
+    DESK_RESEARCH,
     STATE_DISMISSED,
     STATE_QUIET,
     STATE_WORKING,
@@ -31,6 +32,7 @@ from .desk import (
 from .harness import NodeRequest, NodeResult, pi_available, pick_harness, run_node
 from .hire import (
     HireDecision, HireRequest, decide_hire, pick_family_hires,
+    pick_auto_hires,
     pick_critic_model, pick_fast_model, pick_kernel_model, pick_worker_model,
     strong_check_mode,
 )
@@ -64,6 +66,7 @@ __all__ = [
     "DESK_DECK",
     "DESK_INFO",
     "DESK_PROJECTS",
+    "DESK_RESEARCH",
     "choose_desk",
     "looks_like_deck",
     "STATE_DISMISSED",
@@ -76,6 +79,7 @@ __all__ = [
     "NodeResult",
     "Package",
     "decide_hire",
+    "pick_auto_hires",
     "family_ids",
     "packages_for_desk",
     "pick_family_hires",

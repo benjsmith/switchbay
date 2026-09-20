@@ -302,7 +302,7 @@ export default function FileBrowser({
         return (await r.json()) as { files: string[] };
       })
       .then((d) => {
-        if (!cancelled) setFiles(d.files);
+        if (!cancelled) setFiles(Array.isArray(d.files) ? d.files : []);
       })
       .catch((e: Error) => {
         if (!cancelled) setError(e.message);

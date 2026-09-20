@@ -271,6 +271,14 @@ export type OpenReport = {
  *  focus it. The tab itself loads `/api/intro`. */
 export type OpenIntro = { type: "open_intro" };
 
+export type OpenComms = { type: "open_comms" };
+
+export type CommsReviewEvent = {
+  type: "comms.review";
+  key?: string;
+  action?: string;
+};
+
 /** Open a workspace HTML slideshow (slideshows/<slug>/) in the Slideshow tab. */
 export type OpenHtmlDeck = {
   type: "open_html_deck";
@@ -509,6 +517,8 @@ export type PermissionRequest = {
   /** For external cards: absolute cwd of the source, when known —
    *  enables "watch in shell". Null for old hooks that don't send cwd. */
   origin_path?: string | null;
+  /** Protected web egress: once/deny only — never remember. */
+  protected?: boolean;
 };
 
 export type OrchestrationHandoff = {
@@ -593,6 +603,8 @@ export type ServerMessage =
   | FilesChanged
   | OpenReport
   | OpenIntro
+  | OpenComms
+  | CommsReviewEvent
   | OpenHtmlDeck
   | OpenReportDoc
   | OpenWorksheet

@@ -25,6 +25,8 @@ CURATE_MODE_ALIASES: dict[str, str] = {
     "wire": "wire",
     "conflicts": "cross-table-conflicts",
     "cross-table-conflicts": "cross-table-conflicts",
+    "table-audit": "table-audit",
+    "audit": "table-audit",
 }
 
 QUERY_PROTOCOL = """\

@@ -212,6 +212,82 @@ def test_egress_allows_github_when_in_app_update(tmp_path: Path, monkeypatch, en
     assert not admin_policy.egress_allowed("https://evil.example/")
 
 
+def _write_policy_pair(tmp_path: Path, monkeypatch, *, baked: dict | None, overlay: dict | None):
+    inst = tmp_path / "install"
+    inst.mkdir(exist_ok=True)
+    if baked is not None:
+        (inst / "admin.baked.json").write_text(json.dumps(baked), encoding="utf-8")
+        monkeypatch.setenv("SWITCHBAY_INSTALL_ROOT", str(inst))
+    else:
+        monkeypatch.delenv("SWITCHBAY_INSTALL_ROOT", raising=False)
+    if overlay is not None:
+        p = tmp_path / "admin.json"
+        p.write_text(json.dumps(overlay), encoding="utf-8")
+        monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    else:
+        monkeypatch.delenv("SWITCHBAY_ADMIN_POLICY", raising=False)
+    admin_policy.reset_cache()
+
+
+def test_max_live_workers_malformed_does_not_crash_load(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
+    for bad in ("nope", "5.5", "8.0", "", " ", "²", "9" * 5000, True, False, [4], {"n": 4}, 4.9, None):
+        _write_policy_pair(
+            tmp_path, monkeypatch,
+            baked=None,
+            overlay={"orchestration": {"max_live_workers": bad, "keep": True}},
+        )
+        data = admin_policy.load()
+        orch = data.get("orchestration") or {}
+        assert "max_live_workers" not in orch
+        assert admin_policy.max_live_workers_ceiling() is None
+        assert orch.get("keep") is True
+
+
+def test_max_live_workers_zero_negative_ignored(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
+    for bad in (0, -1, "-3", "+0"):
+        _write_policy_pair(
+            tmp_path, monkeypatch,
+            baked=None,
+            overlay={"orchestration": {"max_live_workers": bad}},
+        )
+        assert admin_policy.max_live_workers_ceiling() is None
+        assert "max_live_workers" not in (admin_policy.load().get("orchestration") or {})
+
+
+def test_max_live_workers_numeric_string_and_tightening(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
+    _write_policy_pair(
+        tmp_path, monkeypatch,
+        baked={"profile": "enterprise", "orchestration": {"max_live_workers": 8}},
+        overlay={"orchestration": {"max_live_workers": "5"}},
+    )
+    assert admin_policy.max_live_workers_ceiling() == 5
+    _write_policy_pair(
+        tmp_path, monkeypatch,
+        baked={"profile": "enterprise", "orchestration": {"max_live_workers": 8}},
+        overlay={"orchestration": {"max_live_workers": " 6 "}},
+    )
+    assert admin_policy.max_live_workers_ceiling() == 6
+    _write_policy_pair(
+        tmp_path, monkeypatch,
+        baked={"profile": "enterprise", "orchestration": {"max_live_workers": 4}},
+        overlay={"orchestration": {"max_live_workers": 8}},
+    )
+    assert admin_policy.max_live_workers_ceiling() == 4
+
+
+def test_max_live_workers_bad_overlay_cannot_weaken_baked(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "open")
+    baked = {"profile": "enterprise", "orchestration": {"max_live_workers": 4}}
+    for bad in (0, -1, True, False, "nope", "8.0", [8], {"n": 8}):
+        overlay = {"orchestration": {"max_live_workers": bad}}
+        _write_policy_pair(tmp_path, monkeypatch, baked=baked, overlay=overlay)
+        assert admin_policy.max_live_workers_ceiling() == 4, bad
+        assert admin_policy.load()["orchestration"]["max_live_workers"] == 4
+
+
 @pytest.mark.asyncio
 async def test_update_endpoint_200_when_flag_on(tmp_path: Path, monkeypatch):
     p = tmp_path / "admin.json"

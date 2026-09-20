@@ -159,6 +159,7 @@ class TaskFeatures:
     science: bool = False
     experiment: bool = False
     lookup: bool = False
+    web_ingest: bool = False
 
     def bucket(self) -> str:
         """Coarse, stable context key for the bandit."""
@@ -242,7 +243,8 @@ def extract_features(
     n_q = len(re.findall(r"\?", t))
     n_list = len(_MULTI_RE.findall(t))
     n_sub = max(1, n_q + max(0, n_list // 2))
-    research = bool(_RESEARCH_RE.search(t) or _WEB_INGEST_RE.search(t))
+    web_ingest = bool(_WEB_INGEST_RE.search(t))
+    research = bool(_RESEARCH_RE.search(t) or web_ingest)
     code = bool(_CODE_RE.search(t))
     graph = bool(_GRAPH_RE.search(t)) if graph_available else False
     finance = bool(_FINANCE_RE.search(t))
@@ -286,6 +288,7 @@ def extract_features(
         science=science,
         experiment=experiment,
         lookup=lookup,
+        web_ingest=web_ingest,
     )
 
 
@@ -305,9 +308,12 @@ def apply_task_context(
         features.lookup = False
         if not constrained:
             features.n_subquestions = 1
-    if task_kind in {"projects", "code", "deck"}:
+    if task_kind in {"projects", "code", "deck", "research"}:
         features.graph = True
         features.lookup = False
+        if task_kind == "research":
+            features.research = True
+            features.web_ingest = True
         if not constrained:
             features.n_subquestions = max(features.n_subquestions, 1)
     return features
@@ -1060,10 +1066,7 @@ def allocate_models(
 
     keyed = available
     if keyed is None:
-        if os.environ.get("PYTEST_CURRENT_TEST"):
-            keyed = [(default_provider, default_model or "")] if default_provider else []
-        else:
-            keyed = list_keyed_providers()
+        keyed = list_keyed_providers()
 
     pids: list[str] = []
     hint_by_pid: dict[str, str | None] = {}
@@ -1621,6 +1624,19 @@ def reset_state(workspace: Path | None = None) -> dict[str, Any]:
     return st
 
 
+def _live_seats_view() -> dict[str, Any]:
+    try:
+        from .desk_admission import public_view
+        return public_view()
+    except Exception:  # noqa: BLE001
+        return {
+            "desk_max_live_workers": HARD_MAX_CONCURRENCY,
+            "min": 4,
+            "default": 8,
+            "chief_counted": True,
+        }
+
+
 def inspect_state(workspace: Path | None = None) -> dict[str, Any]:
     """Safe diagnostics for Settings / debug. No secrets."""
     st = load_state(workspace)
@@ -1657,6 +1673,8 @@ def inspect_state(workspace: Path | None = None) -> dict[str, Any]:
             "max_continuations": HARD_MAX_CONTINUATIONS,
             "wall_clock_sec": HARD_WALL_CLOCK_SEC,
             "worker_timeout_sec": HARD_WORKER_TIMEOUT_SEC,
+            "live_seats": _live_seats_view(),
+            "chief_counted": True,
         },
         "utility": {
             "lambda_c_floor": util.LAMBDA_C_FLOOR,

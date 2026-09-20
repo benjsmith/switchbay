@@ -131,3 +131,30 @@ def set_workspaces_home(value: str) -> None:
     data = load()
     data["workspaces_home"] = str(value).strip() or _WORKSPACES_HOME_DEFAULT
     save(data)
+
+
+# Live seats per desk (chief counted). Floor 4, default 8. Admin may
+# only tighten the ceiling — see agents.desk_admission.
+_DESK_LIVE_DEFAULT = 8
+_DESK_LIVE_MIN = 4
+
+
+def get_desk_max_live_workers() -> int:
+    raw = load().get("desk_max_live_workers")
+    try:
+        n = int(raw) if raw is not None else _DESK_LIVE_DEFAULT
+    except (TypeError, ValueError):
+        n = _DESK_LIVE_DEFAULT
+    return max(_DESK_LIVE_MIN, n)
+
+
+def set_desk_max_live_workers(value: int) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError) as e:
+        raise ValueError("desk_max_live_workers must be an integer") from e
+    n = max(_DESK_LIVE_MIN, n)
+    data = load()
+    data["desk_max_live_workers"] = n
+    save(data)
+    return n

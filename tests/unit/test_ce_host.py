@@ -43,6 +43,30 @@ def test_wiki_commit_happy(tmp_path: Path):
     assert out.get("committed") is True
 
 
+def test_wiki_diff_receipt_tracks_commit_and_pages(tmp_path: Path):
+    import subprocess
+    wiki = tmp_path / "wiki"
+    wiki.mkdir()
+    subprocess.run(["git", "init"], cwd=wiki, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "t@t"], cwd=wiki, check=True)
+    subprocess.run(["git", "config", "user.name", "t"], cwd=wiki, check=True)
+    (wiki / "a.md").write_text("one\n", encoding="utf-8")
+    ce_host.wiki_commit(tmp_path, {"message": "curate: a"})
+    before = ce_host.wiki_work_snapshot(tmp_path)
+    fp1 = ce_host.work_availability_fingerprint(tmp_path)
+    (wiki / "b.md").write_text("two\n", encoding="utf-8")
+    ce_host.wiki_commit(tmp_path, {"message": "curate: b"})
+    rec = ce_host.wiki_diff_receipt(tmp_path, before)
+    assert rec["wiki_committed"] is True
+    assert rec["wiki_head_before"] != rec["wiki_head_after"]
+    assert any(p.endswith("b.md") for p in rec["wiki_pages_changed"])
+    assert rec["wiki_pages_landed"] >= 1
+    assert rec["wiki_commit_diff"]
+    fp2 = ce_host.work_availability_fingerprint(tmp_path)
+    assert fp1 != fp2
+    assert ce_host.work_availability_fingerprint(tmp_path) == fp2
+
+
 def test_score_diff_passes_new_text_file(tmp_path: Path, monkeypatch):
     seen: dict = {}
 
@@ -143,6 +167,31 @@ def test_wave_prime_override_mode(tmp_path: Path, monkeypatch):
     out = ce_host.wave_prime(tmp_path, {"mode": "tables"})
     assert out["mode"] == "multimodal-table-extract"
     assert "override" in out["reason"]
+    out = ce_host.wave_prime(tmp_path, {"mode": "table-audit"})
+    assert out["mode"] == "table-audit"
+    assert "override" in out["reason"]
+
+
+def test_wave_prime_unknown_token_is_not_a_mode(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(
+        ce_host, "evolve_guard",
+        lambda *_a, **_k: {"ok": True, "stdout": "snap"},
+    )
+    monkeypatch.setattr(
+        "switchbay.ce_tools._ce_scan",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "switchbay.ce_tools._ce_epoch_summary",
+        lambda *_a, **_k: {"ok": True},
+    )
+    monkeypatch.setattr(
+        "switchbay.ce_tools._ce_planner",
+        lambda *_a, **_k: {"mode": "repair", "reason": "default"},
+    )
+    out = ce_host.wave_prime(tmp_path, {"mode": "for"})
+    assert out["mode"] == "repair"
+    assert "override" not in (out.get("reason") or "")
 
 
 def test_ce_sweep_blurb_names_numeric_review():

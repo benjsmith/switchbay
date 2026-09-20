@@ -360,6 +360,32 @@ req_body = json.dumps({
     "origin_thread": os.environ.get("CSWY_THREAD_ID") or "",
 }).encode()
 
+PROTECTED = {
+    "WebSearch", "WebFetch", "web_search", "web_fetch",
+    "research_search", "research_fetch",
+}
+
+def _basename(name):
+    n = str(name or "")
+    return n.split("__")[-1] if "__" in n else n
+
+def _protected(name):
+    n = str(name or "")
+    if n in PROTECTED:
+        return True
+    return _basename(n) in PROTECTED
+
+def _mcp_registry_gated(name):
+    # Native hook + MCP server would card twice. Registry tools are
+    # gated at tools.execute; the hook must not also card them.
+    n = str(name or "")
+    if n.startswith("mcp__") or n.startswith("switchbay__"):
+        return _basename(n) in PROTECTED
+    return False
+
+if _mcp_registry_gated(tool):
+    emit("passthrough", "switchbay: registry tool gated at execution")
+
 try:
     req = urllib.request.Request(
         f"http://127.0.0.1:{PORT}/api/permission/request",
@@ -370,8 +396,11 @@ try:
     with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
         body = json.loads(resp.read().decode("utf-8") or "{}")
 except (urllib.error.URLError, OSError, json.JSONDecodeError):
-    # Daemon unreachable or timed out. claude-code falls through to
-    # its static allowlist; grok would fail open, so deny explicitly.
+    # Daemon unreachable or timed out. Protected web egress fails
+    # closed. Other tools: claude-code falls through to its static
+    # allowlist; grok would fail open, so deny explicitly.
+    if _protected(tool):
+        emit("deny", "switchbay: web egress denied (daemon unreachable)")
     emit("passthrough", "switchbay: approval unavailable (daemon unreachable)")
 
 decision = body.get("decision") or "deny"
@@ -379,6 +408,9 @@ if decision == "approve":
     emit("approve")
 elif decision == "skip":
     # Source muted in the rail — Switch Bay stops mediating.
+    # Protected egress must never fall through to the CLI allowlist.
+    if _protected(tool):
+        emit("deny", "switchbay: web egress denied")
     emit("passthrough", "switchbay: mediation muted")
 else:
     emit("deny")

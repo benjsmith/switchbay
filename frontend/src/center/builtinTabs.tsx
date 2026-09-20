@@ -32,6 +32,7 @@ const SchedulesTab = lazy(() => import("../widgets/schedules/SchedulesTab"));
 const PackFileListTab = lazy(() => import("../widgets/packtabs/PackFileListTab"));
 const TerminalTab = lazy(() => import("../widgets/terminal/TerminalTab"));
 const ReportTab = lazy(() => import("../widgets/report/ReportTab"));
+const CommsTab = lazy(() => import("../widgets/comms/CommsTab"));
 const IntroTab = lazy(() => import("../widgets/intro/IntroTab"));
 const HtmlDeckTab = lazy(() => import("../widgets/htmldeck/HtmlDeckTab"));
 const LibraryTab = lazy(() => import("../widgets/library/LibraryTab"));
@@ -79,6 +80,7 @@ export function registerBuiltinTabs(): void {
   registerTabKind("agents", AgentsAdapter, { bare: true });
   // Rich HTML report (create_report) in a sandboxed iframe.
   registerTabKind("report", (() => <ReportTab />) as TabComponent, { bare: true });
+  registerTabKind("comms", (() => <CommsTab />) as TabComponent, { bare: true });
   // Durable report package (reports/<slug>/).
   registerTabKind("report-doc", (() => <ReportDocTab />) as TabComponent, {
     bare: true,

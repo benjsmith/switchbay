@@ -25,6 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SPIKE_PI = REPO_ROOT / ".local" / "pi-spike" / "node_modules" / ".bin" / "pi"
 
 # launchd PATH is often /usr/bin:/bin. Pi's shebang is `env node`.
+# Extra bins come from switchbay.runtime (nvm/volta/homebrew/…).
 _NODE_PATH_DIRS = (
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -107,28 +108,15 @@ def _inject_provider_key(env: dict[str, str], req: NodeRequest) -> None:
 
 
 def enrich_path(env: dict[str, str], *, extra_dirs: tuple[str, ...] = ()) -> None:
-    """Prepend Homebrew / local bins so `env node` works under launchd."""
-    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
-    seen = set(parts)
-    prefix: list[str] = []
-    home_local = str(Path.home() / ".local" / "bin")
-    for d in (*extra_dirs, *_NODE_PATH_DIRS, home_local):
-        if d and d not in seen and Path(d).is_dir():
-            prefix.append(d)
-            seen.add(d)
-    if prefix:
-        env["PATH"] = os.pathsep.join(prefix + parts)
+    """Prepend Homebrew / nvm / local bins so `env node` works under launchd."""
+    from .. import runtime
+    enriched = runtime.enrich_env(env, extra_dirs=extra_dirs)
+    env["PATH"] = enriched.get("PATH", env.get("PATH", ""))
 
 
 def resolve_node(env: dict[str, str]) -> str | None:
-    found = shutil.which("node", path=env.get("PATH") or os.defpath)
-    if found:
-        return found
-    for d in _NODE_PATH_DIRS:
-        cand = Path(d) / "node"
-        if cand.is_file() and os.access(cand, os.X_OK):
-            return str(cand)
-    return None
+    from .. import runtime
+    return runtime.resolve_node(env)
 
 
 def shebang_wants_node(binary: str) -> bool:
@@ -317,6 +305,8 @@ class PiHarness:
         text_parts: list[str] = []
         tools: list[str] = []
         err: str | None = None
+        in_tok = 0
+        out_tok = 0
         settled = False
         result: NodeResult | None = None
         try:
@@ -366,6 +356,13 @@ class PiHarness:
                         tools.append(name)
                 elif kind == "agent_settled":
                     settled = True
+                    usage = ev.get("usage") or ev.get("tokenUsage") or {}
+                    if isinstance(usage, dict):
+                        try:
+                            in_tok = int(usage.get("input") or usage.get("input_tokens") or in_tok or 0)
+                            out_tok = int(usage.get("output") or usage.get("output_tokens") or out_tok or 0)
+                        except (TypeError, ValueError):
+                            pass
                     break
                 elif kind == "response" and ev.get("success") is False:
                     err = str(ev.get("error") or ev.get("message") or "pi rpc failed")[:400]
@@ -389,5 +386,14 @@ class PiHarness:
                 error=err,
                 harness=self.name,
                 tool_trace=tools,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
             )
-        return result or NodeResult(text="", error=err, harness=self.name, tool_trace=tools)
+        return result or NodeResult(
+            text="".join(text_parts),
+            error=err,
+            harness=self.name,
+            tool_trace=tools,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+        )

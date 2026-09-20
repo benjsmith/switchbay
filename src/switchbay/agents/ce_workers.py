@@ -80,7 +80,8 @@ def worker_budget(
     """
     if local:
         return 0
-    cap = min(policy.HARD_MAX_CONCURRENCY, max(1, int(configured)))
+    from .desk_admission import effective_live_cap
+    cap = min(effective_live_cap(), policy.HARD_MAX_CONCURRENCY, max(1, int(configured)))
     s = policy.clamp_preference(preference)
     if s <= 0.2:
         return 1
@@ -137,6 +138,7 @@ async def run_from_tool(
     completed: set[str] | None = None,
     failed: set[str] | None = None,
     running: set[str] | None = None,
+    desk_gate: Any = None,
 ) -> dict[str, Any]:
     """Fill the CE worker template and, on a provider, complete it."""
     from .. import ce_host
@@ -235,22 +237,38 @@ async def run_from_tool(
             )
             filled["spawned"] = False
             return filled
-        rec = await orchestration._run_agent_node(
-            node,
-            provider=prov,
-            model=wm or getattr(prov, "DEFAULT_MODEL", None),
-            workspace=workspace,
-            parent_run_id=parent_run_id,
-            thread_id=thread_id,
-            app=app,
-            blackboard=evidence.Blackboard(),
-            worker_index=None,
-            plan=plan,
-            graph_parent=parent,
-            graph_completed=completed,
-            graph_failed=failed,
-            graph_running=running,
+        from .desk_admission import (
+            desk_domain_id, gate_for, slot_id as desk_slot,
         )
+        nest_gate = desk_gate
+        if nest_gate is None:
+            from ..kernel.desk import DESK_CURATE
+            nest_gate = gate_for(
+                desk_domain_id(workspace, DESK_CURATE),
+                workspace=workspace,
+            )
+        nest_slot = desk_slot(parent_run_id, node_id)
+        await nest_gate.acquire(nest_slot, kind="nested")
+        try:
+            rec = await orchestration._run_agent_node(
+                node,
+                provider=prov,
+                model=wm or getattr(prov, "DEFAULT_MODEL", None),
+                workspace=workspace,
+                parent_run_id=parent_run_id,
+                thread_id=thread_id,
+                app=app,
+                blackboard=evidence.Blackboard(str(parent_run_id or node_id)),
+                worker_index=None,
+                plan=plan,
+                graph_parent=parent,
+                graph_completed=completed,
+                graph_failed=failed,
+                graph_running=running,
+                desk_gate=nest_gate,
+            )
+        finally:
+            await nest_gate.release_async(nest_slot)
         text = str(rec.get("output") or "")
         filled["text"] = text
         filled["spawned"] = True
@@ -417,17 +435,23 @@ def _publish_handback(
 
 
 def _next_node_id(plan: Any, parent: dict[str, Any] | None, role: str) -> str:
-    used: set[str] = set()
-    if plan is not None and hasattr(plan, "nodes"):
-        used.update(n.node_id for n in plan.nodes)
+    extra: set[str] = set()
     if parent is not None:
         for row in parent.get("plan_nodes") or []:
             if isinstance(row, dict) and row.get("node_id"):
-                used.add(str(row["node_id"]))
+                extra.add(str(row["node_id"]))
     prefix = "ce-rev" if role in REVIEW_ROLES else "ce-w"
-    i = 0
+    if plan is not None and hasattr(plan, "nodes"):
+        from .orchestration import alloc_node_id, seed_node_seq
+        try:
+            seed_node_seq(plan)
+            return alloc_node_id(plan, prefix, extra)
+        except Exception:  # noqa: BLE001
+            extra.update(n.node_id for n in plan.nodes)
+            extra.update(getattr(plan, "archived_ids", None) or [])
+    i = 1
     while True:
-        nid = prefix if i == 0 and prefix == "ce-rev" else f"{prefix}{i}"
-        if nid not in used:
+        nid = f"{prefix}{i}"
+        if nid not in extra:
             return nid
         i += 1

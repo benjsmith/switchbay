@@ -123,6 +123,8 @@ type Run = {
    *  "fan-out · N=4 · 3 of 4 running" badge even before child rows
    *  arrive. Absent on regular single-agent runs. */
   fanout_n?: number | null;
+  desk_live_cap?: number | null;
+  desk_chief_counted?: boolean | null;
   workers_total?: number | null;
   workers_running?: number | null;
   /** Set in fanout.py's finally block — flips workers from "running"
@@ -501,6 +503,14 @@ export default function AgentDashboardTab() {
       <WorkspaceRunsNav runs={runs} focusedWs={focusedWs} />
       <div className="sy-agents-header">
         <h2>Agent Dashboard</h2>
+        <button
+          type="button"
+          className="sy-vega-toolbar-btn"
+          onClick={() => window.dispatchEvent(new CustomEvent("sy:open-settings"))}
+          title="Live worker cap (chief counted) is in Settings → Auto orchestration"
+        >
+          Live cap
+        </button>
         <button
           type="button"
           className="sy-vega-toolbar-btn"
@@ -1573,6 +1583,11 @@ function RunRow(props: {
             {run.orchestration_strategy && run.orchestration_strategy !== "fixed_fanout"
               ? run.orchestration_strategy.replace(/_/g, " ")
               : "fan-out"}{" "}
+            {typeof run.desk_live_cap === "number" && (
+              <span title="Live seats per desk, chief counted. Change in Settings → Auto orchestration.">
+                · cap {run.desk_live_cap}
+              </span>
+            )}{" "}
             {typeof workersRunning === "number"
               ? `· ${workersRunning} of ${workerCount} running`
               : `· ${workerCount}`}

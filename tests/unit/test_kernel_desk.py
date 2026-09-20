@@ -286,3 +286,153 @@ def test_seat_persists_each_desk_objective(tmp_path: Path):
     assert code is not None and deck is not None
     assert code.objective == "implement the patch"
     assert deck.objective == "make a slideshow"
+
+
+def test_curate_constrained_is_local_only():
+    from switchbay.daemon import _curate_constrained
+    assert _curate_constrained(local=True) is True
+    assert _curate_constrained(local=True, text="tables") is True
+    assert _curate_constrained(local=True, text="for 10 mins") is False
+    assert _curate_constrained(local=True, text="overnight") is False
+    assert _curate_constrained(local=False) is False
+    assert _curate_constrained(local=False, text="for 10 mins") is False
+
+
+def test_schedule_desk_launch_parses_desk_slashes():
+    from switchbay.daemon import _parse_schedule_prompt, _schedule_desk_launch
+    spec, args = _schedule_desk_launch("/curate for 10 mins")
+    assert spec is not None and spec["desk_id"] == "curate"
+    assert args == "for 10 mins"
+    spec, args = _schedule_desk_launch("/work")
+    assert spec is not None and spec["desk_id"] == "projects"
+    spec, args = _schedule_desk_launch("/code implement the parser")
+    assert spec is not None and spec["desk_id"] == "code"
+    assert args == "implement the parser"
+    spec, _ = _schedule_desk_launch("what do we know about attention")
+    assert spec is None
+    spec, _ = _schedule_desk_launch("/curate stop")
+    assert spec is None
+    spec, _ = _schedule_desk_launch("make a slideshow about Bahdanau")
+    assert spec is None
+    spec, _ = _schedule_desk_launch("/deck make slides")
+    assert spec is None
+    kind, spec, args = _parse_schedule_prompt("/curate stop")
+    assert kind == "skip" and spec is not None
+    kind, spec, args = _parse_schedule_prompt("/work dismiss")
+    assert kind == "skip"
+
+
+def test_seat_desk_now_stands_curate_before_dispatch(tmp_path: Path):
+    from switchbay.daemon import _desk_spec, _seat_desk_now
+    spec = _desk_spec("curate")
+    assert spec is not None
+    assert spec["staff"] != "/curate"
+    _seat_desk_now(
+        tmp_path, spec, "for 10 mins",
+        provider="grok-build", model="grok-4.6",
+    )
+    rec = get(tmp_path, DESK_CURATE)
+    assert rec is not None
+    assert rec.state == STATE_WORKING
+    assert rec.objective == "for 10 mins"
+    assert rec.chief_provider == "grok-build"
+    standing = {r.desk_id for r in list_standing(tmp_path)}
+    assert DESK_CURATE in standing
+
+
+def test_seat_desk_now_stands_work_and_code(tmp_path: Path):
+    from switchbay.daemon import _desk_spec, _seat_desk_now
+    work, code = _desk_spec("work"), _desk_spec("code")
+    assert work is not None and code is not None
+    _seat_desk_now(
+        tmp_path, work, "staff the plan",
+        provider="grok-build", model="grok-4.6",
+    )
+    _seat_desk_now(
+        tmp_path, code, "implement the parser",
+        provider="grok-build", model="grok-4.6",
+    )
+    standing = {r.desk_id for r in list_standing(tmp_path)}
+    assert DESK_PROJECTS in standing
+    assert DESK_CODE in standing
+
+
+def test_ws_response_disables_permessage_deflate():
+    from switchbay.daemon import _ws_response
+    ws = _ws_response()
+    assert ws._compress in (False, 0)
+
+
+def test_dispatch_error_surface_broadcasts_when_headless():
+    import asyncio
+    from switchbay.daemon import _make_dispatch_error_surface
+
+    seen: list = []
+
+    class _Task:
+        def exception(self):
+            return RuntimeError("boom")
+
+    async def _run():
+        app = {"ws_clients": set()}
+
+        async def fake_broadcast(_app, msg):
+            seen.append(msg)
+
+        import switchbay.daemon as d
+        orig = d._broadcast
+        d._broadcast = fake_broadcast  # type: ignore[method-assign]
+        try:
+            cb = _make_dispatch_error_surface(app, None)
+            cb(_Task())  # type: ignore[arg-type]
+            await asyncio.sleep(0)
+        finally:
+            d._broadcast = orig
+
+    asyncio.run(_run())
+    assert seen
+    blob = str(seen[0])
+    assert "boom" in blob
+
+
+def test_ce_action_prompt_duration_is_focus_not_mode():
+    from switchbay.daemon import _ce_action_prompt
+    p = _ce_action_prompt("curate", "for 10 mins", local=False) or ""
+    assert "Focus: for 10 mins" in p
+    assert "Mode:" not in p
+
+
+def test_seat_desk_now_keeps_live_run_id(tmp_path: Path):
+    from switchbay.daemon import _desk_spec, _seat_desk_now
+    spec = _desk_spec("curate")
+    assert spec is not None
+    seat(
+        tmp_path, DESK_CURATE,
+        chief_provider="grok-build", chief_model="grok-4.6",
+        run_id="run-live", objective="old",
+    )
+    _seat_desk_now(
+        tmp_path, spec, "for 10 mins",
+        provider="grok-build", model="grok-4.6",
+    )
+    rec = get(tmp_path, DESK_CURATE)
+    assert rec is not None
+    assert rec.state == STATE_WORKING
+    assert rec.run_id == "run-live"
+    assert rec.objective == "for 10 mins"
+
+
+def test_curate_wave_prime_skips_duration_token(tmp_path: Path, monkeypatch):
+    from switchbay.daemon import _curate_wave_prime_system
+    seen: dict = {}
+
+    def fake_prime(_ws, payload=None):
+        seen["payload"] = payload
+        return {"ok": True, "mode": "repair"}
+
+    monkeypatch.setattr("switchbay.ce_host.wave_prime", fake_prime)
+    _curate_wave_prime_system(tmp_path, "for 10 mins", local=False)
+    assert seen["payload"] == {}
+    _curate_wave_prime_system(tmp_path, "tables", local=False)
+    assert seen["payload"] == {"mode": "tables"}
+    assert _curate_wave_prime_system(tmp_path, "tables", local=True) == ""

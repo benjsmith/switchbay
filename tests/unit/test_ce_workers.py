@@ -102,7 +102,7 @@ def test_user_prompt_passes_predecessor_artifacts():
 
 def test_ce_worker_system_is_not_investigator_json():
     node = orchestration.PlanNode(
-        node_id="ce-w0", kind="investigate", objective="brief",
+        node_id="ce-w1", kind="investigate", objective="brief",
         role="worker", method_hint="ce:worker",
     )
     text = orchestration._system_for(node)
@@ -175,14 +175,17 @@ def test_cli_dispatches_land_on_the_dag_and_the_board():
         )
         for role in ("worker", "worker", "batch_reviewer")
     ]
-    assert ids == ["ce-w0", "ce-w1", "ce-rev"]
+    assert len(ids) == 3 and len(set(ids)) == 3
+    assert ids[0].startswith("ce-w")
+    assert ids[1].startswith("ce-w")
+    assert ids[2].startswith("ce-rev")
     orchestration._sync_parent_graph(
         parent, plan, completed=completed, failed=set(), running=running,
     )
     view = {r["node_id"]: r for r in parent["plan_nodes"]}
-    assert view["ce-w0"]["kind"] == "investigate"
-    assert view["ce-rev"]["kind"] == "verify"       # reviewers verify
-    assert view["ce-w1"]["status"] == "running"
+    assert view[ids[0]]["kind"] == "investigate"
+    assert view[ids[2]]["kind"] == "verify"       # reviewers verify
+    assert view[ids[1]]["status"] == "running"
     # Each dispatch is visible on the board, which used to sit at zero
     # for the whole run because this path never touched a Blackboard.
     assert parent["blackboard_n"] == 3
@@ -201,7 +204,10 @@ def test_cli_dispatches_land_on_the_dag_and_the_board():
         parent, plan, completed=completed, failed=set(), running=running,
     )
     after = {r["node_id"]: r["status"] for r in parent["plan_nodes"]}
-    assert after["ce-w0"] == after["ce-w1"] == after["ce-rev"] == "done"
+    # Retired single-use workers leave the live parent graph.
+    assert ids[0] not in after
+    assert ids[1] not in after
+    assert ids[2] not in after
 
 
 def test_handback_publishes_findings_or_an_excerpt():

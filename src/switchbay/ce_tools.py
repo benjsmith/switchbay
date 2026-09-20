@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +72,15 @@ def _safe_args(raw: Any) -> tuple[list[str], str | None]:
 
 
 def _ce_run(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import permissions
+    if permissions.needs_web_consent("ce_run", payload):
+        blocked = permissions.web_egress_block_reason(
+            workspace, "ce_run", payload,
+        )
+        if blocked:
+            return {"ok": False, "error": blocked}
+        if not permissions.invocation_approved():
+            return {"ok": False, "error": "web egress denied"}
     script = str(payload.get("script") or "").strip()
     if script.endswith(".sh"):
         return {"error": "use viewer/setup via dedicated Switch Bay actions, not ce_run"}
@@ -95,12 +105,15 @@ def _ce_run(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         args, prep_meta = _with_ingest_prep(workspace, path="", extra=args)
         if args is None:
             return prep_meta
+        out = _run_local_ingest(
+            workspace, prep_meta, extra_flags=_ingest_extra_flags(args),
+            timeout=timeout,
+        )
+        return out
     out = cebridge.run_script(
         script, args, cwd=workspace, timeout=timeout,
         require_json=bool(require_json),
     )
-    if prep_meta is not None and isinstance(out, dict):
-        out["ingest_prep"] = prep_meta
     return out
 
 
@@ -235,6 +248,15 @@ def _with_ingest_prep(
 
 
 def _ce_ingest(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import permissions
+    if permissions.needs_web_consent("ce_ingest", payload):
+        blocked = permissions.web_egress_block_reason(
+            workspace, "ce_ingest", payload,
+        )
+        if blocked:
+            return {"ok": False, "error": blocked}
+        if not permissions.invocation_approved():
+            return {"ok": False, "error": "web egress denied"}
     extra, err = _safe_args(payload.get("args"))
     if err:
         return {"error": err}
@@ -247,18 +269,401 @@ def _ce_ingest(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     )
     if args is None:
         return meta
-    out = cebridge.run_script("local_ingest.py", args, cwd=workspace, timeout=300.0)
-    if isinstance(out, dict):
-        out["ingest_prep"] = meta
-        flagged = ingest_prep.flag_raw_pdf_extractions(workspace, out)
-        if flagged:
-            out["raw_pdf_extractions"] = flagged
-            out["warning"] = (
-                "extraction looks like raw PDF bytes, not prose. "
-                "Current curiosity-engine uses pypdf; re-ingest the PDF "
-                "or run pending-multimodal. Do not cite these files."
-            )
+    timeout = float(payload.get("timeout") or 300.0)
+    timeout = max(15.0, min(timeout, 900.0))
+    extra_flags = _ingest_extra_flags(args)
+    return _run_local_ingest(
+        workspace, meta, extra_flags=extra_flags, timeout=timeout,
+    )
+
+
+def _ingest_extra_flags(args: list[str]) -> list[str]:
+    extra: list[str] = []
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--file" and i + 1 < len(args):
+            i += 2
+            continue
+        if a.startswith("-"):
+            extra.append(a)
+            if a in _INGEST_VALUE_FLAGS and i + 1 < len(args) and not args[i + 1].startswith("-"):
+                extra.append(args[i + 1])
+                i += 2
+                continue
+            i += 1
+            continue
+        i += 1
+    return extra
+
+
+def _targets_from_prep(
+    workspace: Path, meta: dict[str, Any],
+) -> list[str]:
+    converted = meta.get("converted")
+    if meta.get("staged") and isinstance(converted, list):
+        files = [
+            str(c.get("staged")) for c in converted
+            if isinstance(c, dict) and c.get("staged")
+        ]
+        if files:
+            return files
+    args = list(meta.get("ce_args") or [])
+    if args[:1] == ["--file"] and len(args) >= 2:
+        return [args[1]]
+    if args and not str(args[0]).startswith("-"):
+        root = Path(args[0])
+        if not root.is_absolute():
+            root = workspace / args[0]
+        if root.is_file():
+            return [args[0]]
+        if root.is_dir():
+            return [
+                ingest_prep.rel_to_workspace(workspace, p)
+                for p in ingest_prep._iter_source_files(root)
+            ]
+    drop = workspace / "vault" / "raw"
+    if drop.is_dir():
+        return [
+            ingest_prep.rel_to_workspace(workspace, p)
+            for p in ingest_prep._iter_source_files(drop)
+        ]
+    return []
+
+
+def _merge_local_ingest(parts: list[dict[str, Any]]) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    interpreters: list[list[str]] = []
+    considered = 0
+    notes: list[str] = []
+    for part in parts:
+        interp = part.get("interpreter")
+        if isinstance(interp, list) and interp:
+            interpreters.append([str(x) for x in interp])
+        if part.get("note"):
+            notes.append(str(part["note"]))
+        rows = part.get("results")
+        if isinstance(rows, list):
+            for row in rows:
+                if isinstance(row, dict):
+                    results.append(row)
+            considered += int(part.get("considered") or len(rows))
+            continue
+        if part.get("error"):
+            results.append({
+                "ok": False,
+                "reason": part.get("error"),
+                "source_path": part.get("file"),
+            })
+            considered += 1
+            continue
+        if part.get("extracted") or part.get("extraction_method"):
+            results.append(part)
+            considered += 1
+    ok_n = sum(1 for r in results if r.get("ok") is True)
+    out: dict[str, Any] = {
+        "considered": considered or len(results),
+        "ok": ok_n,
+        "failed": max(0, len(results) - ok_n),
+        "results": results,
+    }
+    if interpreters:
+        # Unique, stable order.
+        seen: set[tuple[str, ...]] = set()
+        uniq: list[list[str]] = []
+        for item in interpreters:
+            key = tuple(item)
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(item)
+        out["interpreters"] = uniq
+        out["interpreter"] = uniq[0] if len(uniq) == 1 else uniq
+    if notes:
+        out["note"] = " | ".join(notes)[-1500:]
     return out
+
+
+def _run_local_ingest(
+    workspace: Path,
+    meta: dict[str, Any],
+    *,
+    extra_flags: list[str],
+    timeout: float,
+) -> dict[str, Any]:
+    """Run CE local_ingest per file with the interpreter that has that extractor."""
+    files = _targets_from_prep(workspace, meta)
+    flags = list(extra_flags)
+    deadline = time.monotonic() + timeout
+    parts: list[dict[str, Any]] = []
+    if not files:
+        remain = max(1.0, deadline - time.monotonic())
+        py = cebridge.python_for_ingest(workspace, "")
+        part = cebridge.run_script(
+            "local_ingest.py", list(meta.get("ce_args") or []) + flags,
+            cwd=workspace, timeout=remain, python=py,
+        )
+        if isinstance(part, dict):
+            part["interpreter"] = py
+            parts.append(part)
+    else:
+        for rel in files:
+            remain = deadline - time.monotonic()
+            if remain <= 1.0:
+                parts.append({
+                    "ok": False, "error": f"ingest timed out after {int(timeout)}s",
+                    "file": rel, "interpreter": [],
+                })
+                continue
+            ext = Path(rel).suffix.lower()
+            py = cebridge.python_for_ingest(workspace, ext)
+            part = cebridge.run_script(
+                "local_ingest.py", ["--file", rel, *flags],
+                cwd=workspace, timeout=remain, python=py,
+            )
+            if isinstance(part, dict):
+                part["interpreter"] = py
+                part["file"] = rel
+                parts.append(part)
+            else:
+                parts.append({
+                    "ok": False, "error": "ingest returned non-dict",
+                    "file": rel, "interpreter": py,
+                })
+    out = _merge_local_ingest(parts)
+    out["ingest_prep"] = meta
+    out["timeout_s"] = timeout
+    out["extractor_host"] = cebridge.host_extractor_info()
+    if "interpreter" not in out:
+        out["interpreter"] = cebridge.python_for_ingest(workspace, "")
+    flagged = ingest_prep.flag_raw_pdf_extractions(workspace, out)
+    if flagged:
+        out["raw_pdf_extractions"] = flagged
+        out["warning"] = (
+            "extraction looks like raw PDF bytes, not prose. "
+            "Current curiosity-engine uses pypdf; re-ingest the PDF "
+            "or run pending-multimodal. Do not cite these files."
+        )
+    return _reject_failed_structured_extracts(workspace, out)
+
+
+_FAILED_METHOD_RE = re.compile(
+    r"^(pptx_failed|xlsx_failed|pypdf_failed|csv_failed)",
+    re.I,
+)
+
+
+def _ingest_rows(out: dict[str, Any]) -> list[dict[str, Any]]:
+    rows = out.get("results")
+    if isinstance(rows, list):
+        return [r for r in rows if isinstance(r, dict)]
+    return [out] if any(k in out for k in ("extracted", "extraction_method")) else []
+
+
+def _frontmatter_map(text: str) -> dict[str, str]:
+    if not text.startswith("---"):
+        return {}
+    end = text.find("\n---", 3)
+    if end < 0:
+        return {}
+    meta: dict[str, str] = {}
+    for ln in text[3:end].splitlines():
+        if ":" not in ln:
+            continue
+        key, _, val = ln.partition(":")
+        key = key.strip()
+        if key:
+            meta[key] = val.strip()
+    return meta
+
+
+def _row_extract_status(workspace: Path, row: dict[str, Any]) -> tuple[str, str]:
+    """Extractor method/quality from the row, else extract frontmatter only."""
+    method = str(row.get("extraction_method") or "")
+    quality = str(row.get("extraction_quality") or "")
+    if method or quality:
+        return method, quality
+    extracted = str(row.get("extracted") or row.get("extracted_path") or "")
+    if not extracted:
+        return method, quality
+    cand = Path(extracted)
+    if not cand.is_absolute():
+        cand = workspace / extracted
+    try:
+        text = cand.read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return method, quality
+    meta = _frontmatter_map(text)
+    return (
+        method or str(meta.get("extraction_method") or ""),
+        quality or str(meta.get("extraction_quality") or ""),
+    )
+
+
+def _exact_index_paths(workspace: Path, extracted: Path) -> list[str]:
+    """Canonical vault-relative and absolute extract paths. No LIKE/globs."""
+    out: list[str] = []
+
+    def add(raw: str) -> None:
+        if raw and raw not in out:
+            out.append(raw)
+
+    add(str(extracted))
+    add(extracted.as_posix())
+    try:
+        resolved = extracted.resolve()
+    except OSError:
+        resolved = extracted
+    add(str(resolved))
+    add(resolved.as_posix())
+    try:
+        rel = resolved.relative_to((workspace / "vault").resolve())
+        add(str(rel))
+        add(rel.as_posix())
+    except (ValueError, OSError):
+        pass
+    return out
+
+
+def _deindex_exact_paths(workspace: Path, paths: list[str]) -> None:
+    db = workspace / "vault" / "vault.db"
+    paths = [p for p in paths if str(p).endswith(".extracted.md")]
+    if not db.is_file() or not paths:
+        return
+    import sqlite3
+    with sqlite3.connect(str(db)) as conn:
+        tables = {
+            r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            )
+        }
+        for path in paths:
+            if "sources" in tables:
+                conn.execute("DELETE FROM sources WHERE path = ?", (path,))
+            if "source_meta" in tables:
+                conn.execute("DELETE FROM source_meta WHERE path = ?", (path,))
+            if "embedding_meta" in tables:
+                conn.execute("DELETE FROM embedding_meta WHERE path = ?", (path,))
+        conn.commit()
+
+
+def _unlink_failed_extract(workspace: Path, row: dict[str, Any]) -> None:
+    raw = str(row.get("extracted") or row.get("extracted_path") or "")
+    extra: list[str] = []
+    indexed = row.get("indexed")
+    if isinstance(indexed, dict) and indexed.get("path"):
+        extra.append(str(indexed["path"]))
+    cand: Path | None = None
+    if raw:
+        extra.append(raw)
+        extra.append(Path(raw).as_posix())
+        cand = Path(raw)
+        if not cand.is_absolute():
+            cand = workspace / raw
+        try:
+            resolved = cand.resolve()
+            ws = workspace.resolve()
+        except OSError:
+            cand = None
+        else:
+            if resolved == ws or ws not in resolved.parents:
+                cand = None
+            elif not resolved.name.endswith(".extracted.md"):
+                cand = None
+            else:
+                cand = resolved
+    paths = list(extra)
+    if cand is not None:
+        for p in _exact_index_paths(workspace, cand):
+            if p not in paths:
+                paths.append(p)
+        _deindex_exact_paths(workspace, paths)
+        try:
+            if cand.is_file():
+                cand.unlink()
+        except OSError:
+            pass
+        return
+    _deindex_exact_paths(workspace, paths)
+
+
+def _row_failed_extract(workspace: Path, row: dict[str, Any]) -> str | None:
+    if row.get("ok") is False:
+        return str(row.get("reason") or row.get("error") or "ingest failed")
+    method, quality = _row_extract_status(workspace, row)
+    if quality == "failed" or _FAILED_METHOD_RE.match(method):
+        return f"extraction failed ({method or quality})"
+    if quality == "empty" and (
+        method.startswith(("python-pptx", "openpyxl", "pptx", "xlsx"))
+        or method.startswith(("pptx_failed", "xlsx_failed"))
+    ):
+        return "extraction produced no content"
+    return None
+
+
+def _reject_failed_structured_extracts(
+    workspace: Path, out: dict[str, Any],
+) -> dict[str, Any]:
+    """Refuse metadata-only / unavailable-placeholder success.
+
+    CE ``local_ingest.py`` still writes ``.extracted.md`` and ``ok: true``
+    when python-pptx is missing or the PPTX is corrupt. Switch Bay treats
+    that as a retryable failure and removes the placeholder extract so it
+    is not accepted as ingested content. User vaults are not rewritten
+    except for extracts produced by this call.
+    """
+    if out.get("error") and "results" not in out:
+        out.setdefault("retryable", True)
+        return out
+    rows = _ingest_rows(out)
+    failed: list[dict[str, Any]] = []
+    ok_rows: list[dict[str, Any]] = []
+    for row in rows:
+        reason = _row_failed_extract(workspace, row)
+        if reason:
+            _unlink_failed_extract(workspace, row)
+            failed.append({**row, "reject_reason": reason})
+        elif row.get("ok") is False:
+            failed.append(row)
+        else:
+            ok_rows.append(row)
+    if not failed:
+        return out
+    out = dict(out)
+    out["failed_extractions"] = failed
+    out["results"] = ok_rows
+    out["failed"] = len(failed)
+    if not ok_rows:
+        reason = failed[0].get("reject_reason") or failed[0].get("reason") or (
+            "extraction failed"
+        )
+        out["ok"] = False
+        out["error"] = str(reason)
+        out["retryable"] = True
+        return out
+    out["ok"] = len(ok_rows)
+    warn = out.get("warning") or ""
+    extra = (
+        f"{len(failed)} file(s) failed structured extraction and were not "
+        "accepted. Re-ingest those sources once the file is readable."
+    )
+    out["warning"] = f"{warn} {extra}".strip() if warn else extra
+    return out
+
+
+def ingest_is_success(out: dict[str, Any] | None) -> bool:
+    """True when CE ingest produced accepted extracted content."""
+    if not isinstance(out, dict):
+        return False
+    if out.get("error"):
+        return False
+    if out.get("ok") is False:
+        return False
+    if isinstance(out.get("ok"), int) and out["ok"] <= 0:
+        return False
+    if out.get("retryable") and out.get("failed_extractions") and not _ingest_rows(out):
+        return False
+    return True
 
 
 def _ce_query(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
@@ -508,7 +913,9 @@ register(Tool(
         "path (vault/raw/). File or directory: pass `path` (a file is "
         "accepted). Large HTML/XML/JSON is staged as readable text so "
         "CE's extract cap indexes content rather than schema; originals "
-        "are unchanged."
+        "are unchanged. PPTX/XLSX extractors run with the Switch Bay "
+        "interpreter (python-pptx / openpyxl); missing-extractor "
+        "placeholders are not accepted as success."
     ),
     input_schema={
         "type": "object",

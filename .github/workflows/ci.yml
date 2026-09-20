@@ -42,7 +42,7 @@ jobs:
         run: uv run --no-sync python -c "import switchbay.daemon"
 
   frontend:
-    name: Frontend typecheck + build
+    name: Frontend Node tests + typecheck + builds
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -54,5 +54,188 @@ jobs:
           install: false
       - name: Install
         run: pnpm --dir frontend install --frozen-lockfile
+      - name: HTML extraction Node tests (6)
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --version
+          node --experimental-strip-types --test --test-reporter tap \
+            src/lib/htmlExtraction.test.ts > "${RUNNER_TEMP}/html-extract.tap"
+          cat "${RUNNER_TEMP}/html-extract.tap"
+          python3 - "${RUNNER_TEMP}/html-extract.tap" <<'PY'
+          from pathlib import Path
+          import sys
+          text = Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+          lines = [ln.strip() for ln in text.splitlines()]
+          oks = [ln for ln in lines if ln.startswith("ok ")]
+          notoks = [ln for ln in lines if ln.startswith("not ok ")]
+          meta = {}
+          for ln in lines:
+              for key in ("pass", "fail", "skipped", "todo", "cancelled"):
+                  prefix = f"# {key} "
+                  if ln.startswith(prefix):
+                      meta[key] = int(ln.split()[-1])
+          plan = [ln for ln in lines if ln.startswith("1..")]
+          if notoks or meta.get("fail", 0) != 0 or meta.get("skipped", 0) != 0 \
+                  or meta.get("todo", 0) != 0 or meta.get("cancelled", 0) != 0:
+              raise SystemExit(
+                  f"html extraction tests must all run and pass with no skips: "
+                  f"{meta} notoks={notoks}"
+              )
+          pass_n = meta.get("pass", len(oks))
+          if pass_n != 6 or len(oks) != 6 or "1..6" not in plan:
+              raise SystemExit(
+                  f"expected 6 passing html extraction tests, got pass={pass_n} "
+                  f"oks={len(oks)} plan={plan} meta={meta}"
+              )
+          print("htmlExtraction: 6/6 (no skips)")
+          PY
+      - name: Web-policy race Node test
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types tests/webPolicy.race.test.ts \
+            | tee "${RUNNER_TEMP}/web-policy-race.txt"
+          grep -F "webPolicy.race.test.ts ok" "${RUNNER_TEMP}/web-policy-race.txt"
+          if grep -Ei 'skip|todo' "${RUNNER_TEMP}/web-policy-race.txt"; then
+            echo "web-policy race test must not skip"
+            exit 1
+          fi
+          echo "webPolicy.race: 1/1 (no skips)"
       - name: Typecheck + build
         run: pnpm --dir frontend run build
+      - name: Webview graph build
+        run: pnpm --dir frontend run build:webview
+
+  browser-e2e:
+    name: Browser e2e (mocked backend)
+    runs-on: ubuntu-latest
+    # Isolated Chromium + mock HTTP/WS. Never starts switchbay.daemon,
+    # never binds or curls the live :8765 PWA, never sets E2E_BASE_URL
+    # (that would collide the two specs and point at vite :5173).
+    env:
+      E2E_MOCK: "1"
+      CI: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/setup@v2
+        with:
+          version: 11
+          runtime: node@22
+          cache: true
+          install: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Set up Python 3.13 + locked dev deps
+        run: |
+          uv python install 3.13
+          uv sync --locked --group dev
+      - name: Install frontend
+        run: pnpm --dir frontend install --frozen-lockfile
+      - name: Build frontend dist
+        run: pnpm --dir frontend run build
+      - name: Require mock e2e fixtures
+        run: |
+          set -euo pipefail
+          test -f frontend/tests/e2e/mock_backend.py
+          test -f frontend/tests/e2e/zen-web-policy.spec.ts
+          test -f frontend/tests/e2e/comms-desks.spec.ts
+          grep -F 'e2e_mock' frontend/tests/e2e/zen-web-policy.spec.ts
+          grep -F 'e2e_mock' frontend/tests/e2e/comms-desks.spec.ts
+          grep -F 'e2e_mock' frontend/tests/e2e/mock_backend.py
+          grep -F '/tmp/switchbay-e2e-mock-ws' frontend/tests/e2e/zen-web-policy.spec.ts
+          grep -F '/tmp/switchbay-e2e-mock-ws' frontend/tests/e2e/comms-desks.spec.ts
+          grep -F '/tmp/switchbay-e2e-mock-ws' frontend/tests/e2e/mock_backend.py
+          if grep -nE 'test\.(skip|fixme)\(' \
+              frontend/tests/e2e/zen-web-policy.spec.ts \
+              frontend/tests/e2e/comms-desks.spec.ts; then
+            echo "e2e specs must not skip"
+            exit 1
+          fi
+      - name: Install Playwright Chromium
+        run: pnpm --dir frontend exec playwright install --with-deps chromium
+      - name: Playwright zen-web-policy (mock port 41765)
+        working-directory: frontend
+        env:
+          E2E_MOCK: "1"
+          E2E_MOCK_PORT: "41765"
+          CI: "true"
+        run: |
+          set -euo pipefail
+          unset E2E_BASE_URL || true
+          if [ -n "${E2E_BASE_URL:-}" ]; then
+            echo "E2E_BASE_URL must stay unset so specs use their own ports"
+            exit 1
+          fi
+          pnpm exec playwright test tests/e2e/zen-web-policy.spec.ts \
+            --reporter=list --forbid-only --workers=1 \
+            | tee "${RUNNER_TEMP}/pw-zen-web-policy.txt"
+          python3 - "${RUNNER_TEMP}/pw-zen-web-policy.txt" 4 zen-web-policy <<'PY'
+          from pathlib import Path
+          import re, sys
+          plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", Path(sys.argv[1]).read_text(errors="replace"))
+          want, label = int(sys.argv[2]), sys.argv[3]
+          if "zen-web-policy.spec.ts" not in plain:
+              raise SystemExit(f"{label}: spec file did not run")
+          if re.search(r"\b[1-9]\d*\s+skipped\b", plain, re.I):
+              raise SystemExit(f"{label}: skips are not allowed")
+          if re.search(r"\b[1-9]\d*\s+flaky\b", plain, re.I):
+              raise SystemExit(f"{label}: flaky results are not allowed")
+          failed = re.search(r"\b(\d+)\s+failed\b", plain, re.I)
+          if failed and int(failed.group(1)) != 0:
+              raise SystemExit(f"{label}: failed tests")
+          passed = re.findall(r"(?m)^\s*(\d+)\s+passed\b", plain)
+          if not passed:
+              raise SystemExit(f"{label}: no 'N passed' summary")
+          got = int(passed[-1])
+          if got != want:
+              raise SystemExit(f"{label}: expected {want} passed, got {got}")
+          print(f"{label}: {got}/{want} passed, no skips")
+          PY
+      - name: Playwright comms-desks (mock port 41766)
+        working-directory: frontend
+        env:
+          E2E_MOCK: "1"
+          E2E_COMMS_PORT: "41766"
+          CI: "true"
+        run: |
+          set -euo pipefail
+          unset E2E_BASE_URL || true
+          if [ -n "${E2E_BASE_URL:-}" ]; then
+            echo "E2E_BASE_URL must stay unset so specs use their own ports"
+            exit 1
+          fi
+          pnpm exec playwright test tests/e2e/comms-desks.spec.ts \
+            --reporter=list --forbid-only --workers=1 \
+            | tee "${RUNNER_TEMP}/pw-comms-desks.txt"
+          python3 - "${RUNNER_TEMP}/pw-comms-desks.txt" 4 comms-desks <<'PY'
+          from pathlib import Path
+          import re, sys
+          plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", Path(sys.argv[1]).read_text(errors="replace"))
+          want, label = int(sys.argv[2]), sys.argv[3]
+          if "comms-desks.spec.ts" not in plain:
+              raise SystemExit(f"{label}: spec file did not run")
+          if re.search(r"\b[1-9]\d*\s+skipped\b", plain, re.I):
+              raise SystemExit(f"{label}: skips are not allowed")
+          if re.search(r"\b[1-9]\d*\s+flaky\b", plain, re.I):
+              raise SystemExit(f"{label}: flaky results are not allowed")
+          failed = re.search(r"\b(\d+)\s+failed\b", plain, re.I)
+          if failed and int(failed.group(1)) != 0:
+              raise SystemExit(f"{label}: failed tests")
+          passed = re.findall(r"(?m)^\s*(\d+)\s+passed\b", plain)
+          if not passed:
+              raise SystemExit(f"{label}: no 'N passed' summary")
+          got = int(passed[-1])
+          if got != want:
+              raise SystemExit(f"{label}: expected {want} passed, got {got}")
+          print(f"{label}: {got}/{want} passed, no skips")
+          PY
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-e2e-mock
+          path: |
+            frontend/test-results/
+          if-no-files-found: warn
+          retention-days: 7

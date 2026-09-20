@@ -13,12 +13,14 @@ return None so the graph tab can show an empty state.
 from __future__ import annotations
 
 import asyncio
+import importlib
 import json
 import logging
 import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -38,30 +40,77 @@ CE_PYTHON_PIN = "3.13"
 
 def _ce_root_candidates() -> list[Path]:
     """Where CE's scripts/ (setup.sh, viewer.sh, …) might live, in
-    priority order. CE is installed as a global skill via `npx skills
-    add -g` (~/.agents/skills, symlinked into ~/.claude/skills), so that
-    is the primary location now; $SWITCHBAY_CE_ROOT overrides; the old
-    standalone checkout is the final fallback."""
+    priority order. Explicit ``SWITCHBAY_CE_ROOT`` wins when it actually
+    has scripts/; otherwise bundled vendor then already-installed global
+    skills. Never requires sourcing a shell profile. The old standalone
+    checkout is the final fallback.
+    """
     home = Path.home()
     out: list[Path] = []
     env = os.environ.get("SWITCHBAY_CE_ROOT")
     if env:
         out.append(Path(env).expanduser())
-    out.append(home / ".claude" / "skills" / "curiosity-engine")
-    out.append(home / ".agents" / "skills" / "curiosity-engine")
+    try:
+        from . import admin_policy
+        install = admin_policy.install_root()
+        if install is not None:
+            out.append(Path(install) / "vendor" / "curiosity-engine")
+    except Exception:  # noqa: BLE001
+        pass
+    for rel in (
+        home / ".claude" / "skills" / "curiosity-engine",
+        home / ".agents" / "skills" / "curiosity-engine",
+        home / ".codex" / "skills" / "curiosity-engine",
+        home / ".grok" / "skills" / "curiosity-engine",
+        home / ".cursor" / "skills" / "curiosity-engine",
+        home / ".gemini" / "skills" / "curiosity-engine",
+    ):
+        out.append(rel)
     out.append(DEFAULT_CE_ROOT)
-    return out
+    seen: set[str] = set()
+    uniq: list[Path] = []
+    for p in out:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(p)
+    return uniq
 
 
 def ce_root() -> Path:
-    """Resolve CE's root by finding the candidate that actually has
-    `scripts/` (so setup.sh / viewer.sh resolve). Falls back to the
-    first candidate for a clear not-found error if none exist."""
+    """Resolve CE's root by finding a candidate that has ``scripts/``.
+
+    A missing bundled tree does not hide an already-installed global
+    skill. Falls back to the first candidate for a clear not-found
+    error if none exist.
+    """
     cands = _ce_root_candidates()
     for c in cands:
-        if (c / "scripts").is_dir():
-            return c
+        try:
+            if (c / "scripts").is_dir():
+                return c
+        except OSError:
+            continue
+    for c in cands:
+        try:
+            if (c / "SKILL.md").is_file():
+                return c
+        except OSError:
+            continue
     return cands[0]
+
+
+def ce_scripts_available() -> bool:
+    """True when a CE install with a scripts/ tree is discoverable.
+
+    Independent of ``ce_auto_setup`` / ``ce_bundled_setup`` — those
+    flags gate *installation*, not read/execute of an existing skill.
+    """
+    try:
+        return (ce_root() / "scripts").is_dir()
+    except OSError:
+        return False
 
 
 def output_dir(workspace: Path) -> Path:
@@ -467,6 +516,8 @@ def _scrubbed_env() -> dict[str, str]:
         if k not in {"VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}
     }
     env.setdefault("UV_PYTHON", _ce_python_pin())
+    # CE's installed tree is read-only for us; don't drop .pyc beside scripts.
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env
 
 
@@ -488,17 +539,126 @@ def _ce_python() -> list[str]:
     return ["uv", "run", "--directory", str(root), "python3"]
 
 
-def _script_python(cwd: Path) -> list[str]:
+# Per-extension extractor module for local_ingest.py. Prefer the
+# workspace venv when it already has the module (CE setup.sh commonly
+# installs pypdf + openpyxl). Fall back to the Switch Bay host for
+# modules the workspace lacks (python-pptx is a Switch Bay dep).
+# Never merge site-packages via PYTHONPATH. scan.py / graph.py always
+# stay on the workspace venv (kuzu).
+_EXT_EXTRACTOR = {
+    ".pptx": "pptx",
+    ".xlsx": "openpyxl",
+    ".pdf": "pypdf",
+}
+_EXTRACTOR_MODULES = ("pptx", "openpyxl", "pypdf", "pdfplumber")
+_interpreter_module_cache: dict[tuple[str, str], bool] = {}
+
+
+def host_has_module(name: str) -> bool:
+    """True when the running Switch Bay interpreter can import ``name``."""
+    try:
+        importlib.import_module(name)
+        return True
+    except ImportError:
+        return False
+
+
+def host_extractor_info() -> dict[str, Any]:
+    """Interpreter + extractor-module evidence for ingest diagnostics."""
+    found: dict[str, str | None] = {}
+    for name in _EXTRACTOR_MODULES:
+        try:
+            mod = importlib.import_module(name)
+        except ImportError:
+            found[name] = None
+            continue
+        found[name] = getattr(mod, "__file__", None)
+    return {
+        "executable": sys.executable,
+        "version": sys.version.split()[0],
+        "modules": found,
+    }
+
+
+def _same_interpreter(py: Path | str) -> bool:
+    # Separate venvs can symlink to the same binary but have different
+    # site-packages. Only the identical invocation path is the host.
+    return os.path.normcase(os.path.abspath(py)) == os.path.normcase(
+        os.path.abspath(sys.executable)
+    )
+
+
+def interpreter_has_module(py: Path | str, module: str) -> bool:
+    """Does ``py`` import ``module``? Host is in-process; others are probed."""
+    if _same_interpreter(py):
+        return host_has_module(module)
+    key = (str(py), module)
+    cached = _interpreter_module_cache.get(key)
+    if cached is not None:
+        return cached
+    try:
+        proc = subprocess.run(
+            [str(py), "-c", f"import {module}"],
+            capture_output=True,
+            timeout=8,
+            env=_scrubbed_env(),
+        )
+        ok = proc.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        ok = False
+    _interpreter_module_cache[key] = ok
+    return ok
+
+
+def python_for_ingest(cwd: Path, ext: str = "") -> list[str]:
+    """Interpreter for one ``local_ingest.py`` file extension.
+
+    Workspace wins when it already has the extractor so a CE venv with
+    pypdf/openpyxl keeps PDF/XLSX. Host wins for python-pptx when the
+    workspace is a minimal/bare venv. Text formats follow the workspace
+    venv when present (scan/graph stay on that venv too).
+    """
+    ws_py = _workspace_venv_python(cwd)
+    need = _EXT_EXTRACTOR.get((ext or "").lower())
+    if need:
+        if ws_py is not None and interpreter_has_module(ws_py, need):
+            return [str(ws_py)]
+        if host_has_module(need) and sys.executable:
+            return [sys.executable]
+        if ws_py is not None:
+            return [str(ws_py)]
+        if sys.executable:
+            return [sys.executable]
+        return ["uv", "run", "python3"]
+    if ws_py is not None:
+        return [str(ws_py)]
+    if sys.executable:
+        return [sys.executable]
+    return ["uv", "run", "python3"]
+
+
+def _script_python(cwd: Path, *, script: str = "") -> list[str]:
     """Interpreter for a CE script run *against* a workspace.
 
-    kuzu lives in the workspace `.venv` (setup.sh). `uv run python3`
-    from the workspace cwd discovers that venv. The skill-root venv
-    (if any) does not have kuzu.
+    kuzu lives in the workspace `.venv` (setup.sh). Graph, scan, and
+    query scripts always use that interpreter. ``local_ingest.py``
+    without an extension hint prefers the workspace venv; callers that
+    know the file type pass ``python=python_for_ingest(...)``.
     """
+    name = Path(script).name if script else ""
+    if name == "local_ingest.py":
+        return python_for_ingest(cwd, "")
     py = _workspace_venv_python(cwd)
     if py is not None:
         return [str(py)]
     return ["uv", "run", "python3"]
+
+
+def script_python_for(cwd: Path, script: str, *, ext: str = "") -> list[str]:
+    """Public wrapper: interpreter argv for ``script`` in ``cwd``."""
+    if Path(script).name == "local_ingest.py":
+        return python_for_ingest(Path(cwd), ext)
+    return _script_python(Path(cwd), script=script)
 
 
 _ALLOWED_SH = frozenset({"evolve_guard.sh"})
@@ -551,6 +711,7 @@ def run_script(
     cwd: Path,
     timeout: float = 120.0,
     require_json: bool = True,
+    python: list[str] | None = None,
 ) -> dict[str, Any]:
     """Synchronously run a CE script and parse JSON from stdout.
 
@@ -577,7 +738,11 @@ def run_script(
     if not Path(cwd).is_dir():
         return {"error": f"workspace is not a directory: {cwd}"}
 
-    cmd = [*_script_python(Path(cwd)), str(script_path), *(args or [])]
+    cmd = [
+        *(python or _script_python(Path(cwd), script=script_path.name)),
+        str(script_path),
+        *(args or []),
+    ]
     try:
         proc = subprocess.run(
             cmd,

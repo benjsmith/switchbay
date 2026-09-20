@@ -267,6 +267,7 @@ def permission_request(
     tool_input: dict[str, Any], pattern: str, run_id: str | None,
     thread_id: str | None = None, origin: str | None = None,
     origin_path: str | None = None,
+    protected: bool = False,
 ) -> dict[str, Any]:
     """Inline rail dialog ask: the agent's pre-tool hook (claude-code)
     or sandbox-denial path (codex) wants to run a tool that isn't on
@@ -288,6 +289,7 @@ def permission_request(
         "thread_id": thread_id,
         "origin": origin,
         "origin_path": origin_path,
+        "protected": bool(protected),
     })
 
 

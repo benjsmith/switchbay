@@ -664,7 +664,7 @@ export default function WorkspaceSwitcher({
       {variant === "zen" ? (
         <button
           type="button"
-          className={"sy-zen-chrome sy-zen-brand-btn" + (open ? " sy-zen-brand-btn--open" : "")}
+          className={"sy-zen-chrome sy-zen-brand-btn sy-ws-trigger" + (open ? " sy-zen-brand-btn--open" : "")}
           onClick={() => setOpen((o) => !o)}
           title={
             activeIsRegistered

@@ -66,6 +66,9 @@ def public_http_target(url: str) -> tuple[str, str, int, list[str]]:
     host = (parsed.hostname or "").strip().lower()
     if not host or host in _BLOCKED_HOSTS or host.endswith(".local"):
         raise ValueError(f"blocked host: {host or raw}")
+    from . import admin_policy
+    if not admin_policy.egress_allowed(raw):
+        raise ValueError(f"blocked by admin egress policy: {raw}")
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
         infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
@@ -450,7 +453,15 @@ def fetch_to_vault(
     return out
 
 
-def _research_search(_workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+def _research_search(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import permissions
+    blocked = permissions.web_egress_block_reason(
+        workspace, "research_search", payload,
+    )
+    if blocked:
+        return {"ok": False, "error": blocked}
+    if not permissions.invocation_approved():
+        return {"ok": False, "error": "web egress denied"}
     return search_web(
         str(payload.get("query") or ""),
         source=str(payload.get("source") or "auto"),
@@ -459,6 +470,14 @@ def _research_search(_workspace: Path, payload: dict[str, Any]) -> dict[str, Any
 
 
 def _research_fetch(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import permissions
+    blocked = permissions.web_egress_block_reason(
+        workspace, "research_fetch", payload,
+    )
+    if blocked:
+        return {"ok": False, "error": blocked}
+    if not permissions.invocation_approved():
+        return {"ok": False, "error": "web egress denied"}
     url = str(payload.get("url") or "").strip()
     ingest = payload.get("ingest")
     if isinstance(ingest, str):

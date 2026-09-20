@@ -179,6 +179,34 @@ def write_mcp_activity(workspace: Path, name: str, args: dict[str, Any] | None) 
         log.debug("mcp activity write skipped", exc_info=True)
 
 
+def _request_web_approval(
+    workspace: Path, name: str, args: dict[str, Any],
+) -> str:
+    """Long-poll the daemon permission card. Fail closed on errors."""
+    import urllib.error
+    import urllib.request
+    port = os.environ.get("CSWY_DAEMON_PORT") or "8765"
+    body = json.dumps({
+        "provider": "mcp",
+        "tool": name,
+        "input": args,
+        "cwd": str(workspace),
+        "origin_thread": os.environ.get("CSWY_THREAD_ID") or "",
+    }).encode()
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/permission/request",
+            data=body,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=95) as resp:
+            payload = json.loads(resp.read().decode("utf-8") or "{}")
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, TimeoutError):
+        return "deny"
+    return str(payload.get("decision") or "deny")
+
+
 def _call_tool(workspace: Path, name: str, args: dict[str, Any]) -> dict[str, Any]:
     """Execute a registry tool and shape the result into MCP's
     content-block contract. Errors come back with isError=True so the

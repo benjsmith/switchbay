@@ -5818,6 +5818,8 @@ a.sy-source-cite { color: var(--accent); }
   z-index: 6;
 }
 .sy-rail-reset {
+  flex: 0 0 auto;
+  white-space: nowrap;
   padding: 2px 8px;
   font-size: 10.5px;
   font-weight: 500;
@@ -6051,7 +6053,7 @@ a.sy-source-cite { color: var(--accent); }
   padding: 12px 14px;
   font-size: 13px;
 }
-.sy-rail-entry { margin-bottom: 8px; line-height: 1.45; }
+.sy-rail-entry { margin-bottom: 8px; line-height: 1.45; overflow-wrap: anywhere; }
 /* No-wiki prompt: a pinned notice + a one-click button above the rail
  * input. Distinct class from .sy-rail-action-btn (the curate/rebuild
  * button row) so those keep their styling. */
@@ -6917,6 +6919,7 @@ a.sy-source-cite { color: var(--accent); }
   border-top: 1px solid var(--line);
   padding: 12px 14px 14px;
   position: relative;
+  flex: 0 0 auto;
 }
 .sy-rail-composer-meta {
   display: flex;
@@ -8200,7 +8203,17 @@ a.sy-source-cite { color: var(--accent); }
   overflow: hidden;
 }
 .sy-zen-surf-body .sy-rail-pty { height: 100%; }
-
+.sy-zen-surf-body .sy-rail,
+.sy-rail--embedded {
+  height: 100%;
+  border-left: none;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.sy-rail--embedded .sy-rail-input-wrap {
+  flex: 0 0 auto;
+}
 /* ── Zen Browser surface ───────────────────────────────────────────
  * The three browsers Power stacks in its left column, laid out as
  * equal side-by-side columns: files | wiki | sources. The pane is a
@@ -8375,7 +8388,8 @@ a.sy-source-cite { color: var(--accent); }
   top: 16px;
   left: 124px;
   height: 28px;
-  z-index: 40;
+  /* Above graph-search (z-index 70) so the brand remains clickable. */
+  z-index: 80;
   display: inline-flex;
   align-items: center;
 }

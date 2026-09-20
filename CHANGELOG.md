@@ -3,6 +3,23 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-20 — v0.12.19
+
+No wiki/vault format migration. Review Web, Comms, and watch-folder behavior changes below. After updating, run `make refresh BUILD=1` and hard-reload the PWA. No new VSIX.
+
+- **Curate:** repaired settlement, resume, expiry, and continuous package waves. Idle desks wait for new work. Content receipts preserve useful partial results; quota-related research prose no longer creates false provider failures.
+- **Desk limits:** chief-counted concurrent live-worker cap in Settings; minimum 4, default/hard maximum 8. Admin `orchestration.max_live_workers` can tighten the ceiling. Excess workers wait; completed workers leave the live DAG while findings remain available.
+- **Comms:** metadata-first review queue with explicit per-workspace approval and revocation. Relevance suggestions never auto-approve. Secret/Top Secret, and enterprise unknown/missing classifications, are refused before body retrieval. Tenant classification GUIDs are configurable. Teams/Slack remain discovery/review only; message bodies are blocked.
+- **Web/Research:** one default-off Web policy across Rail, Settings, and Zen, with per-call approvals that are never persisted. Codex native search is disabled. Auto can hire Research; workspace model allowlists remain enforced. Installed global curiosity-engine skills can be used read-only when the workspace copy is absent.
+- **Chat:** full-height docked Zen Chat with a bottom composer; floating Chat retains two columns and visible Web control. Fixed narrow-rail control overlap.
+- **Runtime/export:** launchd discovers user-managed Node/pnpm runtimes without sourcing shell profiles. Slideshow PDF export resolves executables and Playwright before spawning.
+- **Document ingestion:** PPTX can use bundled `python-pptx` when the workspace lacks it, while preserving workspace PDF/XLSX extractors. Re-import historical PPTX files whose extracts contain the old unavailable placeholder.
+- **Watch folders:** new arrivals produce deterministic vault extracts for later Curate. macOS iCloud placeholders request per-file downloads and retry while unavailable; no permanent pin or whole-tree download. Retry state, source authorization, workspace binding, and existing vault copies are protected. Other cloud providers are unsupported.
+- **CI:** added frontend Node tests, webview build, and isolated Playwright checks for Web policy, Comms, desk controls, and browser geometry.
+- Includes v0.12.17 Editor HTML extraction preview and v0.12.18 Close on vault-source tabs, previously on `main` but not yet in a published release.
+
+Cloud-state fixtures and the native download API were tested; no live iCloud placeholder was available for end-to-end verification. Comms fixture tests do not certify a real enterprise tenant. See [release notes](docs/releases/v0.12.19.md), [skill-shell parity baseline](docs/handoff/2026-09-20-skill-shell-parity.md), and [enterprise configuration](docs/enterprise.md).
+
 ## 2026-09-13 — v0.12.18
 
 **Migration:** none. **Breaking:** none. After pull, run

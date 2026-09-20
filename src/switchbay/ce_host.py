@@ -6,6 +6,7 @@ documents, with Switch Bay path/JSON constraints MCP needs.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -46,6 +47,13 @@ def _wiki_git(workspace: Path, *git_args: str, timeout: float = 60.0) -> dict[st
     return {"ok": True, "stdout": out[-2000:], "stderr": err[-800:]}
 
 
+def wiki_head(workspace: Path) -> dict[str, Any]:
+    out = _wiki_git(workspace, "rev-parse", "HEAD")
+    if not out.get("ok"):
+        return out
+    return {"ok": True, "sha": str(out.get("stdout") or "").strip(), "committed": True}
+
+
 def wiki_commit(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     msg = str(payload.get("message") or "").strip()
     if not msg:
@@ -66,6 +74,195 @@ def wiki_commit(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "committed": True, "stdout": committed.get("stdout")}
 
 
+def _file_sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    try:
+        with path.open("rb") as fh:
+            while True:
+                chunk = fh.read(65536)
+                if not chunk:
+                    break
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _tree_entries(
+    root: Path,
+    *,
+    rel_to: Path,
+    suffixes: tuple[str, ...] | None = None,
+    content_hash: bool = False,
+) -> list[tuple]:
+    out: list[tuple] = []
+    if not root.is_dir():
+        return out
+    for p in root.rglob("*"):
+        if not p.is_file():
+            continue
+        if ".git" in p.parts:
+            continue
+        if suffixes and p.suffix.lower() not in suffixes:
+            continue
+        try:
+            rel = p.relative_to(rel_to).as_posix()
+            st = p.stat()
+        except OSError:
+            continue
+        size = int(st.st_size)
+        mtime = int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))
+        if content_hash:
+            out.append((rel, size, mtime, _file_sha256(p)))
+        else:
+            out.append((rel, size, mtime))
+    out.sort()
+    return out
+
+
+def wiki_work_snapshot(workspace: Path) -> dict[str, Any]:
+    """HEAD + porcelain + wiki markdown inventory. No CE subprocess."""
+    ws = Path(workspace)
+    head = wiki_head(ws)
+    sha = str(head.get("sha") or "") if head.get("ok") else ""
+    status = _wiki_git(ws, "status", "--porcelain")
+    porcelain = str(status.get("stdout") or "") if status.get("ok") else ""
+    pages = _tree_entries(
+        ws / "wiki", rel_to=ws, suffixes=(".md",), content_hash=True,
+    )
+    return {"sha": sha, "porcelain": porcelain, "pages": pages}
+
+
+def work_availability_fingerprint(workspace: Path, *, planner: bool = False) -> str:
+    """Deterministic source/wiki/queue fingerprint for idle Curate.
+
+    File inventory only by default (cheap, no LLM, no evolve_guard).
+    ``planner=True`` adds pick-mode when a no-LLM planner check is wanted.
+    """
+    ws = Path(workspace)
+    snap = wiki_work_snapshot(ws)
+    vault = _tree_entries(ws / "vault", rel_to=ws)
+    curator_root = ws / ".curator"
+    curator: list[tuple[str, int, int]] = []
+    if curator_root.is_dir():
+        for p in curator_root.rglob("*"):
+            if not p.is_file():
+                continue
+            # Guard snapshots change on wave_prime; they are not work.
+            if p.name.startswith(".guard") or p.suffix == ".snapshot":
+                continue
+            try:
+                rel = p.relative_to(ws).as_posix()
+                st = p.stat()
+            except OSError:
+                continue
+            curator.append((rel, int(st.st_size), int(getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9)))))
+        curator.sort()
+    payload: dict[str, Any] = {
+        "sha": snap.get("sha") or "",
+        "porcelain": snap.get("porcelain") or "",
+        "pages": snap.get("pages") or [],
+        "vault": vault,
+        "curator": curator,
+    }
+    if planner:
+        mode = ""
+        queues: Any = None
+        try:
+            from . import ce_tools
+            picked = ce_tools._ce_planner(ws, {"verb": "pick-mode"})
+            if isinstance(picked, dict):
+                mode = str(picked.get("mode") or "")
+                if not mode and isinstance(picked.get("stdout"), str):
+                    try:
+                        body = json.loads(picked["stdout"])
+                        if isinstance(body, dict):
+                            mode = str(body.get("mode") or "")
+                    except json.JSONDecodeError:
+                        pass
+            scanned = ce_tools._ce_scan(ws, {"verb": "all"})
+            if isinstance(scanned, dict):
+                queues = scanned.get("queue_depths")
+        except Exception:  # noqa: BLE001
+            mode = ""
+            queues = None
+        payload["planner_mode"] = mode
+        payload["queue_depths"] = queues
+    blob = json.dumps(payload, default=str, sort_keys=True)
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _page_content_key(row: Any) -> tuple[str, Any] | None:
+    """Identity for receipt comparison: content hash, not mtime."""
+    if not isinstance(row, (list, tuple)) or not row:
+        return None
+    rel = str(row[0]).replace("\\", "/")
+    if len(row) >= 4 and row[3]:
+        return rel, ("sha", str(row[3]))
+    if len(row) >= 3:
+        return rel, ("sz", int(row[1]))
+    return rel, ()
+
+
+def wiki_diff_receipt(workspace: Path, before: dict[str, Any] | None) -> dict[str, Any]:
+    """Actual wiki page/commit *content* diff since ``before``.
+
+    mtime-only rewrites and empty commits are not productive work.
+    Same-size edits with a preserved mtime still count.
+    """
+    ws = Path(workspace)
+    after = wiki_work_snapshot(ws)
+    before = before if isinstance(before, dict) else {}
+
+    def _map(pages: Any) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for row in pages or []:
+            parsed = _page_content_key(row)
+            if parsed is None:
+                continue
+            rel, key = parsed
+            out[rel] = key
+        return out
+
+    before_pages = _map(before.get("pages"))
+    after_pages = _map(after.get("pages"))
+    changed = sorted(
+        set(after_pages) - set(before_pages)
+        | {
+            k for k in after_pages
+            if k in before_pages and after_pages[k] != before_pages[k]
+        }
+    )
+    removed = sorted(set(before_pages) - set(after_pages))
+    sha_before = str(before.get("sha") or "")
+    sha_after = str(after.get("sha") or "")
+    diff = ""
+    if sha_before and sha_after and sha_before != sha_after:
+        out = _wiki_git(ws, "diff", "--stat", sha_before, sha_after)
+        if out.get("ok"):
+            diff = str(out.get("stdout") or "")
+    if not diff and (changed or removed or (after.get("porcelain") or "") != (before.get("porcelain") or "")):
+        out = _wiki_git(ws, "diff", "--stat")
+        if out.get("ok"):
+            diff = str(out.get("stdout") or "")
+        if not diff:
+            names = _wiki_git(ws, "diff", "--name-only")
+            if names.get("ok"):
+                diff = str(names.get("stdout") or "")
+    landed = len(changed)
+    committed = bool(sha_before and sha_after and sha_before != sha_after)
+    return {
+        "wiki_head_before": sha_before,
+        "wiki_head_after": sha_after,
+        "wiki_pages_changed": changed,
+        "wiki_pages_removed": removed,
+        "wiki_commit_diff": diff[:4000],
+        "wiki_pages_landed": landed,
+        "wiki_committed": committed,
+        "wiki_snapshot": after,
+    }
+
+
 def evolve_guard(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     verb = str(payload.get("verb") or "snapshot").strip()
     if verb not in ("snapshot", "check", "hash"):
@@ -84,7 +281,8 @@ def wave_prime(workspace: Path, payload: dict[str, Any] | None = None) -> dict[s
 
     payload = payload or {}
     wanted = str(payload.get("mode") or payload.get("wave_mode") or "").strip().lower()
-    override = CURATE_MODE_ALIASES.get(wanted, wanted if wanted else "")
+    # Unknown tokens are briefs ("for 10 mins"), not pick-mode names.
+    override = CURATE_MODE_ALIASES.get(wanted, "")
     steps: dict[str, Any] = {}
     steps["guard"] = evolve_guard(workspace, {"verb": "snapshot"})
     try:

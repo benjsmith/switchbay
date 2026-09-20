@@ -56,10 +56,13 @@ def test_grok_hookless_disallows_web_search():
     assert "web_search" not in hard
 
 
-def test_codex_disables_web_search_until_sentinel(tmp_path: Path):
+def test_codex_native_search_stays_disabled(tmp_path: Path):
     argv = openai_codex.web_search_overrides(tmp_path)
-    assert argv == ["-c", "tools.web_search=false"]
+    assert 'web_search="disabled"' in argv
+    assert "tools.web_search=false" in argv
     permissions.add_pattern(tmp_path, permissions.CODEX_WEB_SEARCH_SENTINEL)
-    assert openai_codex.web_search_overrides(tmp_path) == [
-        "-c", "tools.web_search=true",
-    ]
+    argv2 = openai_codex.web_search_overrides(tmp_path)
+    assert 'web_search="disabled"' in argv2
+    assert "tools.web_search=false" in argv2
+    assert "tools.web_search=true" not in argv2
+    assert 'web_search="live"' not in argv2

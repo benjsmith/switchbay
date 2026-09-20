@@ -68,12 +68,13 @@ def _install_bundled_skills() -> None:
     """Install our first-party skills into ~/.claude/skills via
     `npx skills add <ref>`. Best-effort + non-fatal: warns (doesn't
     fail the service install) if npx/network is unavailable."""
-    from . import admin_policy
+    from . import admin_policy, runtime
     if not admin_policy.feature_enabled("install_skills_npx"):
         print("  bundled skills: SKIPPED (admin policy install_skills_npx=false)")
         return
-    uvx = shutil.which("uvx")
-    npx = shutil.which("npx")
+    path = runtime.spawn_env().get("PATH")
+    uvx = shutil.which("uvx", path=path)
+    npx = shutil.which("npx", path=path)
     if not uvx and not npx:
         print("  bundled skills: SKIPPED (npx/uvx not found). Install Node or uv, then:")
         for ref in BUNDLED_SKILLS:
@@ -92,6 +93,7 @@ def _install_bundled_skills() -> None:
             r = subprocess.run(
                 argv,
                 capture_output=True, text=True, timeout=180,
+                env=runtime.spawn_env(),
             )
             if r.returncode == 0:
                 print(f"  bundled skill installed: {ref}")
@@ -145,6 +147,14 @@ def _xml_text(s: str) -> str:
     )
 
 
+def _systemd_env_line(key: str, value: str) -> str:
+    """Serialize one systemd Environment= assignment, quoting if needed."""
+    if any(ch in value for ch in (' ', '\t', '"', "\\")):
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'Environment={key}="{escaped}"'
+    return f"Environment={key}={value}"
+
+
 def _service_environment(repo: Path) -> dict[str, str]:
     env = {
         "PYTHONPATH": str(repo / "src"),
@@ -154,6 +164,8 @@ def _service_environment(repo: Path) -> dict[str, str]:
     profile = _stamped_profile(repo)
     if profile:
         env["SWITCHBAY_PROFILE"] = profile
+    from . import runtime
+    env.update(runtime.service_runtime_exports())
     return env
 
 
@@ -232,7 +244,8 @@ def _mac_write_plist(repo: Path) -> Path:
     p = _mac_plist_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     env = _service_environment(repo)
-    env["PATH"] = f"/usr/bin:/bin:/usr/sbin:/sbin:{Path.home() / '.local' / 'bin'}"
+    # PATH comes from _service_environment: bootstrap bins plus the
+    # allowlisted/resolved runtime dirs. Do not overwrite those keys.
     env_xml = "\n".join(
         f"    <key>{_xml_text(k)}</key><string>{_xml_text(v)}</string>"
         for k, v in env.items()
@@ -371,7 +384,7 @@ def _linux(action: str, repo: Path) -> int:
         u = _linux_unit_path()
         u.parent.mkdir(parents=True, exist_ok=True)
         env_lines = "\n".join(
-            f"Environment={k}={v}" for k, v in _service_environment(repo).items()
+            _systemd_env_line(k, v) for k, v in _service_environment(repo).items()
         )
         u.write_text(
             f"""[Unit]
