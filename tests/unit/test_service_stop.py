@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 from switchbay import admin_policy, service
 
@@ -69,6 +70,8 @@ def test_launchd_preserves_custom_runtime_configuration(tmp_path, monkeypatch):
     from pathlib import Path
 
     def executable(path: Path) -> Path:
+        if os.name == "nt" and path.suffix == "":
+            path = path.with_suffix(".exe")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
@@ -80,19 +83,19 @@ def test_launchd_preserves_custom_runtime_configuration(tmp_path, monkeypatch):
     monkeypatch.setenv("NVM_BIN", str(node.parent))
     monkeypatch.setenv("PNPM_HOME", str(pnpm.parent))
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(("/usr/bin", "/bin")))
     plist = tmp_path / "daemon.plist"
     monkeypatch.setattr(service, "_mac_plist_path", lambda: plist)
     monkeypatch.setattr(service, "_venv_python", lambda repo: py)
     service._mac_write_plist(tmp_path / "repo")
     env = plistlib.loads(plist.read_bytes())["EnvironmentVariables"]
-    assert env.get("NVM_BIN") == str(node.parent) or str(node.parent) in env.get("PATH", "").split(":"), (
+    assert env.get("NVM_BIN") == str(node.parent) or str(node.parent) in env.get("PATH", "").split(os.pathsep), (
         "launchd loses custom Node runtime"
     )
-    assert env.get("PNPM_HOME") == str(pnpm.parent) or str(pnpm.parent) in env.get("PATH", "").split(":"), (
+    assert env.get("PNPM_HOME") == str(pnpm.parent) or str(pnpm.parent) in env.get("PATH", "").split(os.pathsep), (
         "launchd loses custom pnpm runtime"
     )
-    path_parts = env.get("PATH", "").split(":")
+    path_parts = env.get("PATH", "").split(os.pathsep)
     assert env["NVM_BIN"] == str(node.parent)
     assert env["PNPM_HOME"] == str(pnpm.parent)
     assert path_parts[:4] == ["/usr/bin", "/bin", "/usr/sbin", "/sbin"]
@@ -106,6 +109,8 @@ def test_systemd_unit_quotes_runtime_dirs_with_spaces(tmp_path, monkeypatch):
     from pathlib import Path
 
     def executable(path: Path) -> Path:
+        if os.name == "nt" and path.suffix == "":
+            path = path.with_suffix(".exe")
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         path.chmod(0o755)
@@ -117,7 +122,7 @@ def test_systemd_unit_quotes_runtime_dirs_with_spaces(tmp_path, monkeypatch):
     monkeypatch.setenv("NVM_BIN", str(node.parent))
     monkeypatch.setenv("PNPM_HOME", str(pnpm.parent))
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(("/usr/bin", "/bin")))
     unit = tmp_path / "switchbay.service"
     monkeypatch.setattr(service, "_linux_unit_path", lambda: unit)
     monkeypatch.setattr(service, "_venv_python", lambda repo: py)
@@ -126,11 +131,25 @@ def test_systemd_unit_quotes_runtime_dirs_with_spaces(tmp_path, monkeypatch):
     monkeypatch.setattr(service.subprocess, "run", lambda *a, **k: type("R", (), {"returncode": 0})())
     service._linux("install", tmp_path / "repo")
     text = unit.read_text(encoding="utf-8")
-    assert f'Environment=NVM_BIN="{node.parent}"' in text
-    assert f'Environment=PNPM_HOME="{pnpm.parent}"' in text
-    assert "Environment=PATH=" in text
-    assert str(node.parent) in text
-    assert "/usr/bin:/bin:/usr/sbin:/sbin" in text
+
+    def _quoted_env(key: str, value: str) -> str:
+        # systemd Environment=: quote values with whitespace / \ / ".
+        # Independent of service._systemd_env_line so a broken serializer fails.
+        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+        return f'Environment={key}="{escaped}"'
+
+    nvm = str(node.parent)
+    pnpm = str(pnpm.parent)
+    assert " " in nvm and " " in pnpm
+    assert _quoted_env("NVM_BIN", nvm) in text
+    assert _quoted_env("PNPM_HOME", pnpm) in text
+    from switchbay import runtime as rt
+    path_val = rt.service_runtime_exports()["PATH"]
+    assert " " in path_val
+    assert _quoted_env("PATH", path_val) in text
+    bootstrap = os.pathsep.join(("/usr/bin", "/bin", "/usr/sbin", "/sbin"))
+    assert bootstrap in text
+    assert "custom runtime" in text
 
 
 def test_mac_plist_stdio_is_devnull(tmp_path, monkeypatch):

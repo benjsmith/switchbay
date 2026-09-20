@@ -38,15 +38,32 @@ def home_dir(
     return Path.home()
 
 
+def _windows_pathext() -> tuple[str, ...]:
+    """PATHEXT suffixes in search order. Windows-only helper."""
+    raw = os.environ.get("PATHEXT") or ".COM;.EXE;.BAT;.CMD"
+    out: list[str] = []
+    seen: set[str] = set()
+    for ext in raw.split(os.pathsep):
+        item = ext.strip().lower()
+        if not item or item in seen:
+            continue
+        seen.add(item)
+        out.append(item)
+    return tuple(out)
+
+
 def is_executable(path: Path | str) -> bool:
     """True when ``path`` is a file the process can execute.
 
     Follows a symlink to the target. Directories, missing paths, and
-    non-executable files are rejected.
+    non-executable files are rejected. Windows has no POSIX execute
+    bit — the suffix must be listed in ``PATHEXT``.
     """
     try:
         p = Path(path)
         if not p.is_file():
+            return False
+        if os.name == "nt" and p.suffix.lower() not in _windows_pathext():
             return False
         return os.access(p, os.X_OK)
     except OSError:
@@ -367,9 +384,16 @@ def resolve_executable(
         environ=enriched,
         extra_dirs=tuple(extra_dirs),
     ):
+        # Search this directory only. shutil.which(path=d) prepends cwd
+        # on Windows, so enumerate PATHEXT suffixes here instead.
         cand = Path(d) / name
         if is_executable(cand):
             return str(cand)
+        if os.name == "nt" and not Path(name).suffix:
+            for ext in _windows_pathext():
+                cand_ext = Path(d) / f"{name}{ext}"
+                if is_executable(cand_ext):
+                    return str(cand_ext)
     return None
 
 

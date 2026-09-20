@@ -106,7 +106,7 @@ def _tree_entries(
         if suffixes and p.suffix.lower() not in suffixes:
             continue
         try:
-            rel = str(p.relative_to(rel_to))
+            rel = p.relative_to(rel_to).as_posix()
             st = p.stat()
         except OSError:
             continue
@@ -152,7 +152,7 @@ def work_availability_fingerprint(workspace: Path, *, planner: bool = False) -> 
             if p.name.startswith(".guard") or p.suffix == ".snapshot":
                 continue
             try:
-                rel = str(p.relative_to(ws))
+                rel = p.relative_to(ws).as_posix()
                 st = p.stat()
             except OSError:
                 continue
@@ -196,7 +196,7 @@ def _page_content_key(row: Any) -> tuple[str, Any] | None:
     """Identity for receipt comparison: content hash, not mtime."""
     if not isinstance(row, (list, tuple)) or not row:
         return None
-    rel = str(row[0])
+    rel = str(row[0]).replace("\\", "/")
     if len(row) >= 4 and row[3]:
         return rel, ("sha", str(row[3]))
     if len(row) >= 3:

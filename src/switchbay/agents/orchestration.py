@@ -3458,6 +3458,15 @@ def _bind_wave_instructions(plan: OrchestrationPlan, note: str) -> None:
     plan.extra_system = (base + ("\n\n" + note if note else "")).strip()
 
 
+def _posix_receipt_path(rel: Any) -> str:
+    """Workspace-relative receipt paths are POSIX, including on Windows."""
+    return str(rel or "").replace("\\", "/")
+
+
+def _posix_receipt_paths(paths: Any) -> list[str]:
+    return [_posix_receipt_path(p) for p in (paths or []) if str(p or "").strip()]
+
+
 def _receipt_had_work(rec: Any) -> bool:
     """True when wiki/report *content* changed — not SHA/mtime/tool counts."""
     if not isinstance(rec, dict):
@@ -3492,8 +3501,8 @@ def _apply_work_receipt(
         return rec
     rec["wiki_head_before"] = receipt.get("wiki_head_before") or ""
     rec["wiki_head_after"] = receipt.get("wiki_head_after") or ""
-    rec["wiki_pages_changed"] = list(receipt.get("wiki_pages_changed") or [])
-    rec["wiki_pages_removed"] = list(receipt.get("wiki_pages_removed") or [])
+    rec["wiki_pages_changed"] = _posix_receipt_paths(receipt.get("wiki_pages_changed"))
+    rec["wiki_pages_removed"] = _posix_receipt_paths(receipt.get("wiki_pages_removed"))
     rec["wiki_commit_diff"] = str(receipt.get("wiki_commit_diff") or "")
     rec["wiki_committed"] = bool(receipt.get("wiki_committed"))
     rec["wiki_pages_landed"] = int(receipt.get("wiki_pages_landed") or 0)

@@ -197,7 +197,35 @@ def test_watch_handoff_runs_real_pptx_extract(tmp_path: Path, monkeypatch: pytes
     assert picked2 == []
 
 
+# Optional developer venv with real openpyxl/pypdf. Clean CI does not
+# have this path; capability-selection builds a stub venv instead.
 FORMAT_VENV = Path("/tmp/switchbay-format-regression/.venv")
+
+
+def _venv_python(venv: Path) -> Path | None:
+    for rel in (
+        Path("bin") / "python",
+        Path("bin") / "python3",
+        Path("Scripts") / "python.exe",
+    ):
+        p = venv / rel
+        if p.is_file():
+            return p
+    return None
+
+
+def _purelib_of(py: Path) -> Path:
+    probe = subprocess.run(
+        [str(py), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    lines = [ln.strip() for ln in probe.stdout.splitlines() if ln.strip()]
+    assert lines, probe.stdout
+    path = Path(lines[-1])
+    assert path.is_dir(), (path, probe.stdout, probe.stderr)
+    return path
 
 
 def _write_xlsx(path: Path, py: Path) -> None:
@@ -245,10 +273,35 @@ def _write_text_pdf(path: Path) -> None:
 
 
 def test_xlsx_pdf_prefer_workspace_venv_that_has_extractors(tmp_path: Path):
-    assert (FORMAT_VENV / "bin" / "python").is_file(), FORMAT_VENV
+    """Capability selection: workspace wins for PDF/XLSX when it can import.
+
+    Builds a bare temp venv, drops importable pypdf/openpyxl stubs in its
+    own purelib, leaves pptx absent. Probes the real interpreter — no
+    extraction, no network, no developer-machine venv path.
+    """
     ws = _workspace(tmp_path)
-    (ws / ".venv").symlink_to(FORMAT_VENV, target_is_directory=True)
-    ws_py = str(ws / ".venv" / "bin" / "python")
+    venv = ws / ".venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(venv)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    venv_py = _venv_python(venv)
+    assert venv_py is not None, venv
+    purelib = _purelib_of(venv_py)
+    (purelib / "pypdf.py").write_text(
+        "# capability-selection stub\n", encoding="utf-8",
+    )
+    (purelib / "openpyxl.py").write_text(
+        "# capability-selection stub\n", encoding="utf-8",
+    )
+    assert not (purelib / "pptx.py").exists()
+    assert not (purelib / "pptx").exists()
+    assert cebridge.interpreter_has_module(venv_py, "pypdf")
+    assert cebridge.interpreter_has_module(venv_py, "openpyxl")
+    assert not cebridge.interpreter_has_module(venv_py, "pptx")
+    ws_py = str(venv_py)
     assert cebridge.python_for_ingest(ws, ".xlsx") == [ws_py]
     assert cebridge.python_for_ingest(ws, ".pdf") == [ws_py]
     assert cebridge.python_for_ingest(ws, ".pptx") == [sys.executable]
@@ -258,11 +311,16 @@ def test_xlsx_pdf_prefer_workspace_venv_that_has_extractors(tmp_path: Path):
 
 def test_real_xlsx_pdf_and_mixed_directory_ingest(tmp_path: Path):
     _require_ce()
-    assert (FORMAT_VENV / "bin" / "python").is_file(), FORMAT_VENV
+    fmt_py = _venv_python(FORMAT_VENV)
+    if fmt_py is None:
+        pytest.skip("optional format extractor venv unavailable")
     ws = _workspace(tmp_path)
-    (ws / ".venv").symlink_to(FORMAT_VENV, target_is_directory=True)
+    try:
+        (ws / ".venv").symlink_to(FORMAT_VENV, target_is_directory=True)
+    except OSError:
+        pytest.skip("cannot link format extractor venv")
     raw = ws / "vault" / "raw"
-    _write_xlsx(raw / "probe.xlsx", FORMAT_VENV / "bin" / "python")
+    _write_xlsx(raw / "probe.xlsx", fmt_py)
     _write_text_pdf(raw / "probe.pdf")
     _write_pptx(raw / "probe.pptx")
     (raw / "note.txt").write_text("TXT-MIX-MARKER-9f3c2a17\n", encoding="utf-8")

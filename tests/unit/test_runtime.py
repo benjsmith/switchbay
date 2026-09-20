@@ -7,8 +7,12 @@ from pathlib import Path
 
 from switchbay import runtime
 
+_MINIMAL_PATH = os.pathsep.join(("/usr/bin", "/bin"))
+
 
 def _exe(path: Path, body: str = "#!/bin/sh\nexit 0\n") -> Path:
+    if os.name == "nt" and path.suffix == "":
+        path = path.with_suffix(".exe")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
     path.chmod(0o755)
@@ -23,7 +27,7 @@ def test_minimal_launchd_path_finds_nvm_node(tmp_path: Path, monkeypatch):
     (home / ".nvm" / "alias" / "default").write_text("22.11.0\n", encoding="utf-8")
     monkeypatch.setattr(runtime, "_SYSTEM_BIN_DIRS", ())
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": _MINIMAL_PATH,
         "HOME": str(home),
         "NVM_DIR": str(home / ".nvm"),
     }
@@ -44,13 +48,18 @@ def test_nvm_major_partial_and_lts_star(tmp_path: Path, monkeypatch):
     _exe(home / ".nvm" / "versions" / "node" / "v22.11.0" / "bin" / "node")
     alias = home / ".nvm" / "alias"
     alias.mkdir(parents=True)
-    (alias / "default").write_text("lts/*\n", encoding="utf-8")
     (alias / "lts").mkdir()
-    (alias / "lts" / "*").write_text("iron\n", encoding="utf-8")
     (alias / "lts" / "iron").write_text("22\n", encoding="utf-8")
+    # nvm's current-LTS pointer is a file named '*'; Windows rejects that name.
+    try:
+        (alias / "lts" / "*").write_text("iron\n", encoding="utf-8")
+    except OSError:
+        (alias / "default").write_text("iron\n", encoding="utf-8")
+    else:
+        (alias / "default").write_text("lts/*\n", encoding="utf-8")
     monkeypatch.setattr(runtime, "_SYSTEM_BIN_DIRS", ())
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": _MINIMAL_PATH,
         "HOME": str(home),
         "NVM_DIR": str(home / ".nvm"),
     }
@@ -74,7 +83,7 @@ def test_missing_node_isolates_homebrew(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runtime, "_nvm_bin_dirs", lambda **kw: [])
     monkeypatch.setattr(runtime, "_version_manager_dirs", lambda **kw: [])
     assert runtime.resolve_node(
-        {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}, home=tmp_path,
+        {"PATH": _MINIMAL_PATH, "HOME": str(tmp_path)}, home=tmp_path,
     ) is None
 
 
@@ -85,7 +94,7 @@ def test_explicit_node_survives_reenrich_and_governs_env_node(tmp_path: Path, mo
     monkeypatch.setattr(runtime, "_nvm_bin_dirs", lambda **kw: [])
     monkeypatch.setattr(runtime, "_version_manager_dirs", lambda **kw: [])
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": _MINIMAL_PATH,
         "SWITCHBAY_NODE": str(chosen),
         "HOME": str(tmp_path),
     }
@@ -102,7 +111,7 @@ def test_nvm_bin_env_wins_over_default_alias(tmp_path: Path):
     active = _exe(tmp_path / "active" / "node")
     other = _exe(home / ".nvm" / "versions" / "node" / "v20.0.0" / "bin" / "node")
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": _MINIMAL_PATH,
         "HOME": str(home),
         "NVM_BIN": str(active.parent),
         "NVM_DIR": str(home / ".nvm"),
@@ -116,7 +125,7 @@ def test_explicit_node_env_wins(tmp_path: Path):
     chosen = _exe(tmp_path / "custom dir" / "node")
     decoy = _exe(tmp_path / "opt" / "homebrew" / "bin" / "node")
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": _MINIMAL_PATH,
         "SWITCHBAY_NODE": str(chosen),
         "HOME": str(tmp_path),
     }
@@ -127,7 +136,7 @@ def test_explicit_node_env_wins(tmp_path: Path):
 def test_spaces_in_home_and_runtime_dir(tmp_path: Path):
     home = tmp_path / "User Name"
     volta = _exe(home / ".volta" / "bin" / "node")
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "VOLTA_HOME": str(home / ".volta")}
+    env = {"PATH": _MINIMAL_PATH, "HOME": str(home), "VOLTA_HOME": str(home / ".volta")}
     found = runtime.resolve_node(env, home=home)
     assert found == str(volta)
 
@@ -135,10 +144,10 @@ def test_spaces_in_home_and_runtime_dir(tmp_path: Path):
 def test_pnpm_home_and_missing_non_executable(tmp_path: Path):
     home = tmp_path / "home"
     pnpm = _exe(home / "Library" / "pnpm" / "pnpm")
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(home), "PNPM_HOME": str(pnpm.parent)}
+    env = {"PATH": _MINIMAL_PATH, "HOME": str(home), "PNPM_HOME": str(pnpm.parent)}
     assert runtime.resolve_pnpm(env, home=home) == str(pnpm)
     missing = runtime.resolve_executable(
-        "no-such-bin-xyz-switchbay", {"PATH": "/usr/bin:/bin"}, home=home,
+        "no-such-bin-xyz-switchbay", {"PATH": _MINIMAL_PATH}, home=home,
     )
     assert missing is None
     not_exec = tmp_path / "bin" / "not-a-node"
@@ -157,7 +166,7 @@ def test_pnpm_home_and_missing_non_executable(tmp_path: Path):
 def test_enrich_env_existing_path_beats_fallback(tmp_path: Path):
     extra = tmp_path / "opt" / "homebrew" / "bin"
     extra.mkdir(parents=True)
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    env = {"PATH": _MINIMAL_PATH, "HOME": str(tmp_path)}
     out = runtime.enrich_env(env, extra_dirs=(str(extra),), home=tmp_path)
     parts = out["PATH"].split(os.pathsep)
     assert parts[0] == "/usr/bin"
@@ -170,7 +179,7 @@ def test_enrich_env_prepend_wins_over_path(tmp_path: Path):
     extra.mkdir(parents=True)
     chosen = tmp_path / "chosen"
     chosen.mkdir()
-    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}
+    env = {"PATH": _MINIMAL_PATH, "HOME": str(tmp_path)}
     out = runtime.enrich_env(
         env, extra_dirs=(str(extra),), prepend=(str(chosen),), home=tmp_path,
     )
@@ -183,7 +192,7 @@ def test_enrich_env_prepend_wins_over_path(tmp_path: Path):
 def test_updater_child_env_uses_runtime(tmp_path: Path, monkeypatch):
     from switchbay import updater
     monkeypatch.setenv("HOME", str(tmp_path))
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", _MINIMAL_PATH)
     env = updater.child_env()
     assert "/usr/bin" in env["PATH"]
     assert env["GIT_TERMINAL_PROMPT"] == "0"
@@ -197,7 +206,7 @@ def test_service_runtime_exports_custom_dirs_and_spaces(tmp_path: Path, monkeypa
     monkeypatch.setattr(runtime, "_nvm_bin_dirs", lambda **kw: [])
     monkeypatch.setattr(runtime, "_version_manager_dirs", lambda **kw: [])
     env = {
-        "PATH": "/usr/bin:/bin",
+        "PATH": _MINIMAL_PATH,
         "HOME": str(tmp_path),
         "NVM_BIN": str(node.parent),
         "PNPM_HOME": str(pnpm.parent),

@@ -3,7 +3,7 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
-## 2026-09-18 — v0.12.19
+## 2026-09-20 — v0.12.19
 
 No wiki/vault format migration. Review Web, Comms, and watch-folder behavior changes below. After updating, run `make refresh BUILD=1` and hard-reload the PWA. No new VSIX.
 
@@ -18,7 +18,7 @@ No wiki/vault format migration. Review Web, Comms, and watch-folder behavior cha
 - **CI:** added frontend Node tests, webview build, and isolated Playwright checks for Web policy, Comms, desk controls, and browser geometry.
 - Includes v0.12.17 Editor HTML extraction preview and v0.12.18 Close on vault-source tabs, previously on `main` but not yet in a published release.
 
-Cloud-state fixtures and the native download API were tested; no live iCloud placeholder was available for end-to-end verification. Comms fixture tests do not certify a real enterprise tenant. See [release notes](docs/releases/v0.12.19.md) and [enterprise configuration](docs/enterprise.md).
+Cloud-state fixtures and the native download API were tested; no live iCloud placeholder was available for end-to-end verification. Comms fixture tests do not certify a real enterprise tenant. See [release notes](docs/releases/v0.12.19.md), [skill-shell parity baseline](docs/handoff/2026-09-20-skill-shell-parity.md), and [enterprise configuration](docs/enterprise.md).
 
 ## 2026-09-13 — v0.12.18
 

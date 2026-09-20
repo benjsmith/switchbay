@@ -308,13 +308,57 @@ async def test_noop_curate_deadline_stops_idle_wait(tmp_path: Path, monkeypatch)
     monkeypatch.setattr(orch, "_apply_work_receipt", lambda rec, *a, **k: rec)
     seats.reset_for_tests()
     oid = "run-idle-deadline"
-    plan = _curate_plan(oid, until=time.time() + 0.4)
+    # Deadline checks in execute() use time.time(); asyncio waits use
+    # time.monotonic. Replace orch.time with a local namespace so the
+    # process-global time module stays untouched. Freeze wall time so
+    # CI startup cannot consume the 0.4s window, then expire after
+    # idle wait starts.
+    origin = time.time()
+    clock = {"now": origin}
+
+    class _OrchTime:
+        def time(self) -> float:
+            return clock["now"]
+
+        def __getattr__(self, name: str):
+            return getattr(time, name)
+
+    monkeypatch.setattr(orch, "time", _OrchTime())
+    plan = _curate_plan(oid, until=origin + 0.4)
     app = _app()
     app["runs"][oid] = {"run_id": oid, "status": "running", "started_at": 0}
-    result = await asyncio.wait_for(orch.execute(
+    task = asyncio.create_task(orch.execute(
         plan, app=app, workspace=tmp_path, thread_id="th",
         parent_run_id=oid, default_provider=ProductiveFake(), default_model="fake",
-    ), timeout=5)
+    ))
+
+    async def _until_idle() -> None:
+        while True:
+            rec = app["runs"][oid]
+            if calls["n"] >= 1 and rec.get("orchestration_stage") == "waiting_work":
+                return
+            if task.done():
+                exc = task.exception()
+                if exc is not None:
+                    raise exc
+                raise AssertionError(
+                    "execute finished before idle wait: "
+                    f"calls={calls['n']} stage={rec.get('orchestration_stage')} "
+                    f"telemetry={task.result().telemetry}"
+                )
+            await asyncio.sleep(0.01)
+
+    try:
+        await asyncio.wait_for(_until_idle(), timeout=5)
+        clock["now"] = origin + 1.0
+        result = await asyncio.wait_for(task, timeout=5)
+    finally:
+        if not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
     assert result.telemetry.get("stop_reason") == "curate window ended"
     assert calls["n"] >= 1
     assert calls["n"] <= 4, calls["n"]
