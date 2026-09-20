@@ -19,6 +19,13 @@ def _exe(path: Path, body: str = "#!/bin/sh\nexit 0\n") -> Path:
     return path
 
 
+def _assert_exe(actual: str | None, expected: Path) -> None:
+    # shutil.which may return node.EXE (PATHEXT) vs fixture node.exe; Path
+    # equality is case-folded on Windows and exact on POSIX.
+    assert actual is not None
+    assert Path(actual) == expected
+
+
 def test_minimal_launchd_path_finds_nvm_node(tmp_path: Path, monkeypatch):
     home = tmp_path / "home"
     nvm_bin = home / ".nvm" / "versions" / "node" / "v22.11.0" / "bin"
@@ -32,7 +39,7 @@ def test_minimal_launchd_path_finds_nvm_node(tmp_path: Path, monkeypatch):
         "NVM_DIR": str(home / ".nvm"),
     }
     found = runtime.resolve_node(env, home=home)
-    assert found == str(node)
+    _assert_exe(found, node)
 
 
 def test_empty_nvm_alias_does_not_crash(tmp_path: Path):
@@ -64,7 +71,7 @@ def test_nvm_major_partial_and_lts_star(tmp_path: Path, monkeypatch):
         "NVM_DIR": str(home / ".nvm"),
     }
     found = runtime.resolve_node(env, home=home)
-    assert found == str(v22)
+    _assert_exe(found, v22)
 
 
 def test_selected_path_precedes_fallback(tmp_path: Path, monkeypatch):
@@ -73,9 +80,10 @@ def test_selected_path_precedes_fallback(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(runtime, "_SYSTEM_BIN_DIRS", (str(fallback.parent),))
     monkeypatch.setattr(runtime, "_nvm_bin_dirs", lambda **kw: [])
     monkeypatch.setattr(runtime, "_version_manager_dirs", lambda **kw: [])
-    assert runtime.resolve_node(
-        {"PATH": str(chosen.parent)}, home=tmp_path,
-    ) == str(chosen)
+    _assert_exe(
+        runtime.resolve_node({"PATH": str(chosen.parent)}, home=tmp_path),
+        chosen,
+    )
 
 
 def test_missing_node_isolates_homebrew(tmp_path: Path, monkeypatch):
@@ -101,9 +109,9 @@ def test_explicit_node_survives_reenrich_and_governs_env_node(tmp_path: Path, mo
     spawned = runtime.spawn_env(env, home=tmp_path)
     parts = spawned["PATH"].split(os.pathsep)
     assert parts[0] == str(chosen.parent)
-    assert runtime.resolve_node(spawned, home=tmp_path) == str(chosen)
+    _assert_exe(runtime.resolve_node(spawned, home=tmp_path), chosen)
     again = runtime.enrich_env(spawned, home=tmp_path)
-    assert runtime.resolve_node(again, home=tmp_path) == str(chosen)
+    _assert_exe(runtime.resolve_node(again, home=tmp_path), chosen)
 
 
 def test_nvm_bin_env_wins_over_default_alias(tmp_path: Path):
@@ -117,8 +125,8 @@ def test_nvm_bin_env_wins_over_default_alias(tmp_path: Path):
         "NVM_DIR": str(home / ".nvm"),
     }
     found = runtime.resolve_node(env, home=home)
-    assert found == str(active)
-    assert found != str(other)
+    _assert_exe(found, active)
+    assert Path(found) != other
 
 
 def test_explicit_node_env_wins(tmp_path: Path):
@@ -130,7 +138,7 @@ def test_explicit_node_env_wins(tmp_path: Path):
         "HOME": str(tmp_path),
     }
     found = runtime.resolve_node(env, home=tmp_path, extra_dirs=(str(decoy.parent),))
-    assert found == str(chosen)
+    _assert_exe(found, chosen)
 
 
 def test_spaces_in_home_and_runtime_dir(tmp_path: Path):
@@ -138,14 +146,14 @@ def test_spaces_in_home_and_runtime_dir(tmp_path: Path):
     volta = _exe(home / ".volta" / "bin" / "node")
     env = {"PATH": _MINIMAL_PATH, "HOME": str(home), "VOLTA_HOME": str(home / ".volta")}
     found = runtime.resolve_node(env, home=home)
-    assert found == str(volta)
+    _assert_exe(found, volta)
 
 
 def test_pnpm_home_and_missing_non_executable(tmp_path: Path):
     home = tmp_path / "home"
     pnpm = _exe(home / "Library" / "pnpm" / "pnpm")
     env = {"PATH": _MINIMAL_PATH, "HOME": str(home), "PNPM_HOME": str(pnpm.parent)}
-    assert runtime.resolve_pnpm(env, home=home) == str(pnpm)
+    _assert_exe(runtime.resolve_pnpm(env, home=home), pnpm)
     missing = runtime.resolve_executable(
         "no-such-bin-xyz-switchbay", {"PATH": _MINIMAL_PATH}, home=home,
     )
