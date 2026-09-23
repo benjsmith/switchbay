@@ -819,6 +819,10 @@ _PALETTE_OVERRIDE: dict[str, str] = {
     "notes":           "#6f4070",
     "todo":            "#9656a2",  # lighter purple
     "todo-list":       "#9656a2",
+    "procedure":       "#5e4fa2",  # indigo — CE how-to hubs
+    "procedures":      "#5e4fa2",
+    "execution":       "#c51b8a",  # pink-magenta — dated instances
+    "executions":      "#c51b8a",
     "unclassified":    "#ffffff",  # white + black stroke via graph.js
 }
 
@@ -847,6 +851,8 @@ _PREFIX_TO_TYPE: dict[str, str] = {
     "note": "note",
     "todo": "todo",
     "proj": "project",
+    "proc": "procedure",
+    "exec": "execution",
     # Decks scaffolded by switchbay's → Slides path. CE doesn't
     # ship a `deck` type; render them as `analysis` so the existing
     # palette / sidebar bucket picks them up. The `[deck]` title
@@ -964,6 +970,7 @@ def resync_types_from_disk(workspace: Path, data: dict) -> int:
             "tables": "table", "sources": "source",
             "notes": "note", "todo": "todo-list",
             "todos": "todo-list",
+            "procedures": "procedure", "executions": "execution",
             "extracted-table": "table",
             "extracted_table": "table",
         }.get(type_line, type_line)
