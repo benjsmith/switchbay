@@ -477,18 +477,16 @@ async def handle_graph_data(request: web.Request) -> web.Response:
       1. In-memory cache from a previous build / read in this
          daemon process (`app["graph_data_per_ws"]`).
       2. On-disk data.json from a *previous* viewer.sh build —
-         possibly stale, but loads in milliseconds.
+         possibly stale, but loads in milliseconds (json only —
+         no wiki FS walks on the request path).
       3. Synchronous viewer.sh build — only when neither cache hit.
 
-    Whenever we serve a stale (1 or 2) result we kick an
-    `asyncio.create_task` rebuild that refreshes the in-memory cache
-    and broadcasts `files_changed` so the frontend re-fetches the
-    fresh data. The user sees the graph immediately on workspace
-    switch and the freshness comes in seconds later.
-
-    Per-workspace caching means switching back to a previously-
-    visited workspace also returns instantly — the daemon process
-    keeps each one's data.json in memory.
+    Disk-truth enrichment (resync types / inject decks / inject
+    on-disk pages) and the heavier kuzu+viewer rebuild both run
+    in background tasks. Progress is broadcast as ``graph_progress``;
+    when enrich finishes the cache is updated and ``files_changed``
+    tells the frontend to re-fetch. Large vaults (tens of thousands
+    of pages) must never wedge the PWA on first paint.
     """
     # Optional `?workspace=<abs-path>` arg lets the client warm
     # another workspace's cache without changing app["workspace"].
@@ -505,36 +503,51 @@ async def handle_graph_data(request: web.Request) -> web.Response:
     ws_key = str(workspace.resolve())
     cache: dict[str, dict] = request.app.setdefault("graph_data_per_ws", {})
     cached = cache.get(ws_key)
+    enriched: set[str] = request.app.setdefault("graph_enriched_ws", set())
+    served_from_disk = False
     if cached is None:
-        # Try the on-disk cache before going to the slow build path.
-        # read_cached reads data.json AND resyncs types by rglob-ing
-        # the wiki — that walk blocks the loop on a large vault, so
-        # it goes off-thread. This is the hot workspace-switch path.
-        cached = await asyncio.to_thread(cebridge.read_cached, workspace)
+        # Hot path: json.load only. enrich=False — FS walks are minutes
+        # on a 29k-page vault and must not block the response.
+        await _broadcast(request.app, protocol.graph_progress(
+            "cache", "Loading graph from cache…", workspace=ws_key,
+        ))
+        cached = await asyncio.to_thread(
+            cebridge.read_cached, workspace, enrich=False,
+        )
         if cached is not None:
             _put_graph_cache(request.app, ws_key, cached)
-            asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
-    if isinstance(cached, dict):
-        # In-memory / on-disk cache can miss pages written since the
-        # last viewer build, and still list wiki docs that were
-        # deleted in the file browser. Fold the FS in cheaply so the
-        # wiki list updates without waiting for curate/rescan.
-        added = await asyncio.to_thread(
-            wiki_sync.inject_on_disk_pages, workspace, cached,
-        )
-        if added:
-            _put_graph_cache(request.app, ws_key, cached)
-            asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
+            enriched.discard(ws_key)  # needs background enrich
+            served_from_disk = True
     if cached is None:
         # First time we've ever seen this workspace, no on-disk
         # build either — synchronous build is unavoidable.
+        await _broadcast(request.app, protocol.graph_progress(
+            "build", "Building graph (viewer.sh)…", workspace=ws_key,
+        ))
         cached = await cebridge.build(workspace)
         if cached is None:
+            await _broadcast(request.app, protocol.graph_progress(
+                "ready", "Graph unavailable", workspace=ws_key, done=True,
+            ))
             return web.json_response(
                 {"error": "no wiki/ in workspace, or viewer.sh build failed"},
                 status=404,
             )
         _put_graph_cache(request.app, ws_key, cached)
+        enriched.add(ws_key)  # build() already ran enrich_from_disk
+        await _broadcast(request.app, protocol.graph_progress(
+            "ready", "Graph ready", workspace=ws_key, done=True,
+        ))
+    else:
+        # Serve immediately. Enrich at most once per cold disk load
+        # (deduped); full rebuild only when we just hydrated from disk.
+        if ws_key not in enriched:
+            asyncio.create_task(_enrich_graph_cache(request.app, ws_key))
+        if served_from_disk:
+            # Stale-while-revalidate: also kick the heavier rebuild so
+            # kuzu edges catch up eventually. Enrich finishes first
+            # and paints a fresher node set; rebuild may take longer.
+            asyncio.create_task(_refresh_graph_cache(request.app, ws_key))
     cached = request.app.get("graph_data_per_ws", {}).get(ws_key) or cached
     return web.json_response(cached)
 
@@ -729,23 +742,123 @@ def _hello_payload(app: web.Application) -> dict:
     )
 
 
+async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
+    """Background filesystem-truth enrich of an already-served graph.
+
+    Runs resync_types / inject_deck / inject_on_disk_pages off the
+    request path with ``graph_progress`` stages so the UI never
+    whites out on a large vault. Deduped per workspace via
+    ``app["graph_enrich_inflight"]``.
+    """
+    from pathlib import Path as _Path
+    inflight: set[str] = app.setdefault("graph_enrich_inflight", set())
+    if ws_key in inflight:
+        return
+    inflight.add(ws_key)
+    workspace = _Path(ws_key)
+    try:
+        # Fresh json-only load so we don't deepcopy a multi-10MB
+        # in-memory bundle (BioCure ~51MB) and so the served snapshot
+        # stays untouched until we swap the cache at the end.
+        data = await asyncio.to_thread(
+            cebridge.read_cached, workspace, enrich=False,
+        )
+        if data is None:
+            await _broadcast(app, protocol.graph_progress(
+                "ready", "Graph ready", workspace=ws_key, done=True,
+            ))
+            return
+
+        await _broadcast(app, protocol.graph_progress(
+            "types", "Syncing page types…", workspace=ws_key,
+        ))
+        types_n = await asyncio.to_thread(
+            cebridge.resync_types_from_disk, workspace, data,
+        )
+        await _broadcast(app, protocol.graph_progress(
+            "types",
+            f"Syncing page types… ({int(types_n or 0)} updated)",
+            workspace=ws_key, current=int(types_n or 0),
+        ))
+
+        await _broadcast(app, protocol.graph_progress(
+            "decks", "Refreshing deck nodes…", workspace=ws_key,
+        ))
+        decks_n = await asyncio.to_thread(
+            cebridge.inject_deck_nodes, workspace, data,
+        )
+        await _broadcast(app, protocol.graph_progress(
+            "decks",
+            f"Refreshing deck nodes… ({int(decks_n or 0)} added)",
+            workspace=ws_key, current=int(decks_n or 0),
+        ))
+
+        await _broadcast(app, protocol.graph_progress(
+            "pages", "Refreshing links…", workspace=ws_key,
+        ))
+        pages_n = await asyncio.to_thread(
+            wiki_sync.inject_on_disk_pages, workspace, data,
+        )
+        await _broadcast(app, protocol.graph_progress(
+            "pages",
+            f"Refreshing links… ({int(pages_n or 0)} updates)",
+            workspace=ws_key, current=int(pages_n or 0),
+        ))
+
+        _put_graph_cache(app, ws_key, data)
+        app.setdefault("graph_enriched_ws", set()).add(ws_key)
+        await _broadcast(app, protocol.graph_progress(
+            "ready", "Graph ready", workspace=ws_key, done=True,
+        ))
+        # Only bump files_changed when something actually moved —
+        # otherwise every prefetch would remount the graph.
+        if int(types_n or 0) or int(decks_n or 0) or int(pages_n or 0):
+            await _broadcast(app, protocol.files_changed())
+    except Exception:  # noqa: BLE001
+        log.exception("background graph enrich failed for %s", ws_key)
+        try:
+            await _broadcast(app, protocol.graph_progress(
+                "ready", "Graph sync failed (showing cache)",
+                workspace=ws_key, done=True,
+            ))
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        inflight.discard(ws_key)
+
+
 async def _refresh_graph_cache(app: web.Application, ws_key: str) -> None:
     """Background rebuild of the per-workspace graph cache. Fires
     after a stale-while-revalidate hit on /api/graph/data so the
     next fetch returns the fresh data.json. Broadcasts a
-    `files_changed` so any connected client re-fetches."""
+    `files_changed` so any connected client re-fetches.
+
+    Deduped per workspace. This is the heavy path (venv + kuzu +
+    viewer.sh); prefer ``_enrich_graph_cache`` for fast FS truth.
+    """
     from pathlib import Path as _Path
+    inflight: set[str] = app.setdefault("graph_rebuild_inflight", set())
+    if ws_key in inflight:
+        return
+    inflight.add(ws_key)
     workspace = _Path(ws_key)
     try:
-        await cebridge.ensure_venv(workspace)
-        await cebridge.graph_rebuild(workspace)
-    except Exception:  # noqa: BLE001
-        log.exception("background kuzu rebuild failed for %s", ws_key)
-    fresh = await cebridge.build(workspace)
-    if fresh is None:
-        return
-    _put_graph_cache(app, ws_key, fresh)
-    await _broadcast(app, protocol.files_changed())
+        try:
+            await cebridge.ensure_venv(workspace)
+            await cebridge.graph_rebuild(workspace)
+        except Exception:  # noqa: BLE001
+            log.exception("background kuzu rebuild failed for %s", ws_key)
+        fresh = await cebridge.build(workspace)
+        if fresh is None:
+            return
+        _put_graph_cache(app, ws_key, fresh)
+        app.setdefault("graph_enriched_ws", set()).add(ws_key)
+        await _broadcast(app, protocol.files_changed())
+        await _broadcast(app, protocol.graph_progress(
+            "ready", "Graph ready", workspace=ws_key, done=True,
+        ))
+    finally:
+        inflight.discard(ws_key)
 
 
 async def _activate(app: web.Application, new_path: Path) -> None:

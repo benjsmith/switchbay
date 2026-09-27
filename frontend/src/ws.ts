@@ -258,6 +258,17 @@ export type Nav = {
  *  Triggers the Browser file-tree re-fetch and a graph re-fetch. */
 export type FilesChanged = { type: "files_changed" };
 
+/** Background graph cache sync progress (daemon enrich / rebuild). */
+export type GraphProgress = {
+  type: "graph_progress";
+  stage: string;
+  message: string;
+  workspace?: string;
+  current?: number;
+  total?: number;
+  done?: boolean;
+};
+
 /** A capable model produced a rich HTML report (create_report). The
  *  Report tab should focus and load `/api/report/<report_id>`. */
 export type OpenReport = {
@@ -601,6 +612,7 @@ export type ServerMessage =
   | StepFinished
   | Nav
   | FilesChanged
+  | GraphProgress
   | OpenReport
   | OpenIntro
   | OpenComms

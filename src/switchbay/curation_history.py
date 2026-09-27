@@ -426,7 +426,7 @@ def _assemble_history(
     # workspace hasn't been built yet, fall back to body-wikilink
     # resolution so we still produce *some* animation.
     from . import cebridge
-    ce_data = cebridge.read_cached(workspace)
+    ce_data = cebridge.read_cached(workspace, enrich=True)
 
     nodes: dict[str, dict[str, Any]] = {}
     by_first_seen: list[tuple[int, str]] = []

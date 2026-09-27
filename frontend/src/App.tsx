@@ -996,6 +996,17 @@ export default function App() {
           }
           return prev;
         });
+      } else if (msg.type === "graph_progress") {
+        const gp = msg as {
+          message?: string; done?: boolean; workspace?: string;
+        };
+        // Ignore progress for a different workspace (hover-prefetch).
+        if (gp.workspace && focusedWsRef.current && gp.workspace !== focusedWsRef.current) {
+          return;
+        }
+        window.dispatchEvent(new CustomEvent("sy:graph-progress", {
+          detail: gp,
+        }));
       } else if (msg.type === "files_changed") {
         setFilesVersion((v) => v + 1);
         // Proxied Graph/Agents panels listen for this to soft-refetch /embed/*.
@@ -1522,6 +1533,9 @@ export default function App() {
   useEffect(() => {
     setGraphData(null);
     setGraphError(null);
+    window.dispatchEvent(new CustomEvent("sy:graph-progress", {
+      detail: { message: "Loading graph from cache…", done: false },
+    }));
   }, [workspace]);
 
   // Graph tab's "Retry" affordance (timeout / build failure) → re-run
