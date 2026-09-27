@@ -136,6 +136,27 @@ class CeEmbedSession {
     }
   }
 
+  /** Drop cached layout positions (tip / files_changed) so next mount re-layouts. */
+  invalidateAtlasLayoutCache(): void {
+    try {
+      const w = window as unknown as {
+        CEAtlasCache?: {
+          resolveKey: (o?: { workspace?: string }) => string;
+          putPositions: (key: string, positions: null) => Promise<unknown>;
+          clear?: (key?: string) => Promise<unknown>;
+        };
+        __CE_ATLAS_POSITIONS?: unknown;
+      };
+      w.__CE_ATLAS_POSITIONS = null;
+      const cache = w.CEAtlasCache;
+      if (!cache) return;
+      const key = cache.resolveKey();
+      void cache.putPositions(key, null);
+    } catch {
+      /* ignore */
+    }
+  }
+
   private emit() {
     for (const fn of this.listeners) fn();
   }

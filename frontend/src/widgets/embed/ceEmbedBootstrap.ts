@@ -21,6 +21,10 @@ export type CeEmbedOptions = {
   publicBase: string;
   /** When false (default), skip CE pages sidebar / atlas chrome duplicates. */
   chrome?: boolean;
+  /** Workspace path or basename — keys CEAtlasCache (IndexedDB cold start). */
+  workspace?: string;
+  /** Explicit atlas cache key (overrides workspace). */
+  cacheKey?: string;
 };
 
 export type CeEmbedHandle = {
@@ -37,6 +41,12 @@ export type CeCreateHandle = {
   getData?: () => unknown;
   isCanvasLive?: () => boolean;
   revalidate?: (currentPageId?: string) => Promise<void> | void;
+  getCacheInfo?: () => {
+    key: string | null;
+    tip: string;
+    usedCache: boolean;
+    hasPositions: boolean;
+  };
 };
 
 type CeEmbedGlobal = {
@@ -87,6 +97,7 @@ const SCRIPT_ORDER = [
   "vendor/knowledge-atlas.js",
   "atlas.js",
   "search.js",
+  "atlas-cache.js",
   "embed.js",
   // skip main.js — dual-mount session / CEEmbed boots instead
 ] as const;
@@ -370,6 +381,22 @@ export type PreparedSession = {
  * Load CE modules + data.json once for dual-mount (sidebar + canvas).
  * Does not paint atlas — CeEmbedSession attaches mounts afterwards.
  */
+/** Basename of the focused Switchbay workspace (localStorage snapshot). */
+function activeWorkspaceHint(): string | undefined {
+  try {
+    const raw = localStorage.getItem("sy.workspaces.snapshot");
+    if (!raw) return undefined;
+    const snap = JSON.parse(raw) as { workspace?: string };
+    if (typeof snap.workspace === "string" && snap.workspace.trim()) {
+      const parts = snap.workspace.split("/").filter(Boolean);
+      return parts[parts.length - 1] || snap.workspace;
+    }
+  } catch {
+    /* ignore */
+  }
+  return undefined;
+}
+
 export async function prepareSession(
   opts: CeEmbedOptions,
 ): Promise<PreparedSession> {
@@ -390,11 +417,14 @@ export async function prepareSession(
   let createHandle: CeCreateHandle | null = null;
   let nativeRelease: { destroy: () => void } | null = null;
   if (ce && typeof ce.create === "function") {
+    const workspace = opts.workspace || activeWorkspaceHint();
     const created = await ce.create({
       embed: true,
       dataUrl,
       publicBase,
       chrome: opts.chrome ?? false,
+      workspace,
+      cacheKey: opts.cacheKey,
     });
     createHandle = created;
     nativeRelease = {

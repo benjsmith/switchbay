@@ -71,7 +71,9 @@ export default function CeAtlasEmbed() {
       if (Date.now() - readyAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        // Wiki changed: hard remount atlas so layout picks up new nodes.
+        // Wiki changed: drop cached layout, refetch data, hard remount.
+        session.invalidateAtlasLayoutCache();
+        session.softRevalidate();
         session.detachCanvas(el, { destroy: true });
         session.attachCanvas(el, canvasHtml);
       }, SOFT_REMOUNT_DEBOUNCE_MS);
