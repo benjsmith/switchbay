@@ -1,0 +1,118 @@
+<!-- CE atlas embed shell: graph-pane + modal only (no sidebar / pages chrome). -->
+<main id="graph-pane">
+    <div id="graph"></div>
+    <div class="graph-search">
+      <input id="graph-search-input" type="search" placeholder="Search wiki…" autocomplete="off" spellcheck="false" aria-label="Search the graph">
+      <span id="graph-search-count" class="graph-search-count" hidden></span>
+      <button id="graph-search-clear" class="icon-btn graph-search-clear" title="Clear search" aria-label="Clear search" hidden>
+        <svg viewBox="0 0 16 16" width="12" height="12"><line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="12" y1="4" x2="4" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="graph-controls">
+      <button id="viewer-mode" class="ctrl-btn hidden" title="Switch graph viewer" aria-label="Switch graph viewer">
+        <span class="ctrl-label">view:</span><span id="viewer-mode-state">classic</span>
+      </button>
+      <button id="label-mode" class="ctrl-btn" title="Label visibility" aria-label="Label visibility">
+        <span class="ctrl-label">labels:</span><span id="label-mode-state">auto</span>
+      </button>
+      <button id="edge-mode" class="ctrl-btn hidden" title="Edge visibility (Atlas)" aria-label="Edge visibility">
+        <span class="ctrl-label">edges:</span><span id="edge-mode-state">auto</span>
+      </button>
+      <button id="split-toggle" class="ctrl-btn" title="Partition selected pages (rubber-band / Shift-click on graph)" aria-label="Workspace split" aria-pressed="false">
+        <span class="ctrl-label">split</span><span id="split-count">0</span>
+      </button>
+      <button id="replay-toggle" class="ctrl-btn" title="Replay curation history animation" aria-label="Replay curation history" aria-pressed="false">
+        <span class="ctrl-label">replay</span><span aria-hidden="true">↻</span>
+      </button>
+      <button id="label-types" class="ctrl-btn" title="Which page types show labels" aria-label="Which page types show labels">
+        <span class="ctrl-label">types:</span><span id="label-types-state">4/11</span>
+      </button>
+      <div id="label-types-panel" class="label-types-panel hidden" role="dialog" aria-label="Label types">
+        <div class="label-types-head">Show labels for</div>
+        <label class="label-types-row" data-type="project"><input type="checkbox"><span class="dot dot-project"></span><span>Projects</span></label>
+        <label class="label-types-row" data-type="analysis"><input type="checkbox"><span class="dot dot-analysis"></span><span>Analyses</span></label>
+        <label class="label-types-row" data-type="concept"><input type="checkbox"><span class="dot dot-concept"></span><span>Concepts</span></label>
+        <label class="label-types-row" data-type="entity"><input type="checkbox"><span class="dot dot-entity"></span><span>Entities</span></label>
+        <label class="label-types-row" data-type="evidence"><input type="checkbox"><span class="dot dot-evidence"></span><span>Evidence</span></label>
+        <label class="label-types-row" data-type="fact"><input type="checkbox"><span class="dot dot-fact"></span><span>Facts</span></label>
+        <label class="label-types-row" data-type="figure"><input type="checkbox"><span class="dot dot-figure"></span><span>Figures</span></label>
+        <label class="label-types-row" data-type="table"><input type="checkbox"><span class="dot dot-table"></span><span>Tables</span></label>
+        <label class="label-types-row" data-type="source"><input type="checkbox"><span class="dot dot-source"></span><span>Sources</span></label>
+        <label class="label-types-row" data-type="note"><input type="checkbox"><span class="dot dot-note"></span><span>Notes</span></label>
+        <label class="label-types-row" data-type="todo"><input type="checkbox"><span class="dot dot-todo"></span><span>Todos</span></label>
+        <label class="label-types-row" data-type="unclassified"><input type="checkbox"><span class="dot dot-unclassified"></span><span>Unclassified</span></label>
+        <button id="label-types-reset" class="settings-reset">Reset</button>
+      </div>
+    </div>
+
+    <div id="split-panel" class="split-panel" hidden>
+      <div class="split-head">Partition workspace</div>
+      <p class="split-help">Move or copy wiki pages into a new workspace. Classic: Ctrl/⌘-drag rubber-band, Shift-click multi-select, click toggle, right-click flips move↔copy. Shells keep tab/registry chrome.</p>
+      <div class="split-fields">
+        <label class="split-field">Name <input id="split-name" type="text" placeholder="new-workspace" autocomplete="off" spellcheck="false"></label>
+        <label class="split-field">Target <input id="split-target" type="text" placeholder="optional absolute path (or CE_SPLIT_HOME/name)" autocomplete="off" spellcheck="false"></label>
+      </div>
+      <div id="split-list" class="split-list"></div>
+      <div class="split-actions">
+        <button type="button" id="split-add" class="ctrl-btn">Add current</button>
+        <button type="button" id="split-submit" class="ctrl-btn" disabled>Split</button>
+        <button type="button" id="split-cancel" class="ctrl-btn">Cancel</button>
+      </div>
+      <div id="split-status" class="split-status" aria-live="polite"></div>
+    </div>
+
+    <button id="settings-trigger" class="icon-btn settings-trigger" title="Physics settings" aria-label="Physics settings">
+      <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+        <circle cx="12" cy="12" r="3"/>
+      </svg>
+    </button>
+    <div id="settings-panel" class="settings-panel hidden" role="dialog" aria-label="Physics settings">
+      <div class="settings-head">Physics</div>
+      <div class="settings-row">
+        <label for="phys-charge">Repulsion</label>
+        <input id="phys-charge" type="range" min="-2000" max="-50" step="10" value="-1000">
+        <span id="phys-charge-val" class="settings-val">-1000</span>
+      </div>
+      <div class="settings-row">
+        <label for="phys-link">Link distance</label>
+        <input id="phys-link" type="range" min="20" max="400" step="5" value="220">
+        <span id="phys-link-val" class="settings-val">220</span>
+      </div>
+      <div class="settings-row">
+        <label for="phys-collide">Collide pad</label>
+        <input id="phys-collide" type="range" min="0" max="40" step="1" value="28">
+        <span id="phys-collide-val" class="settings-val">28</span>
+      </div>
+      <button id="phys-reset" class="settings-reset">Reset</button>
+    </div>
+  </main>
+<div id="modal-backdrop" class="hidden" aria-hidden="true"></div>
+  <div id="modal" class="hidden" role="dialog" aria-modal="true" aria-hidden="true">
+    <button id="modal-padlock" class="icon-btn modal-padlock" title="Edit" aria-label="Edit page" data-editing="false" style="display:none">
+      <!-- Two padlock paths swapped via CSS based on data-editing. -->
+      <svg class="padlock-closed" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="7.5" width="9" height="6" rx="1"/>
+        <path d="M5.5 7.5 V5.5 a 2.5 2.5 0 0 1 5 0 V7.5"/>
+      </svg>
+      <svg class="padlock-open" viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3.5" y="7.5" width="9" height="6" rx="1"/>
+        <path d="M5.5 7.5 V5.5 a 2.5 2.5 0 0 1 5 0"/>
+      </svg>
+    </button>
+    <button id="modal-close" class="icon-btn modal-close" title="Close" aria-label="Close">
+      <svg viewBox="0 0 16 16" width="12" height="12"><line x1="4" y1="4" x2="12" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><line x1="12" y1="4" x2="4" y2="12" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+    </button>
+    <div id="modal-content">
+      <h1 id="modal-title"></h1>
+      <section class="properties">
+        <div class="properties-head">Properties</div>
+        <table id="modal-properties"></table>
+      </section>
+      <article id="modal-body"></article>
+      <section class="subgraph-pane">
+        <div class="subgraph-head" id="modal-subgraph-head"></div>
+        <div id="modal-subgraph"></div>
+      </section>
+    </div>
+  </div>

@@ -3,7 +3,9 @@ import { test } from "node:test";
 import {
   documentDir,
   embedFetchShimScript,
+  embedHostShimScript,
   extractScripts,
+  isSwitchbayReservedApi,
   mapStatusBanner,
   prepareEmbedHtml,
   rewriteAssetUrl,
@@ -145,6 +147,17 @@ test("mapStatusBanner: live vs building wiki", () => {
   assert.match(building.label, /wiki/i);
 });
 
+test("isSwitchbayReservedApi protects control-plane paths", () => {
+  assert.equal(isSwitchbayReservedApi("/api/settings"), true);
+  assert.equal(isSwitchbayReservedApi("/api/core-skills/status"), true);
+  assert.equal(isSwitchbayReservedApi("/api/graph/data"), true);
+  assert.equal(isSwitchbayReservedApi("/api/workspaces/switch"), true);
+  assert.equal(isSwitchbayReservedApi("/api/page?path=x"), false);
+  assert.equal(isSwitchbayReservedApi("/api/vault/foo"), false);
+  assert.equal(isSwitchbayReservedApi("/api/desk/status"), false);
+  assert.equal(isSwitchbayReservedApi("/api/workspace/select"), false);
+});
+
 test("embedFetchShimScript rewrites data.json onto public base", () => {
   const shim = embedFetchShimScript("/embed/ce");
   assert.equal(shim.type, "classic");
@@ -168,8 +181,23 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   void g.fetch("data.json?t=1");
   void g.fetch("/api/page?path=notes/x.md");
   void g.fetch("/embed/ce/already");
+  void g.fetch("/api/settings");
+  void g.fetch("/api/core-skills/status");
   assert.equal(calls[0], "/embed/ce/data.json");
   assert.equal(calls[1], "/embed/ce/data.json?t=1");
   assert.equal(calls[2], "/embed/ce/api/page?path=notes/x.md");
   assert.equal(calls[3], "/embed/ce/already");
+  assert.equal(calls[4], "/api/settings");
+  assert.equal(calls[5], "/api/core-skills/status");
+  // Release restores fetch
+  assert.equal(typeof g.window.__syEmbedReleaseFetch, "function");
+  g.window.__syEmbedReleaseFetch();
+  assert.equal(g.window.__syEmbedFetchBase, null);
+});
+
+test("embedHostShimScript marks syHost and guards body.innerHTML", () => {
+  const shim = embedHostShimScript('[data-sy-embed-root="1"]');
+  assert.equal(shim.type, "classic");
+  assert.match(shim.content!, /syHost/);
+  assert.match(shim.content!, /innerHTML/);
 });

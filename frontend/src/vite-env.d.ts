@@ -5,6 +5,11 @@ declare module "*?url" {
   export default src;
 }
 
+declare module "*?raw" {
+  const src: string;
+  export default src;
+}
+
 // Browser-side .docx import (FileBrowser): mammoth + turndown ship no
 // types and there are no @types/* packages for the versions we use.
 // The local FileBrowser.importDocx caller treats both APIs as

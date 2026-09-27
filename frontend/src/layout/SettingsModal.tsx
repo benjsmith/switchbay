@@ -4053,16 +4053,17 @@ function StoragePanel({ open }: { open: boolean }) {
         Proxied skill embeds (Phase 4a)
       </h4>
       <p className="sy-settings-blurb">
-        When on, Graph and Agents load CE / okstratr through the daemon
-        same-origin reverse proxy (<code>/embed/ce/</code>,{" "}
-        <code>/embed/okstratr/</code>) — in-app panels, no iframes.
-        Default off keeps the built-in tabs. Settings will later write the
-        okstratr harness registry (TODO).
+        When on, Graph mounts the Curiosity Engine atlas via a dedicated
+        same-origin embed (<code>/embed/ce</code> assets + data — CE chrome
+        off; Switchbay keeps tabs / Files / rail). Agents mounts okstratr
+        observer under <code>/embed/okstratr</code>. No iframes; no full CE
+        document remount. Default off keeps built-in GraphTab /
+        AgentDashboard.
       </p>
       <div className="sy-settings-perm-row">
         <span>
           <strong>Proxied embeds:</strong>{" "}
-          {settings.proxied_skill_embeds ? "on (Graph→CE, Agents→okstratr)" : "off (built-in)"}
+          {settings.proxied_skill_embeds ? "on (Graph→CE canvas, Agents→okstratr)" : "off (built-in)"}
         </span>
         <span className="sy-spacer" />
         <button

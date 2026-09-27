@@ -2,6 +2,7 @@ import { lazy } from "react";
 import SketchErrorBoundary from "../widgets/sketch/ErrorBoundary";
 import { registerTabKind, type TabComponent } from "./tabRegistry";
 import ProxiedSkillPanel from "../widgets/embed/ProxiedSkillPanel";
+import CeAtlasEmbed from "../widgets/embed/CeAtlasEmbed";
 import { useProxiedSkillEmbeds } from "../widgets/embed/useProxiedSkillEmbeds";
 
 /**
@@ -47,7 +48,8 @@ const GraphAdapter: TabComponent = ({ graphData, graphError }) => {
   if (proxied === null) {
     return <div className="sy-placeholder"><p>Loading…</p></div>;
   }
-  if (proxied) return <ProxiedSkillPanel kind="ce" />;
+  // Graph = CE atlas embed skin (dedicated mount; not full HTML remount).
+  if (proxied) return <CeAtlasEmbed />;
   return <GraphTab data={graphData} error={graphError} />;
 };
 const EditorAdapter: TabComponent = ({ tab }) => <EditorTab tab={tab} />;

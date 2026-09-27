@@ -4,6 +4,7 @@ import {
   type EmbedScript,
   type StatusBanner,
   embedFetchShimScript,
+  embedHostShimScript,
   mapStatusBanner,
   prepareEmbedHtml,
 } from "./embedMount.ts";
@@ -49,6 +50,18 @@ const SOFT_REMOUNT_DEBOUNCE_MS = 1500;
 
 type Props = {
   kind: SkillEmbedKind;
+  /**
+   * `minimal` (default): hide Switchbay debug bar (same-origin / Go / Reload)
+   * and the live status strip — shell keeps rail/tabs only.
+   * `debug`: show the Phase 4a chrome for troubleshooting.
+   */
+  chrome?: "minimal" | "debug";
+  /**
+   * CE: `canvas` hides atlas chrome (sidebar search, pages·links strip).
+   * okstratr: `observer` hides the top brand/chips strip when hosted.
+   * `full` keeps upstream chrome.
+   */
+  skin?: "canvas" | "observer" | "full";
 };
 
 type LoadState =
@@ -95,7 +108,13 @@ async function executeScripts(
   }
 }
 
-export default function ProxiedSkillPanel({ kind }: Props) {
+export default function ProxiedSkillPanel({
+  kind,
+  chrome = "minimal",
+  skin,
+}: Props) {
+  const resolvedSkin =
+    skin ?? (kind === "ce" ? "canvas" : kind === "okstratr" ? "observer" : "full");
   const prefix = PREFIX[kind];
   const [path, setPath] = useState(DEFAULT_PATH[kind]);
   const [draft, setDraft] = useState(DEFAULT_PATH[kind]);
@@ -118,6 +137,20 @@ export default function ProxiedSkillPanel({ kind }: Props) {
   const banner: StatusBanner = mapStatusBanner(kind, coreStatus);
 
   const teardown = useCallback(() => {
+    try {
+      const releaseFetch = (window as unknown as { __syEmbedReleaseFetch?: () => void })
+        .__syEmbedReleaseFetch;
+      releaseFetch?.();
+    } catch {
+      /* ignore */
+    }
+    try {
+      const releaseHost = (window as unknown as { __syEmbedReleaseHost?: () => void })
+        .__syEmbedReleaseHost;
+      releaseHost?.();
+    } catch {
+      /* ignore */
+    }
     for (const el of injectedScriptsRef.current) {
       try {
         el.remove();
@@ -228,9 +261,14 @@ export default function ProxiedSkillPanel({ kind }: Props) {
             return;
           }
           const prepared = prepareEmbedHtml(text, prefix, p);
-          // Remap CE relative fetch('data.json') + /api/* onto /embed/ce.
-          const scripts = [embedFetchShimScript(prefix), ...prepared.scripts];
+          // Host shim first (syHost + body.innerHTML guard), then fetch remap.
+          const scripts = [
+            embedHostShimScript('[data-sy-embed-root="1"]'),
+            embedFetchShimScript(prefix),
+            ...prepared.scripts,
+          ];
           root.innerHTML = prepared.markup;
+          root.dataset.embedSkin = resolvedSkin;
           try {
             await executeScripts(scripts, root, injectedScriptsRef.current);
           } catch (e) {
@@ -266,7 +304,7 @@ export default function ProxiedSkillPanel({ kind }: Props) {
         }
       }
     },
-    [prefix, kind, teardown],
+    [prefix, kind, teardown, resolvedSkin],
   );
 
   // Mount when path changes or skill becomes healthy enough to allowMount.
@@ -319,41 +357,60 @@ export default function ProxiedSkillPanel({ kind }: Props) {
   const showError =
     state.status === "error" && !banner.suppressFetchError && !showWaitChrome;
 
-  return (
-    <div className="sy-proxied-skill" data-kind={kind} data-embed-v2="1">
-      <header className="sy-proxied-skill-bar">
-        <strong>{LABEL[kind]}</strong>
-        <span className="sy-proxied-skill-hint">
-          same-origin via {prefix} (no iframe)
-          {refreshing ? " · updating…" : ""}
-        </span>
-        <form className="sy-proxied-skill-nav" onSubmit={onNavigate}>
-          <input
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            aria-label="Proxied path"
-            spellCheck={false}
-          />
-          <button type="submit">Go</button>
-          <button
-            type="button"
-            onClick={() => {
-              setDraft(path);
-              void load(path, { soft: true });
-            }}
-          >
-            Reload
-          </button>
-        </form>
-      </header>
+  const showDebugBar = chrome === "debug";
+  const showStatusStrip =
+    chrome === "debug" || banner.kind !== "live" || showWaitChrome || showError;
 
-      <div
-        className={`sy-proxied-skill-status sy-proxied-skill-status--${banner.kind}`}
-        role="status"
-        aria-live="polite"
-      >
-        {banner.label}
-      </div>
+  return (
+    <div
+      className={
+        "sy-proxied-skill"
+        + (chrome === "minimal" ? " sy-proxied-skill--minimal" : "")
+        + (resolvedSkin !== "full" ? ` sy-proxied-skill--skin-${resolvedSkin}` : "")
+      }
+      data-kind={kind}
+      data-embed-v2="1"
+      data-chrome={chrome}
+      data-embed-skin={resolvedSkin}
+    >
+      {showDebugBar && (
+        <header className="sy-proxied-skill-bar">
+          <strong>{LABEL[kind]}</strong>
+          <span className="sy-proxied-skill-hint">
+            same-origin via {prefix} (no iframe)
+            {refreshing ? " · updating…" : ""}
+          </span>
+          <form className="sy-proxied-skill-nav" onSubmit={onNavigate}>
+            <input
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              aria-label="Proxied path"
+              spellCheck={false}
+            />
+            <button type="submit">Go</button>
+            <button
+              type="button"
+              onClick={() => {
+                setDraft(path);
+                void load(path, { soft: true });
+              }}
+            >
+              Reload
+            </button>
+          </form>
+        </header>
+      )}
+
+      {showStatusStrip && (
+        <div
+          className={`sy-proxied-skill-status sy-proxied-skill-status--${banner.kind}`}
+          role="status"
+          aria-live="polite"
+        >
+          {banner.label}
+          {!showDebugBar && refreshing ? " · updating…" : ""}
+        </div>
+      )}
 
       <div className="sy-proxied-skill-body">
         {showWaitChrome && (

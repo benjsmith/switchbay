@@ -253,29 +253,114 @@ export function prepareEmbedHtml(
 }
 
 /**
- * Inline classic script that remaps relative + CE `/api/*` fetches onto the
+ * Switchbay control-plane `/api/*` prefixes that must NOT be rewritten onto
+ * `/embed/{ce|okstratr}` by the fetch shim. Skill UIs share the document, so
+ * a global fetch patch would otherwise break `/api/settings`, graph SSOT,
+ * core-skills status polls, etc. — leaving Agents stuck on Loading and the
+ * shell unable to talk to the daemon while Graph is open.
+ */
+export const SWITCHBAY_API_RESERVED_PREFIXES = [
+  "/api/settings",
+  "/api/core-skills",
+  "/api/graph",
+  "/api/workspaces",
+  "/api/desks",
+  "/api/mode",
+  "/api/files",
+  "/api/rail",
+  "/api/threads",
+  "/api/packs",
+  "/api/pack",
+  "/api/auth",
+  "/api/health",
+  "/api/version",
+  "/api/config",
+  "/api/models",
+  "/api/providers",
+  "/api/orchestration",
+  "/api/micro",
+  "/api/schedules",
+  "/api/projects",
+  "/api/library",
+  "/api/report",
+  "/api/reports",
+  "/api/sketch",
+  "/api/sketches",
+  "/api/sheet",
+  "/api/duckdb",
+  "/api/vega",
+  "/api/terminal",
+  "/api/pty",
+  "/api/ws",
+  "/api/events",
+  "/api/notify",
+  "/api/pasteboard",
+  "/api/clipboard",
+  "/api/owid",
+  "/api/thrusters",
+  "/api/intro",
+] as const;
+
+/** True when a path is a Switchbay daemon route (do not remap onto /embed/*). */
+export function isSwitchbayReservedApi(path: string): boolean {
+  if (!path) return false;
+  let p = path;
+  try {
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(path)) {
+      p = new URL(path).pathname;
+    }
+  } catch {
+    /* keep */
+  }
+  const q = p.indexOf("?");
+  if (q >= 0) p = p.slice(0, q);
+  if (!p.startsWith("/api/")) return false;
+  return SWITCHBAY_API_RESERVED_PREFIXES.some(
+    (prefix) => p === prefix || p.startsWith(`${prefix}/`) || p.startsWith(`${prefix}?`),
+  );
+}
+
+/**
+ * Inline classic script that remaps relative + skill `/api/*` fetches onto the
  * embed public base. Same-document mount keeps Switchbay's document URL, so
  * CE's `fetch('data.json')` / `fetch('/api/page')` would otherwise miss
  * `/embed/ce/…`. Injected only by ProxiedSkillPanel — CE standalone on
  * :8766 is untouched.
+ *
+ * Does **not** rewrite Switchbay reserved `/api/*` (settings, graph, …).
+ * Exposes `window.__syEmbedReleaseFetch` so teardown restores `window.fetch`
+ * (removing the script node alone does not undo the patch).
  */
 export function embedFetchShimScript(publicBase: string): EmbedScript {
   const base = JSON.stringify((publicBase || "").replace(/\/$/, "") || "");
+  const reserved = JSON.stringify([...SWITCHBAY_API_RESERVED_PREFIXES]);
   // Built as an array + join so // and /\./ never appear inside a template
   // literal (those sequences break when the shim is eval'd / injected).
   const lines = [
-    "(function(base){",
+    "(function(base, reserved){",
     "  if (!base) return;",
-    "  if (window.__syEmbedFetchBase === base && window.__syEmbedOrigFetch) return;",
-    "  window.__syEmbedFetchBase = base;",
     "  if (!window.__syEmbedOrigFetch) {",
     "    window.__syEmbedOrigFetch = window.fetch.bind(window);",
     "  }",
+    "  window.__syEmbedFetchBase = base;",
+    "  window.__syEmbedFetchDepth = (window.__syEmbedFetchDepth || 0) + 1;",
     "  var orig = window.__syEmbedOrigFetch;",
+    "  function isReserved(path) {",
+    "    var p = path;",
+    "    var q = p.indexOf('?');",
+    "    if (q >= 0) p = p.slice(0, q);",
+    "    if (p.indexOf('/api/') !== 0) return false;",
+    "    for (var i = 0; i < reserved.length; i++) {",
+    "      var pref = reserved[i];",
+    "      if (p === pref || p.indexOf(pref + '/') === 0) return true;",
+    "    }",
+    "    return false;",
+    "  }",
     "  function rewrite(u) {",
     '    if (typeof u !== "string") return u;',
     '    if (u === "data.json" || u.indexOf("data.json?") === 0) return base + "/" + u;',
     '    if (u.charAt(0) === "/" && u.indexOf("/embed/") !== 0 && u.indexOf("/api/") === 0) {',
+    "      if (isReserved(u)) return u;",
     "      return base + u;",
     "    }",
     "    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) return u;",
@@ -292,7 +377,82 @@ export function embedFetchShimScript(publicBase: string): EmbedScript {
     "    }",
     "    return orig(input, init);",
     "  };",
-    "})(" + base + ");",
+    "  window.__syEmbedReleaseFetch = function() {",
+    "    window.__syEmbedFetchDepth = Math.max(0, (window.__syEmbedFetchDepth || 1) - 1);",
+    "    if (window.__syEmbedFetchDepth > 0) return;",
+    "    if (window.__syEmbedOrigFetch) {",
+    "      window.fetch = window.__syEmbedOrigFetch;",
+    "      window.__syEmbedOrigFetch = null;",
+    "    }",
+    "    window.__syEmbedFetchBase = null;",
+    "    window.__syEmbedReleaseFetch = null;",
+    "  };",
+    "})(" + base + ", " + reserved + ");",
+  ];
+  return {
+    type: "classic",
+    content: lines.join("\n"),
+  };
+}
+
+/**
+ * Host shim: mark syHost, keep CE/okstratr from wiping or flex-splitting the
+ * Switchbay shell via document.body, and mirror layout dataset onto the
+ * embed mount root so scoped CSS can follow.
+ */
+export function embedHostShimScript(rootSelector: string): EmbedScript {
+  const sel = JSON.stringify(rootSelector || '[data-sy-embed-root="1"]');
+  const lines = [
+    "(function(sel){",
+    "  var root = document.querySelector(sel);",
+    "  if (!root) return;",
+    "  try { document.documentElement.dataset.syHost = '1'; } catch (e) {}",
+    "  try { document.body.classList.add('sy-embed-hosting'); } catch (e) {}",
+    "  var body = document.body;",
+    "  var proto = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');",
+    "  if (proto && proto.set && proto.get && !body.__syEmbedInnerHtmlPatched) {",
+    "    Object.defineProperty(body, 'innerHTML', {",
+    "      configurable: true,",
+    "      enumerable: true,",
+    "      get: function() { return proto.get.call(this); },",
+    "      set: function(v) {",
+    "        // CE main.js wipes body on data.json failure — keep shell intact.",
+    "        if (root && root.isConnected) { root.innerHTML = v; return; }",
+    "        proto.set.call(this, v);",
+    "      }",
+    "    });",
+    "    body.__syEmbedInnerHtmlPatched = true;",
+    "  }",
+    "  var keys = ['sidebar', 'viewer', 'modal'];",
+    "  function mirror() {",
+    "    if (!root || !root.isConnected) return;",
+    "    for (var i = 0; i < keys.length; i++) {",
+    "      var k = keys[i];",
+    "      var v = body.dataset[k];",
+    "      if (v == null || v === '') root.removeAttribute('data-' + k);",
+    "      else root.setAttribute('data-' + k, v);",
+    "    }",
+    "  }",
+    "  mirror();",
+    "  if (!body.__syEmbedDatasetObserver) {",
+    "    var obs = new MutationObserver(mirror);",
+    "    obs.observe(body, { attributes: true, attributeFilter: keys.map(function(k){ return 'data-' + k; }) });",
+    "    body.__syEmbedDatasetObserver = obs;",
+    "  }",
+    "  window.__syEmbedReleaseHost = function() {",
+    "    try { document.body.classList.remove('sy-embed-hosting'); } catch (e) {}",
+    "    try { document.body.classList.remove('hosted'); } catch (e) {}",
+    "    if (body.__syEmbedDatasetObserver) {",
+    "      try { body.__syEmbedDatasetObserver.disconnect(); } catch (e) {}",
+    "      body.__syEmbedDatasetObserver = null;",
+    "    }",
+    "    if (body.__syEmbedInnerHtmlPatched && proto) {",
+    "      try { delete body.innerHTML; } catch (e) {}",
+    "      body.__syEmbedInnerHtmlPatched = false;",
+    "    }",
+    "    window.__syEmbedReleaseHost = null;",
+    "  };",
+    "})(" + sel + ");",
   ];
   return {
     type: "classic",
