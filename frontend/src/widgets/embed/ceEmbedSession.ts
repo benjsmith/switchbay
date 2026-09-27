@@ -12,6 +12,7 @@
  */
 
 import {
+  type CeCreateHandle,
   type CeEmbedHandle,
   type CeEmbedOptions,
 } from "./ceEmbedBootstrap.ts";
@@ -79,6 +80,7 @@ class CeEmbedSession {
   private sidebarHtml: string | null = null;
   private canvasHtml: string | null = null;
   private canvasHandle: CeEmbedHandle | null = null;
+  private createHandle: CeCreateHandle | null = null;
   private ceNative: { destroy: () => void } | null = null;
   private modulesReady = false;
   private bootPromise: Promise<void> | null = null;
@@ -123,6 +125,7 @@ class CeEmbedSession {
           chrome: false,
         });
         this.modulesReady = true;
+        this.createHandle = prepared.createHandle ?? null;
         this.ceNative = prepared.nativeRelease ?? {
           destroy: prepared.releaseFetch,
         };
@@ -171,7 +174,11 @@ class CeEmbedSession {
   detachCanvas(el?: HTMLElement) {
     if (el && this.canvasEl !== el) return;
     try {
-      this.canvasHandle?.destroy();
+      if (this.createHandle?.unmountCanvas) {
+        this.createHandle.unmountCanvas();
+      } else {
+        this.canvasHandle?.destroy();
+      }
     } catch {
       /* ignore */
     }
@@ -184,19 +191,57 @@ class CeEmbedSession {
     if (this.state.status !== "ready") return;
     const data = this.state.data;
     const w = win();
+    const handle = this.createHandle;
 
-    // Prefer CE-native dual mount when available.
-    if (w.CEEmbed?.create && !this.ceNative) {
-      // create already invoked in prepareSession when present
+    // Prefer CE-native dual mount (embed.js CEEmbed.create).
+    if (handle && typeof handle.mountSidebar === "function") {
+      if (this.sidebarEl && this.sidebarHtml) {
+        if (!this.sidebarEl.querySelector("#sidebar")) {
+          this.sidebarEl.innerHTML = this.sidebarHtml;
+        }
+        try {
+          handle.mountSidebar(this.sidebarEl);
+        } catch (e) {
+          console.warn("[CeEmbedSession] mountSidebar failed", e);
+        }
+      }
+
+      if (this.canvasEl && this.canvasHtml) {
+        const needInject = !this.canvasEl.querySelector("#graph");
+        if (needInject) {
+          this.canvasEl.innerHTML = this.canvasHtml;
+        }
+        if (!this.canvasHandle) {
+          try {
+            handle.mountCanvas(this.canvasEl);
+            this.canvasHandle = {
+              destroy: () => {
+                try {
+                  handle.unmountCanvas?.();
+                } catch {
+                  /* ignore */
+                }
+              },
+            };
+          } catch (e) {
+            console.error("[CeEmbedSession] mountCanvas failed", e);
+            this.setState({
+              status: "error",
+              message: (e as Error).message || "canvas mount failed",
+            });
+          }
+        }
+      }
+      return;
     }
 
+    // Stub path until CE ships embed.js
     if (this.sidebarEl && this.sidebarHtml) {
       if (!this.sidebarEl.querySelector("#sidebar")) {
         this.sidebarEl.innerHTML = this.sidebarHtml;
       }
       try {
         w.Sidebar?.init(data);
-        // CE filebrowser (Pages|Files) if present
         w.FileBrowser?.init?.();
       } catch (e) {
         console.warn("[CeEmbedSession] Sidebar.init failed", e);
@@ -208,7 +253,6 @@ class CeEmbedSession {
       if (needInject) {
         this.canvasEl.innerHTML = this.canvasHtml;
       }
-      // Canvas atlas/graph init once per canvas attach generation
       if (!this.canvasHandle) {
         void this.mountCanvasStub(data);
       }
@@ -290,6 +334,7 @@ class CeEmbedSession {
       /* ignore */
     }
     this.ceNative = null;
+    this.createHandle = null;
     if (this.sidebarEl) this.sidebarEl.innerHTML = "";
     if (this.canvasEl) this.canvasEl.innerHTML = "";
     this.sidebarEl = null;

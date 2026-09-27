@@ -26,6 +26,15 @@ export type CeEmbedHandle = {
   destroy: () => void;
 };
 
+/** Dual-mount handle from window.CEEmbed.create */
+export type CeCreateHandle = {
+  mountSidebar: (el: HTMLElement) => void;
+  mountCanvas: (el: HTMLElement) => void;
+  unmountCanvas?: () => void;
+  destroy: () => void;
+  getData?: () => unknown;
+};
+
 type CeEmbedGlobal = {
   mount: (container: HTMLElement, opts: CeEmbedOptions) => CeEmbedHandle | Promise<CeEmbedHandle>;
 };
@@ -74,6 +83,7 @@ const SCRIPT_ORDER = [
   "vendor/knowledge-atlas.js",
   "atlas.js",
   "search.js",
+  "embed.js",
   // skip main.js — dual-mount session / CEEmbed boots instead
 ] as const;
 
@@ -341,6 +351,8 @@ export type PreparedSession = {
   data: unknown;
   publicBase: string;
   dataUrl: string;
+  /** Full CEEmbed.create handle when CE ships dual-mount embed.js. */
+  createHandle: CeCreateHandle | null;
   /** Release fetch shim + optional CEEmbed.create handle. */
   nativeRelease: { destroy: () => void } | null;
   releaseFetch: () => void;
@@ -362,11 +374,12 @@ export async function prepareSession(
 
   const ce = w().CEEmbed as
     | {
-        create?: (o: CeEmbedOptions) => Promise<{ destroy: () => void }>;
+        create?: (o: CeEmbedOptions) => Promise<CeCreateHandle>;
         mount?: unknown;
       }
     | undefined;
 
+  let createHandle: CeCreateHandle | null = null;
   let nativeRelease: { destroy: () => void } | null = null;
   if (ce && typeof ce.create === "function") {
     const created = await ce.create({
@@ -375,6 +388,7 @@ export async function prepareSession(
       publicBase,
       chrome: opts.chrome ?? false,
     });
+    createHandle = created;
     nativeRelease = {
       destroy: () => {
         try {
@@ -387,17 +401,30 @@ export async function prepareSession(
     };
   }
 
-  const res = await fetch(dataUrl, { cache: "no-store" });
-  if (!res.ok) {
-    releaseFetch();
-    throw new Error(`CE data ${res.status} from ${dataUrl}`);
+  // Prefer data from create handle when available (single fetch).
+  let data: unknown = null;
+  if (createHandle && typeof createHandle.getData === "function") {
+    data = createHandle.getData() ?? null;
   }
-  const data = await res.json();
+  if (data == null) {
+    const res = await fetch(dataUrl, { cache: "no-store" });
+    if (!res.ok) {
+      try {
+        createHandle?.destroy();
+      } catch {
+        /* ignore */
+      }
+      releaseFetch();
+      throw new Error(`CE data ${res.status} from ${dataUrl}`);
+    }
+    data = await res.json();
+  }
 
   return {
     data,
     publicBase,
     dataUrl,
+    createHandle,
     nativeRelease,
     releaseFetch: nativeRelease ? () => {} : releaseFetch,
   };
