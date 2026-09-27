@@ -398,9 +398,18 @@ export default function EditorTab({ tab }: { tab?: TabSpec } = {}) {
     );
   }
   if (state.kind === "error") {
+    const vaultMissing = Boolean(path?.startsWith("vault/") && path.endsWith(".extracted.md"));
     return (
       <div className="sy-editor sy-editor--empty">
         <p style={{ color: "var(--type-fact)" }}>error: {state.message}</p>
+        {vaultMissing && (
+          <p style={{ color: "var(--type-fact)", fontSize: "0.85em", maxWidth: "36rem" }}>
+            This vault cite points at an extraction that is not on disk (and
+            was not found in vault/vault.db). Restore the tip&apos;s
+            vault/*.extracted.md files from the hybrid vault archive, then
+            reopen the cite.
+          </p>
+        )}
       </div>
     );
   }
@@ -890,7 +899,14 @@ function TrustCompare({
       try {
         const r = await fetch(url);
         if (!r.ok) {
-          if (!cancelled) setOriginal({ kind: "error", message: `HTTP ${r.status}` });
+          if (!cancelled) {
+            let detail = `HTTP ${r.status}`;
+            try {
+              const j = await r.clone().json() as { error?: string };
+              if (j?.error) detail = j.error;
+            } catch { /* non-JSON body */ }
+            setOriginal({ kind: "error", message: detail });
+          }
           return;
         }
         const text = await r.text();

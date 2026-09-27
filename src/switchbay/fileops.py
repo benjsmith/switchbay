@@ -249,3 +249,65 @@ def inventory(workspace: Path) -> list[dict]:
             })
     out.sort(key=lambda d: d["path"])
     return out
+
+
+def vault_extracted_basename(rel: str) -> str | None:
+    """Return the vault/*.extracted.md basename for a workspace-relative
+    path (or cite), or None if it is not a vault extraction path."""
+    t = (rel or "").strip().replace("\\", "/")
+    if t.startswith("vault:"):
+        t = t[6:]
+    if t.startswith("./"):
+        t = t[2:]
+    if t.startswith("vault/"):
+        t = t[6:]
+    # Refuse traversal / absolute
+    if not t or t.startswith("/") or ".." in t.split("/") or "\x00" in t:
+        return None
+    # Only top-level vault extracts (no nested dirs in CE convention)
+    if "/" in t:
+        t = t.rsplit("/", 1)[-1]
+    if not t.endswith(".extracted.md"):
+        return None
+    return t
+
+
+def vault_db_read_body(workspace: Path, rel: str) -> str | None:
+    """Read extraction body from vault/vault.db FTS when the on-disk
+    file is missing.
+
+    CE indexes each `vault/*.extracted.md` into FTS5 `sources` keyed by
+    basename `path`. Some tip checkouts (wiki-only tarballs) ship an
+    empty or stub vault/ tree while still citing those basenames —
+    falling back to the FTS body lets Editor / /api/fs/raw open the
+    source without requiring a full file unpack.
+
+    Returns None when the DB is absent, empty, or has no matching row.
+    """
+    import sqlite3
+
+    name = vault_extracted_basename(rel)
+    if not name:
+        return None
+    db = workspace / "vault" / "vault.db"
+    if not db.is_file() or db.stat().st_size < 1000:
+        return None
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    except sqlite3.Error:
+        return None
+    try:
+        # Prefer exact path match; also accept vault/-prefixed rows if
+        # an older indexer stored them that way.
+        row = conn.execute(
+            "SELECT body FROM sources WHERE path = ? OR path = ? LIMIT 1",
+            (name, f"vault/{name}"),
+        ).fetchone()
+        if not row or row[0] is None:
+            return None
+        body = str(row[0])
+        return body if body else None
+    except sqlite3.Error:
+        return None
+    finally:
+        conn.close()

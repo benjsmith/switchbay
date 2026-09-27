@@ -274,6 +274,23 @@ async def handle_file(request: web.Request) -> web.Response:
         return web.json_response({"error": "missing path"}, status=400)
     target = _safe_resolve(workspace, rel)
     if target is None or not target.is_file():
+        # Vault extracts: fall back to FTS body in vault/vault.db when the
+        # on-disk *.extracted.md is absent (wiki-only tip checkouts).
+        body = await asyncio.to_thread(fileops.vault_db_read_body, workspace, rel)
+        if body is not None:
+            if len(body.encode("utf-8")) > MAX_FILE_BYTES:
+                return web.json_response({"error": "file too large"}, status=413)
+            return web.json_response({
+                "path": rel, "text": body, "source": "vault.db",
+            })
+        if fileops.vault_extracted_basename(rel):
+            return web.json_response({
+                "error": (
+                    f"vault source missing on disk and not in vault.db: {rel}. "
+                    "Restore vault/*.extracted.md (or a populated vault.db) "
+                    "from the hybrid vault / tip archive."
+                ),
+            }, status=404)
         return web.json_response({"error": "not found"}, status=404)
     # Cloud-sync placeholder: the bytes aren't local yet, so reading
     # them would block for tens of seconds while the sync service
@@ -6735,11 +6752,31 @@ async def handle_fs_raw(request: web.Request) -> web.StreamResponse:
 
     Same path-resolution rules as /api/file (no escape, no NUL); no
     extension restriction (DuckDB needs CSV/parquet/etc.).
+
+    Vault extracts: when `vault/*.extracted.md` is missing on disk but
+    present in vault/vault.db FTS, return the indexed body as text/markdown
+    so Editor / CE "Open full vault source" still works on wiki-only tips.
     """
     workspace: Path = request.app["workspace"]
     rel = request.query.get("path", "")
     target = _safe_resolve(workspace, rel)
     if target is None or not target.is_file():
+        body = await asyncio.to_thread(fileops.vault_db_read_body, workspace, rel)
+        if body is not None:
+            return web.Response(
+                text=body,
+                content_type="text/markdown",
+                charset="utf-8",
+                headers={"X-Switchbay-Vault-Source": "vault.db"},
+            )
+        if fileops.vault_extracted_basename(rel):
+            return web.json_response({
+                "error": (
+                    f"vault source missing on disk and not in vault.db: {rel}. "
+                    "Restore vault/*.extracted.md (or a populated vault.db) "
+                    "from the hybrid vault / tip archive."
+                ),
+            }, status=404)
         return web.json_response({"error": "not found"}, status=404)
     return web.FileResponse(target)
 
