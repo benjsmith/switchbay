@@ -3,7 +3,8 @@
  *
  * Shares a single data.json + module load across Switchbay's left column
  * (CE Pages|Files sidebar) and the Graph tab (atlas canvas only). Survives
- * Graph↔Agents tab switches: canvas may detach while sidebar stays mounted.
+ * Graph↔Agents tab switches: canvas soft-parks (atlas stays warm) while
+ * sidebar stays mounted; return reattaches instantly without re-layout.
  *
  * Prefer window.CEEmbed.create/mount when CE ships dual-mount embed mode;
  * stub path below coordinates Sidebar + AtlasViewer until then.
@@ -114,6 +115,27 @@ class CeEmbedSession {
     return this.state;
   }
 
+  /** Atlas/graph still warm (mounted or soft-parked). */
+  hasLiveCanvas(): boolean {
+    if (this.createHandle?.isCanvasLive) {
+      try {
+        return !!this.createHandle.isCanvasLive();
+      } catch {
+        /* fall through */
+      }
+    }
+    return !!this.canvasHandle;
+  }
+
+  /** Background data.json refresh without tearing down atlas layout. */
+  softRevalidate(): void {
+    try {
+      void this.createHandle?.revalidate?.();
+    } catch {
+      /* ignore */
+    }
+  }
+
   private emit() {
     for (const fn of this.listeners) fn();
   }
@@ -190,20 +212,81 @@ class CeEmbedSession {
       });
   }
 
-  detachCanvas(el?: HTMLElement) {
+  /**
+   * Soft-park by default (keeps atlas + loaded data warm for instant
+   * Graph return). Pass `{ destroy: true }` for hard teardown (files
+   * remount / workspace switch).
+   */
+  detachCanvas(el?: HTMLElement, opts?: { destroy?: boolean }) {
     if (el && this.canvasEl !== el) return;
+    const hard = !!opts?.destroy;
     try {
       if (this.createHandle?.unmountCanvas) {
-        this.createHandle.unmountCanvas();
-      } else {
+        this.createHandle.unmountCanvas(hard ? { destroy: true } : undefined);
+      } else if (hard) {
         this.canvasHandle?.destroy();
+        this.parkCanvasStub(true);
+      } else {
+        this.parkCanvasStub(false);
       }
     } catch {
       /* ignore */
     }
-    this.canvasHandle = null;
-    if (this.canvasEl) this.canvasEl.innerHTML = "";
+    if (hard) {
+      this.canvasHandle = null;
+      if (this.canvasEl) this.canvasEl.innerHTML = "";
+    }
+    // Keep canvasHandle on soft park so syncMounts reattaches, not reinits.
     this.canvasEl = null;
+  }
+
+  /** Stub-path park: move canvas DOM into a session-owned offscreen host. */
+  private parkHost: HTMLElement | null = null;
+
+  private ensureParkHost(): HTMLElement {
+    if (this.parkHost?.isConnected) return this.parkHost;
+    const host = document.createElement("div");
+    host.setAttribute("data-sy-ce-canvas-park", "1");
+    host.setAttribute("aria-hidden", "true");
+    host.style.cssText =
+      "position:fixed;left:-10000px;top:0;width:800px;height:600px;" +
+      "overflow:hidden;visibility:hidden;pointer-events:none;z-index:-1;";
+    document.body.appendChild(host);
+    this.parkHost = host;
+    return host;
+  }
+
+  private parkCanvasStub(hard: boolean) {
+    const el = this.canvasEl;
+    if (hard) {
+      try {
+        this.canvasHandle?.destroy();
+      } catch {
+        /* ignore */
+      }
+      this.canvasHandle = null;
+      if (el) el.innerHTML = "";
+      if (this.parkHost) this.parkHost.innerHTML = "";
+      return;
+    }
+    if (!el) return;
+    const g = el.querySelector("#graph") || el;
+    const w = (g as HTMLElement).clientWidth || el.clientWidth;
+    const h = (g as HTMLElement).clientHeight || el.clientHeight;
+    const host = this.ensureParkHost();
+    if (w > 0 && h > 0) {
+      host.style.width = `${w}px`;
+      host.style.height = `${h}px`;
+    }
+    while (el.firstChild) host.appendChild(el.firstChild);
+  }
+
+  private reattachParkedStub(el: HTMLElement) {
+    const host = this.parkHost;
+    if (!host) return false;
+    if (!host.firstChild && !this.canvasHandle) return false;
+    while (host.firstChild) el.appendChild(host.firstChild);
+    return true;
   }
 
   private syncMounts() {
@@ -229,29 +312,34 @@ class CeEmbedSession {
       }
 
       if (this.canvasEl && this.canvasHtml) {
-        const needInject = !this.canvasEl.querySelector("#graph");
+        const live =
+          !!this.canvasHandle ||
+          (typeof handle.isCanvasLive === "function" && handle.isCanvasLive());
+        const needInject =
+          !live && !this.canvasEl.querySelector("#graph");
         if (needInject) {
           this.canvasEl.innerHTML = this.canvasHtml;
         }
-        if (!this.canvasHandle) {
-          try {
-            handle.mountCanvas(this.canvasEl);
+        try {
+          // First mount OR soft reattach from park — CEEmbed decides.
+          handle.mountCanvas(this.canvasEl);
+          if (!this.canvasHandle) {
             this.canvasHandle = {
               destroy: () => {
                 try {
-                  handle.unmountCanvas?.();
+                  handle.unmountCanvas?.({ destroy: true });
                 } catch {
                   /* ignore */
                 }
               },
             };
-          } catch (e) {
-            console.error("[CeEmbedSession] mountCanvas failed", e);
-            this.setState({
-              status: "error",
-              message: (e as Error).message || "canvas mount failed",
-            });
           }
+        } catch (e) {
+          console.error("[CeEmbedSession] mountCanvas failed", e);
+          this.setState({
+            status: "error",
+            message: (e as Error).message || "canvas mount failed",
+          });
         }
       }
       return;
@@ -274,11 +362,17 @@ class CeEmbedSession {
     }
 
     if (this.canvasEl && this.canvasHtml) {
-      const needInject = !this.canvasEl.querySelector("#graph");
-      if (needInject) {
-        this.canvasEl.innerHTML = this.canvasHtml;
-      }
-      if (!this.canvasHandle) {
+      if (this.canvasHandle) {
+        // Soft reattach: move parked DOM back into the new Graph root.
+        if (!this.reattachParkedStub(this.canvasEl)) {
+          const needInject = !this.canvasEl.querySelector("#graph");
+          if (needInject) this.canvasEl.innerHTML = this.canvasHtml;
+        }
+      } else {
+        const needInject = !this.canvasEl.querySelector("#graph");
+        if (needInject) {
+          this.canvasEl.innerHTML = this.canvasHtml;
+        }
         void this.mountCanvasStub(data);
       }
     }
@@ -348,6 +442,11 @@ class CeEmbedSession {
   destroy() {
     this.gen++;
     try {
+      this.createHandle?.unmountCanvas?.({ destroy: true });
+    } catch {
+      /* ignore */
+    }
+    try {
       this.canvasHandle?.destroy();
     } catch {
       /* ignore */
@@ -362,6 +461,15 @@ class CeEmbedSession {
     this.createHandle = null;
     if (this.sidebarEl) this.sidebarEl.innerHTML = "";
     if (this.canvasEl) this.canvasEl.innerHTML = "";
+    if (this.parkHost) {
+      try {
+        this.parkHost.innerHTML = "";
+        this.parkHost.remove();
+      } catch {
+        /* ignore */
+      }
+    }
+    this.parkHost = null;
     this.sidebarEl = null;
     this.canvasEl = null;
     this.modulesReady = false;

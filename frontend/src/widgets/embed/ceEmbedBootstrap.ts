@@ -31,9 +31,12 @@ export type CeEmbedHandle = {
 export type CeCreateHandle = {
   mountSidebar: (el: HTMLElement) => void;
   mountCanvas: (el: HTMLElement) => void;
-  unmountCanvas?: () => void;
+  /** Soft park by default; pass {destroy:true} to tear down atlas. */
+  unmountCanvas?: (opts?: { destroy?: boolean }) => void;
   destroy: () => void;
   getData?: () => unknown;
+  isCanvasLive?: () => boolean;
+  revalidate?: (currentPageId?: string) => Promise<void> | void;
 };
 
 type CeEmbedGlobal = {
