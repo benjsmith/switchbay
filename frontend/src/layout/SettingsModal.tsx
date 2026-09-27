@@ -114,7 +114,10 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
     if (!open) return;
     fetch("/api/llm/providers")
       .then((r) => r.json())
-      .then((b: ProvidersBody) => setInfo(b))
+      .then((b: ProvidersBody) => {
+        const providers = Array.isArray(b?.providers) ? b.providers : [];
+        setInfo({ ...b, providers });
+      })
       .catch(() => { /* keychain endpoint missing on older daemons */ });
   }, [open]);
 
@@ -122,7 +125,11 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
 
   const refresh = async () => {
     const r = await fetch("/api/llm/providers");
-    if (r.ok) setInfo((await r.json()) as ProvidersBody);
+    if (r.ok) {
+      const b = (await r.json()) as ProvidersBody;
+      const providers = Array.isArray(b?.providers) ? b.providers : [];
+      setInfo({ ...b, providers });
+    }
   };
 
   const saveKey = async (id: string) => {
@@ -660,7 +667,7 @@ function MicroEditModelPanel(props: {
   };
   useEffect(() => { if (props.open) load(); }, [props.open]);
 
-  const provider = props.providers.find((p) => p.id === pid);
+  const provider = (Array.isArray(props.providers) ? props.providers : []).find((p) => p.id === pid);
   const modelOpts = modelsForProvider(provider);
   const modelChoices = model && !modelOpts.includes(model) ? [model, ...modelOpts] : modelOpts;
 
@@ -703,7 +710,7 @@ function MicroEditModelPanel(props: {
           aria-label="micro-edit provider"
         >
           <option value="">(follows picker)</option>
-          {props.providers.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          {(Array.isArray(props.providers) ? props.providers : []).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
         </select>
         <select
           className="sy-settings-input" value={model} disabled={!pid}
@@ -4400,12 +4407,13 @@ function MediaPanel({ open }: { open: boolean }) {
         if (!state) return null;
         const choice = state.choice;
         const providerId = choice?.provider ?? "";
-        const provider = state.providers.find((p) => p.id === providerId);
+        const providers = Array.isArray(state.providers) ? state.providers : [];
+        const provider = providers.find((p) => p.id === providerId);
         const modelOpts = provider?.models ?? [];
         const modelId = choice?.model && modelOpts.includes(choice.model)
           ? choice.model
           : (choice?.model || provider?.default_model || "");
-        const anyKey = state.providers.some((p) => p.has_key);
+        const anyKey = providers.some((p) => p.has_key);
         return (
           <div key={modality} className="sy-settings-ladder-row" style={{ marginBottom: 10 }}>
             <span className="sy-settings-ladder-label" style={{ textTransform: "capitalize" }}>
@@ -4421,7 +4429,7 @@ function MediaPanel({ open }: { open: boolean }) {
                   void saveModality(modality, "", "");
                   return;
                 }
-                const p = state.providers.find((x) => x.id === pid);
+                const p = providers.find((x) => x.id === pid);
                 const mid = p?.default_model || p?.models[0] || "";
                 void saveModality(modality, pid, mid);
               }}
@@ -4431,7 +4439,7 @@ function MediaPanel({ open }: { open: boolean }) {
               <option value="">
                 {anyKey ? "(unset)" : "(add an xAI or OpenAI key)"}
               </option>
-              {state.providers.map((p) => (
+              {providers.map((p) => (
                 <option key={p.id} value={p.id} disabled={!p.has_key}>
                   {p.label}{p.has_key ? "" : " (no key)"}
                 </option>

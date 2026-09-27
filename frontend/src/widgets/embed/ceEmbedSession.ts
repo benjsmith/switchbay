@@ -72,6 +72,25 @@ function win(): CeWin {
   return window as CeWin;
 }
 
+
+function workspaceLabel(data: unknown): string {
+  if (data && typeof data === "object" && "workspace" in data) {
+    const w = (data as { workspace?: unknown }).workspace;
+    if (typeof w === "string" && w.trim()) {
+      const parts = w.split("/").filter(Boolean);
+      return parts[parts.length - 1] || w;
+    }
+  }
+  return "workspace";
+}
+
+function injectSidebarHtml(el: HTMLElement, html: string, data: unknown): void {
+  const label = workspaceLabel(data);
+  el.innerHTML = html.replace(/\{\{WORKSPACE\}\}/g, label);
+  const nameEl = el.querySelector(".workspace-name");
+  if (nameEl) nameEl.textContent = label;
+}
+
 class CeEmbedSession {
   private state: SessionState = { status: "idle" };
   private listeners = new Set<Listener>();
@@ -197,7 +216,10 @@ class CeEmbedSession {
     if (handle && typeof handle.mountSidebar === "function") {
       if (this.sidebarEl && this.sidebarHtml) {
         if (!this.sidebarEl.querySelector("#sidebar")) {
-          this.sidebarEl.innerHTML = this.sidebarHtml;
+          injectSidebarHtml(this.sidebarEl, this.sidebarHtml, data);
+        } else {
+          const nameEl = this.sidebarEl.querySelector(".workspace-name");
+          if (nameEl) nameEl.textContent = workspaceLabel(data);
         }
         try {
           handle.mountSidebar(this.sidebarEl);
@@ -238,7 +260,10 @@ class CeEmbedSession {
     // Stub path until CE ships embed.js
     if (this.sidebarEl && this.sidebarHtml) {
       if (!this.sidebarEl.querySelector("#sidebar")) {
-        this.sidebarEl.innerHTML = this.sidebarHtml;
+        injectSidebarHtml(this.sidebarEl, this.sidebarHtml, data);
+      } else {
+        const nameEl = this.sidebarEl.querySelector(".workspace-name");
+        if (nameEl) nameEl.textContent = workspaceLabel(data);
       }
       try {
         w.Sidebar?.init(data);

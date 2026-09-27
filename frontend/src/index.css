@@ -9211,6 +9211,13 @@ body.sy-embed-hosting {
   font-size: 0.85em;
 }
 
+/* Dual-mount Graph: Switchbay ↻/✂ sit top-left (prior GraphTab chrome).
+   Hide CE's bottom-bar copies so we don't double up. */
+.sy-ce-atlas-embed-root #split-toggle,
+.sy-ce-atlas-embed-root #replay-toggle {
+  display: none !important;
+}
+
 /* CE dual-mount: shell-left sidebar slot (Pages|Files) */
 .sy-side-pages--ce-embed {
   flex: 1 1 auto;

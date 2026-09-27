@@ -267,6 +267,8 @@ export const SWITCHBAY_API_RESERVED_PREFIXES = [
   "/api/desks",
   "/api/mode",
   "/api/files",
+  "/api/tree",
+  "/api/llm",
   "/api/rail",
   "/api/threads",
   "/api/packs",

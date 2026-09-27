@@ -64,6 +64,11 @@ export default function CeAtlasEmbed() {
     };
   }, []);
 
+  const clickCe = (sel: string) => {
+    const btn = rootRef.current?.querySelector(sel);
+    if (btn instanceof HTMLElement) btn.click();
+  };
+
   return (
     <div
       className="sy-ce-atlas-embed"
@@ -82,6 +87,29 @@ export default function CeAtlasEmbed() {
             canvas-only. See docs/CE-EMBED-HOOK.md.
           </p>
         </div>
+      )}
+      {state.status === "ready" && (
+        <>
+          <button
+            type="button"
+            className="sy-graph-replay-btn"
+            data-tour="graph-replay"
+            onClick={() => clickCe("#replay-toggle")}
+            title="Replay the curation history animation"
+            aria-label="Replay curation history"
+          >
+            ↻
+          </button>
+          <button
+            type="button"
+            className="sy-graph-split-btn"
+            onClick={() => clickCe("#split-toggle")}
+            title="Split this workspace: partition selected pages"
+            aria-label="Split workspace mode"
+          >
+            ✂
+          </button>
+        </>
       )}
       <div
         id="graph-root"

@@ -206,7 +206,10 @@ function runInFocusedWorkspace(r: { workspace?: string }, focused: string): bool
 }
 
 function isLiveRun(r: Run): boolean {
-  return !r.status || LIVE_RUN_STATUSES.has(r.status);
+  // Missing/idle/quiet must NOT count as live — otherwise the Agents
+  // list pulses "running" dots while the desk is Idle.
+  if (!r.status) return false;
+  return LIVE_RUN_STATUSES.has(r.status);
 }
 
 function isCancelledRun(r: { status?: string }): boolean {
@@ -306,7 +309,7 @@ export default function AgentDashboardTab() {
       setTools(t.tools as Tool[]);
       setRules(r.rules as Rule[]);
       setPalettes(Array.isArray(pal?.commands) ? pal as PalettesPayload : null);
-      setProviders(p.providers as Provider[]);
+      setProviders(Array.isArray(p.providers) ? (p.providers as Provider[]) : []);
       setModelTick((n) => n + 1);
     } catch (e) { setError((e as Error).message); }
   }, []);

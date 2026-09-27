@@ -14,6 +14,7 @@
  *   }) => { destroy(): void }
  */
 
+import { isSwitchbayReservedApi } from "./embedMount.ts";
 export type CeEmbedOptions = {
   embed: true;
   dataUrl: string;
@@ -136,8 +137,12 @@ function installPublicBase(publicBase: string): void {
   const win = w();
   win.CE_PUBLIC_BASE = base;
   win.CE_HOSTED = "switchbay";
+  // CE FileBrowser uses ceApi("/api/tree") — older CE viewers 404 that
+  // under /embed/ce. Keep Switchbay control-plane paths on the daemon
+  // (tree SSOT, llm providers, …) so dual-mount Files + rail pickers work.
   win.ceApi = (path: string) => {
     const p = path.startsWith("/") ? path : `/${path}`;
+    if (isSwitchbayReservedApi(p)) return p;
     return `${base}${p}`;
   };
   try {
