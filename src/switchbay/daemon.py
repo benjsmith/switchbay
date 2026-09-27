@@ -927,6 +927,14 @@ async def _activate(app: web.Application, new_path: Path) -> None:
     # natively. Idempotent no-op once done; off-loop and best-effort.
     asyncio.create_task(_migrate_figures(app, new_path))
     asyncio.create_task(_migrate_legacy_decks(app, new_path))
+    # Keep proxied Graph CE (:8766) on the active tip — best-effort, off-thread.
+    async def _kick_ce_viewer() -> None:
+        try:
+            out = await asyncio.to_thread(ce_viewer_supervisor.start, new_path)
+            log.info("CE viewer retarget on workspace switch: %s", out)
+        except Exception:  # noqa: BLE001
+            log.exception("CE viewer retarget on workspace switch failed")
+    asyncio.create_task(_kick_ce_viewer())
     await _broadcast(app, _hello_payload(app))
 
 

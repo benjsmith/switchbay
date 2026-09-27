@@ -5,6 +5,10 @@ That requires a long-lived CE ``viewer.sh serve`` on loopback. This module
 starts it, health-checks it, and restarts it if it dies. Optional wiki
 mtime polling triggers ``viewer.sh build`` so the served bundle tracks
 wiki edits (reload still needed in the Phase 4a HTML panel).
+
+The viewer is bound to one workspace at a time. ``start(workspace)``
+retargets (stop + serve) when healthy but bound to a different tip so
+``/embed/ce/`` always follows the active workspace.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ import logging
 import os
 import signal
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -27,6 +32,7 @@ log = logging.getLogger("switchbay.ce_viewer_supervisor")
 
 _PID_NAME = "ce-viewer.pid"
 _LOG_NAME = "ce-viewer.log"
+_WS_NAME = "ce-viewer.workspace"
 _HEALTH_PATH = "/"
 _POLL_SEC = 5.0
 _WIKI_POLL_SEC = 3.0
@@ -38,6 +44,8 @@ _WIKI_BUILD: dict[str, object] = {
     "pages": None,
     "detail": "",
 }
+
+_start_lock = threading.Lock()
 
 
 def _set_ce_state(state: str, detail: str = "") -> None:
@@ -97,6 +105,39 @@ def log_path() -> Path:
     return _state_dir() / _LOG_NAME
 
 
+def workspace_state_path() -> Path:
+    return _state_dir() / _WS_NAME
+
+
+def bound_workspace() -> Path | None:
+    """Workspace the running CE viewer was last successfully started for."""
+    p = workspace_state_path()
+    if not p.is_file():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8").strip()
+        return Path(raw).expanduser().resolve() if raw else None
+    except OSError:
+        return None
+
+
+def _set_bound_workspace(workspace: Path | None) -> None:
+    p = workspace_state_path()
+    if workspace is None:
+        try:
+            p.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    try:
+        p.write_text(
+            str(Path(workspace).expanduser().resolve()) + "\n",
+            encoding="utf-8",
+        )
+    except OSError as e:
+        log.warning("could not write ce-viewer workspace: %s", e)
+
+
 def upstream_base() -> str:
     return embed_proxy.ce_upstream()
 
@@ -146,19 +187,69 @@ def _public_base() -> str:
     return (os.environ.get("CE_PUBLIC_BASE") or "/embed/ce").rstrip("/") or "/embed/ce"
 
 
+def bundle_ready(workspace: Path) -> bool:
+    """True when wiki-view cache has enough to serve without a full build."""
+    out = cebridge.output_dir(Path(workspace))
+    return (out / "index.html").is_file() and (out / "data.json").is_file()
+
+
+def _spawn_argv(workspace: Path, port: int) -> tuple[list[str], str]:
+    """Return (argv, mode) for CE serve. Prefer serve-only when cache exists."""
+    script_dir = cebridge.ce_root() / "scripts"
+    if bundle_ready(workspace):
+        server = script_dir / "viewer_server.py"
+        bundle = cebridge.output_dir(workspace)
+        # Match viewer.sh: uv run --no-project python3 viewer_server.py …
+        return (
+            [
+                "uv",
+                "run",
+                "--no-project",
+                "python3",
+                str(server),
+                str(bundle),
+                str(workspace),
+                str(port),
+            ],
+            "serve_only",
+        )
+    script = script_dir / "viewer.sh"
+    return (["bash", str(script), "serve", str(port)], "build_and_serve")
+
+
 def start(workspace: Path) -> dict[str, Any]:
-    """Start CE viewer.sh serve if not healthy. Idempotent."""
+    """Start CE viewer for ``workspace``. Retargets if healthy but mistargeted."""
     workspace = Path(workspace).expanduser().resolve()
+    with _start_lock:
+        return _start_unlocked(workspace)
+
+
+def _start_unlocked(workspace: Path) -> dict[str, Any]:
+    retargeted = False
     if is_healthy():
-        _set_ce_state("healthy", "already running")
-        return {
-            "ok": True,
-            "already_running": True,
-            "healthy": True,
-            "url": upstream_base(),
-            "port": upstream_port(),
-            "pid": _read_pid(),
-        }
+        bound = bound_workspace()
+        if bound is not None and bound == workspace:
+            _set_ce_state("healthy", "already running")
+            return {
+                "ok": True,
+                "already_running": True,
+                "retargeted": False,
+                "healthy": True,
+                "url": upstream_base(),
+                "port": upstream_port(),
+                "pid": _read_pid(),
+                "workspace": str(workspace),
+            }
+        # Healthy but bound elsewhere (or unknown) — stop then re-serve.
+        log.info(
+            "CE viewer retarget %s → %s",
+            bound if bound is not None else "(unknown)",
+            workspace,
+        )
+        stop()
+        retargeted = True
+        # Brief pause so the port is free before re-bind.
+        time.sleep(0.3)
 
     if not cebridge.has_wiki(workspace):
         return {
@@ -174,6 +265,13 @@ def start(workspace: Path) -> dict[str, Any]:
             "error": f"viewer.sh not found under {cebridge.ce_root()}",
             "hint": "Install CE skill or set SWITCHBAY_CE_ROOT.",
         }
+    server_py = cebridge.ce_root() / "scripts" / "viewer_server.py"
+    if not server_py.is_file():
+        return {
+            "ok": False,
+            "error": f"viewer_server.py not found under {cebridge.ce_root()}",
+            "hint": "Install CE skill or set SWITCHBAY_CE_ROOT.",
+        }
 
     port = upstream_port()
     # Drop stale pid if process is gone.
@@ -184,7 +282,8 @@ def start(workspace: Path) -> dict[str, Any]:
         except OSError:
             pass
 
-    _set_ce_state("starting", "spawning viewer.sh serve")
+    argv, mode = _spawn_argv(workspace, port)
+    _set_ce_state("starting", f"spawning CE viewer ({mode})")
     env = os.environ.copy()
     env["CE_PUBLIC_BASE"] = _public_base()
     # Prefer the same CE root Switchbay already resolved.
@@ -193,7 +292,7 @@ def start(workspace: Path) -> dict[str, Any]:
     logf = log_path().open("a", encoding="utf-8")
     try:
         proc = subprocess.Popen(  # noqa: S603
-            ["bash", str(script), "serve", str(port)],
+            argv,
             cwd=str(workspace),
             env=env,
             stdout=logf,
@@ -213,14 +312,18 @@ def start(workspace: Path) -> dict[str, Any]:
     deadline = time.time() + 12.0
     while time.time() < deadline:
         if is_healthy():
+            _set_bound_workspace(workspace)
+            _set_ce_state("healthy", f"up ({mode})")
             return {
                 "ok": True,
                 "already_running": False,
+                "retargeted": retargeted,
                 "healthy": True,
                 "url": upstream_base(),
                 "port": port,
                 "pid": proc.pid,
                 "workspace": str(workspace),
+                "mode": mode,
                 "log": str(log_path()),
             }
         if proc.poll() is not None:
@@ -228,6 +331,7 @@ def start(workspace: Path) -> dict[str, Any]:
                 "ok": False,
                 "error": f"viewer exited early code={proc.returncode}",
                 "log": str(log_path()),
+                "mode": mode,
             }
         time.sleep(0.4)
 
@@ -237,32 +341,45 @@ def start(workspace: Path) -> dict[str, Any]:
         "pid": proc.pid,
         "log": str(log_path()),
         "url": upstream_base(),
+        "mode": mode,
     }
 
 
 def stop() -> dict[str, Any]:
     pid = _read_pid()
     if not pid:
+        _set_bound_workspace(None)
         return {"ok": True, "stopped": False, "note": "no pid file"}
+    # Spawn used start_new_session=True → pid is session/pgid leader.
     try:
-        os.kill(pid, signal.SIGTERM)
-    except OSError as e:
-        pid_path().unlink(missing_ok=True)
-        return {"ok": True, "stopped": False, "note": f"pid gone: {e}"}
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as e:
+            pid_path().unlink(missing_ok=True)
+            _set_bound_workspace(None)
+            return {"ok": True, "stopped": False, "note": f"pid gone: {e}"}
     deadline = time.time() + 5.0
     while time.time() < deadline and _pid_alive(pid):
         time.sleep(0.2)
     if _pid_alive(pid):
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.killpg(pid, signal.SIGKILL)
         except OSError:
-            pass
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except OSError:
+                pass
     pid_path().unlink(missing_ok=True)
+    _set_bound_workspace(None)
+    _set_ce_state("stopped", "stopped")
     return {"ok": True, "stopped": True, "pid": pid}
 
 
 def status(workspace: Path | None = None) -> dict[str, Any]:
     pid = _read_pid()
+    bound = bound_workspace()
     return {
         "ok": True,
         "healthy": is_healthy(),
@@ -273,6 +390,7 @@ def status(workspace: Path | None = None) -> dict[str, Any]:
         "public_base": _public_base(),
         "ce_root": str(cebridge.ce_root()),
         "workspace": str(workspace) if workspace else None,
+        "bound_workspace": str(bound) if bound else None,
         "proxied_skill_embeds": app_settings.get_proxied_skill_embeds(),
         "log": str(log_path()),
     }
@@ -349,13 +467,14 @@ async def run_supervisor(app: Any) -> None:
     """Background task: always keep CE up (core experience; Ben lock).
 
     Proxied-embeds flag still chooses the Graph UI panel; supervisors bring
-    the skill up regardless so status is never an empty Graph.
+    the skill up regardless so status is never an empty Graph. Retargets
+    when ``app["workspace"]`` diverges from the bound CE viewer workspace.
     """
     last_wiki_mtime = 0.0
     last_rebuild = 0.0
     while True:
         try:
-            ws = Path(app["workspace"])
+            ws = Path(app["workspace"]).expanduser().resolve()
             if not is_healthy():
                 log.info("CE viewer unhealthy — starting for %s", ws)
                 _set_ce_state("starting", "supervisor restart")
@@ -365,29 +484,52 @@ async def run_supervisor(app: Any) -> None:
                     log.warning("CE viewer start failed: %s", out.get("error"))
                 else:
                     _set_ce_state("healthy", "supervisor")
+                    last_wiki_mtime = 0.0
             else:
-                _set_ce_state("healthy", "supervisor")
-                # Rebuild static bundle when wiki changes (Phase 4a panel
-                # still needs a browser reload; keep-alive is the hard part).
-                mtime = await asyncio.to_thread(_wiki_mtime, ws)
-                now = time.time()
-                if (
-                    mtime > last_wiki_mtime
-                    and last_wiki_mtime > 0.0
-                    and (now - last_rebuild) > _WIKI_POLL_SEC
-                ):
-                    last_rebuild = now
-                    last_wiki_mtime = mtime
-                    reb = await asyncio.to_thread(rebuild_bundle, ws)
-                    log.info("CE viewer rebuild after wiki change: %s", reb)
-                    if reb.get("ok"):
-                        # Tell proxied Graph panels to soft-refetch /embed/ce.
-                        try:
-                            await _broadcast_files_changed(app)
-                        except Exception:  # noqa: BLE001
-                            log.exception("files_changed after CE rebuild failed")
-                elif last_wiki_mtime == 0.0:
-                    last_wiki_mtime = mtime
+                bound = bound_workspace()
+                if bound is None or bound != ws:
+                    log.info(
+                        "CE viewer mistargeted (%s) — retargeting to %s",
+                        bound if bound is not None else "(unknown)",
+                        ws,
+                    )
+                    out = await asyncio.to_thread(start, ws)
+                    if not out.get("ok"):
+                        _set_ce_state(
+                            "unhealthy",
+                            str(out.get("error") or "retarget failed"),
+                        )
+                        log.warning(
+                            "CE viewer retarget failed: %s", out.get("error")
+                        )
+                    else:
+                        _set_ce_state("healthy", "supervisor retarget")
+                        last_wiki_mtime = 0.0
+                else:
+                    _set_ce_state("healthy", "supervisor")
+                    # Rebuild static bundle when wiki changes (Phase 4a panel
+                    # still needs a browser reload; keep-alive is the hard part).
+                    mtime = await asyncio.to_thread(_wiki_mtime, ws)
+                    now = time.time()
+                    if (
+                        mtime > last_wiki_mtime
+                        and last_wiki_mtime > 0.0
+                        and (now - last_rebuild) > _WIKI_POLL_SEC
+                    ):
+                        last_rebuild = now
+                        last_wiki_mtime = mtime
+                        reb = await asyncio.to_thread(rebuild_bundle, ws)
+                        log.info("CE viewer rebuild after wiki change: %s", reb)
+                        if reb.get("ok"):
+                            # Tell proxied Graph panels to soft-refetch /embed/ce.
+                            try:
+                                await _broadcast_files_changed(app)
+                            except Exception:  # noqa: BLE001
+                                log.exception(
+                                    "files_changed after CE rebuild failed"
+                                )
+                    elif last_wiki_mtime == 0.0:
+                        last_wiki_mtime = mtime
         except asyncio.CancelledError:
             raise
         except Exception:  # noqa: BLE001
