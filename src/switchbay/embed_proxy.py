@@ -14,6 +14,7 @@ headers so CE/okstratr can enter hosted mode:
 
 from __future__ import annotations
 
+import gzip
 import ipaddress
 import logging
 import os
@@ -48,6 +49,132 @@ _HOP_BY_HOP = frozenset({
     "host",
     "content-length",
 })
+
+# Gzip large JSON/static through the proxy even when upstream is plain.
+_MIN_GZIP_BYTES = 1024
+_GZIP_EXT = frozenset({
+    ".json", ".js", ".mjs", ".cjs", ".css", ".html", ".htm",
+    ".svg", ".txt", ".md", ".xml", ".csv", ".map", ".wasm",
+})
+_GZIP_TYPE_PREFIXES = (
+    "application/json",
+    "application/javascript",
+    "application/xml",
+    "application/xhtml",
+    "application/wasm",
+    "image/svg",
+    "text/",
+)
+
+
+def client_accepts_gzip(headers: Mapping[str, str]) -> bool:
+    """True if Accept-Encoding lists gzip (ignore q=0)."""
+    raw = headers.get("Accept-Encoding") or headers.get("accept-encoding") or ""
+    for part in raw.split(","):
+        token = part.strip().lower()
+        if not token:
+            continue
+        coding = token.split(";", 1)[0].strip()
+        if coding != "gzip":
+            continue
+        # Honour explicit q=0
+        q = 1.0
+        if ";" in token:
+            for param in token.split(";")[1:]:
+                p = param.strip()
+                if p.startswith("q="):
+                    try:
+                        q = float(p[2:])
+                    except ValueError:
+                        q = 0.0
+        return q > 0.0
+    return False
+
+
+def _header_ci(headers: Mapping[str, str], name: str) -> str | None:
+    want = name.lower()
+    for k, v in headers.items():
+        if k.lower() == want:
+            return v
+    return None
+
+
+def is_compressible_payload(
+    content_type: str | None,
+    path: str,
+    *,
+    size: int,
+) -> bool:
+    """Whether *path* / Content-Type should be gzipped when large enough."""
+    if size < _MIN_GZIP_BYTES:
+        return False
+    ct = (content_type or "").split(";", 1)[0].strip().lower()
+    if ct and any(ct.startswith(p) or ct == p.rstrip("/") for p in _GZIP_TYPE_PREFIXES):
+        return True
+    # Path fallback (data.json often arrives with application/json already,
+    # but keep extension check for mislabeled upstreams).
+    clean = (path or "").split("?", 1)[0].lower()
+    for ext in _GZIP_EXT:
+        if clean.endswith(ext):
+            return True
+    # Bare "data.json" style names without a leading slash segment
+    base = clean.rsplit("/", 1)[-1]
+    if base == "data.json" or base.endswith(".json"):
+        return True
+    return False
+
+
+def maybe_gzip_body(
+    payload: bytes,
+    resp_headers: dict[str, str],
+    *,
+    accept_gzip: bool,
+    path: str,
+) -> tuple[bytes, dict[str, str]]:
+    """Gzip *payload* when the client accepts it and content is compressible.
+
+    Upstream may be uncompressed (CE SimpleHTTP). Never double-compress.
+    Returns ``(body, headers)`` with Content-Encoding/Vary adjusted.
+    """
+    out = dict(resp_headers)
+    # Drop hop leftovers aiohttp may leave after auto-decompress.
+    for k in list(out):
+        if k.lower() in {"content-encoding", "content-length"}:
+            del out[k]
+
+    if not accept_gzip or not payload:
+        return payload, out
+
+    existing = _header_ci(resp_headers, "Content-Encoding")
+    if existing and existing.strip().lower() not in ("", "identity"):
+        # Pass through already-encoded body as-is (restore encoding header).
+        out["Content-Encoding"] = existing.strip()
+        return payload, out
+
+    ct = _header_ci(resp_headers, "Content-Type")
+    if not is_compressible_payload(ct, path, size=len(payload)):
+        return payload, out
+
+    level = 1 if len(payload) >= 1_000_000 else 6
+    compressed = gzip.compress(payload, compresslevel=level)
+    if len(compressed) >= len(payload):
+        return payload, out
+
+    out["Content-Encoding"] = "gzip"
+    vary = _header_ci(out, "Vary")
+    if vary:
+        parts = [p.strip() for p in vary.split(",") if p.strip()]
+        if not any(p.lower() == "accept-encoding" for p in parts):
+            parts.append("Accept-Encoding")
+        # Replace any Vary key casing with canonical
+        for k in list(out):
+            if k.lower() == "vary":
+                del out[k]
+        out["Vary"] = ", ".join(parts)
+    else:
+        out["Vary"] = "Accept-Encoding"
+    return compressed, out
+
 
 
 class UpstreamNotLoopback(ValueError):
@@ -177,6 +304,10 @@ def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
         # wiki changes and must not keep a stale HTML shell.
         if k.lower() in {"cache-control", "etag", "last-modified", "expires"}:
             continue
+        # Content-Encoding is re-decided in maybe_gzip_body (aiohttp may
+        # auto-decompress while leaving a stale encoding header).
+        if k.lower() == "content-encoding":
+            continue
         out[k] = v
     out["Cache-Control"] = "no-store"
     return out
@@ -227,6 +358,14 @@ async def _proxy_http(request: web.Request) -> web.StreamResponse:
         ) as upstream:
             resp_headers = filter_response_headers(upstream.headers)
             payload = await upstream.read()
+            # Compress large JSON/static for browsers even when CE serves plain.
+            if request.method.upper() != "HEAD":
+                payload, resp_headers = maybe_gzip_body(
+                    payload,
+                    resp_headers,
+                    accept_gzip=client_accepts_gzip(request.headers),
+                    path=rest,
+                )
             return web.Response(
                 status=upstream.status,
                 body=payload,

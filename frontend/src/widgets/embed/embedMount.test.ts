@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   documentDir,
+  embedFetchShimScript,
   extractScripts,
   mapStatusBanner,
   prepareEmbedHtml,
@@ -142,4 +143,33 @@ test("mapStatusBanner: live vs building wiki", () => {
   assert.equal(building.kind, "building_wiki");
   assert.equal(building.allowMount, true);
   assert.match(building.label, /wiki/i);
+});
+
+test("embedFetchShimScript rewrites data.json onto public base", () => {
+  const shim = embedFetchShimScript("/embed/ce");
+  assert.equal(shim.type, "classic");
+  assert.ok(shim.content);
+  assert.match(shim.content!, /\/embed\/ce/);
+  assert.match(shim.content!, /data\.json/);
+  // Evaluate shim in a minimal fetch stub.
+  const calls: string[] = [];
+  const g = globalThis as typeof globalThis & {
+    window: any;
+    fetch: typeof fetch;
+  };
+  g.window = g;
+  g.fetch = (async (input: any) => {
+    calls.push(typeof input === "string" ? input : String(input?.url));
+    return new Response("{}");
+  }) as typeof fetch;
+  // eslint-disable-next-line no-eval
+  eval(shim.content!);
+  void g.fetch("data.json");
+  void g.fetch("data.json?t=1");
+  void g.fetch("/api/page?path=notes/x.md");
+  void g.fetch("/embed/ce/already");
+  assert.equal(calls[0], "/embed/ce/data.json");
+  assert.equal(calls[1], "/embed/ce/data.json?t=1");
+  assert.equal(calls[2], "/embed/ce/api/page?path=notes/x.md");
+  assert.equal(calls[3], "/embed/ce/already");
 });

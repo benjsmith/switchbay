@@ -3,6 +3,7 @@ import {
   type CoreSkillsStatus,
   type EmbedScript,
   type StatusBanner,
+  embedFetchShimScript,
   mapStatusBanner,
   prepareEmbedHtml,
 } from "./embedMount.ts";
@@ -40,6 +41,11 @@ const DEFAULT_PATH: Record<SkillEmbedKind, string> = {
 };
 
 const STATUS_POLL_MS = 2000;
+/** Ignore sy:files-changed until first ok-html, then for this grace window
+ *  so CE's initial data.json fetch is not aborted by a soft remount. */
+const SOFT_REMOUNT_GRACE_MS = 8000;
+/** Debounce files_changed soft remounts (was 400ms — too eager). */
+const SOFT_REMOUNT_DEBOUNCE_MS = 1500;
 
 type Props = {
   kind: SkillEmbedKind;
@@ -104,6 +110,10 @@ export default function ProxiedSkillPanel({ kind }: Props) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const injectedScriptsRef = useRef<HTMLScriptElement[]>([]);
   const loadGenRef = useRef(0);
+  /** Wall clock of last successful ok-html mount (0 = never). */
+  const okHtmlAtRef = useRef(0);
+  /** True while load() is in flight (HTML fetch / script exec). */
+  const loadInFlightRef = useRef(false);
 
   const banner: StatusBanner = mapStatusBanner(kind, coreStatus);
 
@@ -155,10 +165,13 @@ export default function ProxiedSkillPanel({ kind }: Props) {
 
       if (!liveBanner.allowMount) {
         teardown();
+        okHtmlAtRef.current = 0;
+        loadInFlightRef.current = false;
         setState({ status: "idle" });
         return;
       }
 
+      loadInFlightRef.current = true;
       if (soft) {
         setRefreshing(true);
       } else {
@@ -214,8 +227,10 @@ export default function ProxiedSkillPanel({ kind }: Props) {
             setState({ status: "error", message: "mount root missing" });
             return;
           }
-          const { markup, scripts } = prepareEmbedHtml(text, prefix, p);
-          root.innerHTML = markup;
+          const prepared = prepareEmbedHtml(text, prefix, p);
+          // Remap CE relative fetch('data.json') + /api/* onto /embed/ce.
+          const scripts = [embedFetchShimScript(prefix), ...prepared.scripts];
+          root.innerHTML = prepared.markup;
           try {
             await executeScripts(scripts, root, injectedScriptsRef.current);
           } catch (e) {
@@ -227,6 +242,7 @@ export default function ProxiedSkillPanel({ kind }: Props) {
             return;
           }
           if (gen !== loadGenRef.current) return;
+          okHtmlAtRef.current = Date.now();
           setState({ status: "ok-html" });
           return;
         }
@@ -244,7 +260,10 @@ export default function ProxiedSkillPanel({ kind }: Props) {
           message: (e as Error).message || "fetch failed",
         });
       } finally {
-        if (soft && gen === loadGenRef.current) setRefreshing(false);
+        if (gen === loadGenRef.current) {
+          loadInFlightRef.current = false;
+          if (soft) setRefreshing(false);
+        }
       }
     },
     [prefix, kind, teardown],
@@ -254,20 +273,32 @@ export default function ProxiedSkillPanel({ kind }: Props) {
   useEffect(() => {
     if (!banner.allowMount) {
       teardown();
+      okHtmlAtRef.current = 0;
       setState({ status: "idle" });
       return;
     }
+    // Path / first-healthy mount: reset grace so soft remount cannot
+    // abort the new initial data.json load.
+    okHtmlAtRef.current = 0;
     void load(path);
   }, [load, path, banner.allowMount, teardown]);
 
   // Live view: wiki / curator / rescan → daemon files_changed → soft remount.
+  // Guard: never soft-remount before first ok-html, during load(), or inside
+  // the post-mount grace window (CE main.js fetch('data.json') is in flight).
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onFiles = () => {
+      if (okHtmlAtRef.current === 0) return;
+      if (loadInFlightRef.current) return;
+      if (Date.now() - okHtmlAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
+        if (okHtmlAtRef.current === 0) return;
+        if (loadInFlightRef.current) return;
+        if (Date.now() - okHtmlAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
         void load(pathRef.current, { soft: true });
-      }, 400);
+      }, SOFT_REMOUNT_DEBOUNCE_MS);
     };
     window.addEventListener("sy:files-changed", onFiles);
     return () => {

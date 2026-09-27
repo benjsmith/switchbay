@@ -252,6 +252,54 @@ export function prepareEmbedHtml(
   return { markup, scripts };
 }
 
+/**
+ * Inline classic script that remaps relative + CE `/api/*` fetches onto the
+ * embed public base. Same-document mount keeps Switchbay's document URL, so
+ * CE's `fetch('data.json')` / `fetch('/api/page')` would otherwise miss
+ * `/embed/ce/…`. Injected only by ProxiedSkillPanel — CE standalone on
+ * :8766 is untouched.
+ */
+export function embedFetchShimScript(publicBase: string): EmbedScript {
+  const base = JSON.stringify((publicBase || "").replace(/\/$/, "") || "");
+  // Built as an array + join so // and /\./ never appear inside a template
+  // literal (those sequences break when the shim is eval'd / injected).
+  const lines = [
+    "(function(base){",
+    "  if (!base) return;",
+    "  if (window.__syEmbedFetchBase === base && window.__syEmbedOrigFetch) return;",
+    "  window.__syEmbedFetchBase = base;",
+    "  if (!window.__syEmbedOrigFetch) {",
+    "    window.__syEmbedOrigFetch = window.fetch.bind(window);",
+    "  }",
+    "  var orig = window.__syEmbedOrigFetch;",
+    "  function rewrite(u) {",
+    '    if (typeof u !== "string") return u;',
+    '    if (u === "data.json" || u.indexOf("data.json?") === 0) return base + "/" + u;',
+    '    if (u.charAt(0) === "/" && u.indexOf("/embed/") !== 0 && u.indexOf("/api/") === 0) {',
+    "      return base + u;",
+    "    }",
+    "    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) return u;",
+    '    if (u.indexOf("//") === 0) return u;',
+    '    if (u.charAt(0) === "/") return u;',
+    '    if (u.indexOf("./") === 0) u = u.slice(2);',
+    '    return base + "/" + u;',
+    "  }",
+    "  window.fetch = function(input, init) {",
+    '    if (typeof input === "string") input = rewrite(input);',
+    '    else if (input && typeof Request !== "undefined" && input instanceof Request) {',
+    "      var nu = rewrite(input.url);",
+    "      if (nu !== input.url) input = new Request(nu, input);",
+    "    }",
+    "    return orig(input, init);",
+    "  };",
+    "})(" + base + ");",
+  ];
+  return {
+    type: "classic",
+    content: lines.join("\n"),
+  };
+}
+
 // ── Status banner mapping (C1 status shape) ──────────────────────────
 
 export type SkillHealthState = "starting" | "healthy" | "unhealthy" | "stopped";

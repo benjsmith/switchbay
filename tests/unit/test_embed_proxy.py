@@ -143,3 +143,96 @@ async def test_proxy_rejects_if_upstream_env_not_loopback(monkeypatch):
         assert r.status == 502
         data = await r.json()
         assert "loopback" in data["error"].lower()
+
+def test_client_accepts_gzip():
+    assert embed_proxy.client_accepts_gzip({"Accept-Encoding": "gzip, deflate"})
+    assert embed_proxy.client_accepts_gzip({"Accept-Encoding": "br, gzip;q=1.0"})
+    assert not embed_proxy.client_accepts_gzip({"Accept-Encoding": "identity"})
+    assert not embed_proxy.client_accepts_gzip({"Accept-Encoding": "gzip;q=0"})
+    assert not embed_proxy.client_accepts_gzip({})
+
+
+def test_is_compressible_payload():
+    assert embed_proxy.is_compressible_payload(
+        "application/json", "/data.json", size=5000
+    )
+    assert embed_proxy.is_compressible_payload(
+        "application/json; charset=utf-8", "/x", size=5000
+    )
+    assert embed_proxy.is_compressible_payload(None, "/static/main.js", size=5000)
+    assert not embed_proxy.is_compressible_payload(
+        "application/json", "/data.json", size=100
+    )
+    assert not embed_proxy.is_compressible_payload(
+        "image/png", "/logo.png", size=500_000
+    )
+
+
+def test_maybe_gzip_body_compresses_json():
+    raw = (b'{"n":' + b'"' + b"x" * 4000 + b'"}')
+    headers = {"Content-Type": "application/json", "Cache-Control": "no-store"}
+    body, out = embed_proxy.maybe_gzip_body(
+        raw, headers, accept_gzip=True, path="/data.json"
+    )
+    assert out.get("Content-Encoding") == "gzip"
+    assert "Accept-Encoding" in out.get("Vary", "")
+    assert len(body) < len(raw)
+    import gzip as gz
+    assert gz.decompress(body) == raw
+
+
+def test_maybe_gzip_body_skips_when_client_rejects():
+    raw = b"{" + b"x" * 4000 + b"}"
+    headers = {"Content-Type": "application/json"}
+    body, out = embed_proxy.maybe_gzip_body(
+        raw, headers, accept_gzip=False, path="/data.json"
+    )
+    assert "Content-Encoding" not in out
+    assert body == raw
+
+
+@pytest.mark.asyncio
+async def test_proxy_gzips_large_json(monkeypatch):
+    """Browser Accept-Encoding: gzip → proxy compresses upstream plain JSON."""
+    raw = b'{"pages":' + (b"[" + b'"p",' * 2000 + b'null]') + b"}"
+
+    async def upstream_handler(request: web.Request) -> web.Response:
+        return web.Response(
+            status=200,
+            body=raw,
+            headers={"Content-Type": "application/json"},
+        )
+
+    up_app = web.Application()
+    up_app.router.add_get("/data.json", upstream_handler)
+    up_server = TestServer(up_app)
+    await up_server.start_server()
+    try:
+        base = f"http://127.0.0.1:{up_server.port}"
+        monkeypatch.setenv("SWITCHBAY_CE_UPSTREAM", base)
+        monkeypatch.setenv("SWITCHBAY_OKSTRATR_UPSTREAM", base)
+
+        app = web.Application()
+        embed_proxy.register_routes(app)
+        async with TestClient(TestServer(app)) as client:
+            r = await client.get(
+                "/embed/ce/data.json",
+                headers={"Accept-Encoding": "gzip"},
+            )
+            assert r.status == 200
+            assert r.headers.get("Content-Encoding") == "gzip"
+            import gzip as gz
+            buf = await r.read()
+            # aiohttp TestClient may auto-decompress; prefer raw if encoded.
+            if r.headers.get("Content-Encoding") == "gzip":
+                # TestClient keeps encoding header; body may already be raw.
+                try:
+                    decoded = gz.decompress(buf)
+                except OSError:
+                    decoded = buf  # already decompressed by client
+            else:
+                decoded = buf
+            assert decoded == raw
+            assert len(buf) < len(raw) or decoded == raw
+    finally:
+        await up_server.close()
