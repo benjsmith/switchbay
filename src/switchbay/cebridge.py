@@ -916,10 +916,12 @@ async def build(
     # follows system 3.14.
     env = _scrubbed_env()
 
+    # Prefer workspace .venv python (has kuzu) over sys.executable
+    # (Switchbay's own venv usually does not). Falls back to CE venv /
+    # uv run via _script_python.
     if render_py.is_file():
-        import sys
         cmd = [
-            sys.executable, str(render_py), "build",
+            *_script_python(Path(workspace)), str(render_py), "build",
             str(workspace / "wiki"),
             "--output-dir", str(output_dir(workspace)),
         ]
