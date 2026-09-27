@@ -203,6 +203,9 @@ def start(workspace: Path | None = None) -> dict[str, Any]:
 
     env = os.environ.copy()
     env["OKSTRATR_PUBLIC_BASE"] = _public_base()
+    # Hosted mode: okstratr scrub/inject + conversation stub copy (parity with okbay).
+    env.setdefault("OKSTRATR_HOST", "switchbay")
+    env.setdefault("OKSTRATR_HOSTED", "switchbay")
     # Prefer embed public base so hosted observer URLs match /embed/okstratr.
     if workspace is not None:
         env.setdefault("OKSTRATR_WORKSPACE", str(Path(workspace).expanduser()))
