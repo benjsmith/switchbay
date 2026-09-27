@@ -1,68 +1,79 @@
-# CE embed hook (Switchbay Graph tab)
+# CE embed hook — dual mounts (shell sidebar + Graph canvas)
 
-**Date:** 2026-09-27  
-**Owners:** Switchbay (mount) · CE Benchmarker (CE `embed` mode)
+**Date:** 2026-09-27 (updated)  
+**Owners:** Switchbay (mount scaffolding) · CE Benchmarker (CE `embed` mode)
 
 ## Goal
 
-Graph tab **is** the Curiosity Engine atlas viewer (canvas, graph search,
-coloring, node→page click-through) inside Switchbay’s shell — **no iframe**,
-**no** full-document HTML remount of CE `index.html` into `ProxiedSkillPanel`.
+- **Shell left column** hosts the **CE sidebar** (Pages | Files + search that
+  highlights both list and canvas) — **persistent** across Graph / Agents /
+  Editor for CE-backed workspaces.
+- **Graph pane** hosts **only the CE atlas canvas** (+ in-canvas graph-search).
+- **One CE embed session**, **two mount points**, shared `data.json` /
+  module state — same-origin, no iframe, no full-document HTML remount.
+- Switchbay keeps tabs, rail, Agents, theme/mode footer. Non-CE / proxied-off
+  workspaces keep native WikiPane + Files|Sources.
 
-## Switchbay contract (landed)
+## Do not
 
-When Settings → `proxied_skill_embeds` is on, Graph renders `CeAtlasEmbed`:
+- Keep Pages only inside the Graph tab (must persist across tabs).
+- Rebuild Switchbay’s sidebar to imitate CE Pages (search-highlight debt).
+- Run two page lists at once.
 
-1. Dedicated mount node `#graph-root` with CE graph-pane + modal shell only
-   (no CE sidebar / workspace title / pages·links strip / theme footer).
-2. Loads CE CSS/JS same-origin from `/embed/ce/static/…` (proxy + gzip stay).
-3. Bootstraps via `mountCeAtlas()` in `frontend/src/widgets/embed/ceEmbedBootstrap.ts`.
-4. Soft-remount on `sy:files-changed` with grace/debounce (does not tear mid
-   first `data.json` fetch). Teardown restores `window.fetch` and clears host class.
+## Switchbay scaffolding (landed)
 
-Agents still use `ProxiedSkillPanel` (okstratr observer) with minimal chrome.
+| Piece | Role |
+|-------|------|
+| `ceEmbedSession.ts` | Singleton session: `ensure()` → load `/embed/ce` modules + `data.json`; `attachSidebar` / `attachCanvas` / detach; survives Graph unmount |
+| `CeSidebarSlot.tsx` | Shell-left mount (`#ce-sidebar-root`) when `proxied_skill_embeds` |
+| `CeAtlasEmbed.tsx` | Graph tab canvas (`#graph-root`); detaches canvas only on tab leave |
+| `ceEmbedBootstrap.ts` | `prepareSession()`, script order, fetch shim, `window.CEEmbed` prefer |
+| `ceSidebarShell.html` / `ceEmbedShell.html` | DOM fragments (aside vs graph-pane+modal) |
+
+`Sidebar.tsx`: proxied on → `CeSidebarSlot` (full-height); proxied off →
+WikiPane + Files|Sources as before. Workspace remount calls
+`resetCeEmbedSession()`.
 
 ## CE hook to add (CE Benchmarker)
 
-Ship a first-class embed entry so Switchbay can stop using the stub path:
-
 ```js
-// Exposed from CE wiki-view (e.g. static/embed.js), after atlas modules load.
 window.CEEmbed = {
   /**
-   * @param {HTMLElement} container  Switchbay #graph-root (already has #graph etc. or empty)
+   * Preferred: create a session, then attach external mounts.
    * @param {{
    *   embed: true,
-   *   dataUrl: string,          // e.g. "/embed/ce/data.json"
-   *   publicBase: string,       // e.g. "/embed/ce"
-   *   chrome?: boolean,         // default false → no sidebar / pages chrome
+   *   dataUrl: string,       // "/embed/ce/data.json"
+   *   publicBase: string,    // "/embed/ce"
+   *   chrome?: boolean,      // shell owns theme/rail; CE chrome minimal
    * }} opts
-   * @returns {{ destroy(): void }}
    */
-  mount(container, opts) { /* … */ }
+  async create(opts) {
+    return {
+      /** Mount CE Pages|Files sidebar into Switchbay's left column. */
+      mountSidebar(el) { /* Sidebar.init + FileBrowser; search↔canvas */ },
+      /** Mount atlas canvas (+ graph-search) into #graph-root. */
+      mountCanvas(el) { /* AtlasViewer / Graph; share session data */ },
+      destroy() { /* tear both; leave Switchbay fetch/body clean */ },
+    };
+  },
 };
 ```
 
 Requirements:
 
-- **`chrome: false` (default in Switchbay):** do not mount sidebar, workspace
-  title bar, theme/footer strips that duplicate Switchbay Files / shell.
-- Keep CE **canvas interactions**: graph search, zoom/pan, labels/edges knobs,
-  node → page modal.
-- Honor `CE_PUBLIC_BASE` / `opts.publicBase` and `opts.dataUrl` (do not assume
-  top-level navigation to CE’s document URL).
-- Optional CE Pages sidebar: **off by default** in embed (Switchbay Files tree
-  remains the file chrome).
-- `destroy()` must tear listeners/raf/WebGL and leave Switchbay’s document
-  globals (`fetch`, `body` class) clean — or document what Switchbay still
-  releases.
+- Single shared state / `data.json` for both mounts.
+- Sidebar search highlights **list + canvas** (existing GraphSearch wiring).
+- `mountCanvas` may be called after `mountSidebar`, and may unmount/remount
+  when the user leaves/returns to Graph without destroying sidebar.
+- Honor `CE_PUBLIC_BASE` / `opts.dataUrl`.
+- Optional: `mount({ mounts: { sidebar, canvas } })` one-shot still OK.
 
-Until this exists, Switchbay’s **stub** loads CE modules and calls
-`AtlasViewer` / `Graph` / `GraphSearch` / `Modal` without `Sidebar.init`.
+Until `CEEmbed.create` exists, Switchbay’s stub loads CE static modules and
+calls `Sidebar.init` + `AtlasViewer`/`Graph`/`GraphSearch` itself.
 
 ## Verify
 
-- Graph shows CE atlas (not Switchbay GraphTab D3) for BioCure.
-- No CE “N pages · links” strip; no Switchbay “same-origin via /embed/ce” bar.
-- Rail stays right-docked; Agents opens without stuck Loading.
-- `GET /embed/ce/data.json` and/or `GET /api/graph/data` still serve nodes+edges.
+- Pages list visible on Agents and Editor (not only Graph).
+- One page list (CE), not WikiPane + CE.
+- Graph = atlas canvas; rail right-docked; Agents not stuck Loading.
+- `/embed/ce/data.json` and `/api/graph/data` still serve BioCure nodes+edges.

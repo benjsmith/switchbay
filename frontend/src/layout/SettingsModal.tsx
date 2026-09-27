@@ -4053,12 +4053,11 @@ function StoragePanel({ open }: { open: boolean }) {
         Proxied skill embeds (Phase 4a)
       </h4>
       <p className="sy-settings-blurb">
-        When on, Graph mounts the Curiosity Engine atlas via a dedicated
-        same-origin embed (<code>/embed/ce</code> assets + data — CE chrome
-        off; Switchbay keeps tabs / Files / rail). Agents mounts okstratr
-        observer under <code>/embed/okstratr</code>. No iframes; no full CE
-        document remount. Default off keeps built-in GraphTab /
-        AgentDashboard.
+        When on: shell left hosts CE Pages|Files (persistent); Graph hosts
+        CE atlas canvas only — one embed session, two mounts, shared{" "}
+        <code>/embed/ce/data.json</code>. Agents mounts okstratr under{" "}
+        <code>/embed/okstratr</code>. No iframes / full CE document remount.
+        Default off keeps WikiPane + GraphTab / AgentDashboard.
       </p>
       <div className="sy-settings-perm-row">
         <span>

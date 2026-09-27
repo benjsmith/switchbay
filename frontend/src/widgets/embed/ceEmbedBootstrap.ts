@@ -62,7 +62,8 @@ const SCRIPT_ORDER = [
   "vendor/fuse.min.js",
   "vendor/jszip.min.js",
   "theme.js",
-  // skip sidebar.js + filebrowser.js — embed chrome-off
+  "sidebar.js",
+  "filebrowser.js",
   "split.js",
   "replay.js",
   "subgraph.js",
@@ -73,7 +74,7 @@ const SCRIPT_ORDER = [
   "vendor/knowledge-atlas.js",
   "atlas.js",
   "search.js",
-  // skip main.js — we bootstrap ourselves (or CEEmbed.mount)
+  // skip main.js — dual-mount session / CEEmbed boots instead
 ] as const;
 
 function loadScript(src: string): Promise<void> {
@@ -170,7 +171,7 @@ async function loadCeModules(publicBase: string): Promise<void> {
     try {
       await loadScript(`${base}/static/${rel}`);
     } catch (e) {
-      if (rel === "split.js" || rel === "replay.js") {
+      if (rel === "split.js" || rel === "replay.js" || rel === "filebrowser.js") {
         console.warn("[CeAtlasEmbed] optional script missing:", rel);
         continue;
       }
@@ -332,6 +333,73 @@ export async function mountCeAtlas(
         /* ignore */
       }
     },
+  };
+}
+
+
+export type PreparedSession = {
+  data: unknown;
+  publicBase: string;
+  dataUrl: string;
+  /** Release fetch shim + optional CEEmbed.create handle. */
+  nativeRelease: { destroy: () => void } | null;
+  releaseFetch: () => void;
+};
+
+/**
+ * Load CE modules + data.json once for dual-mount (sidebar + canvas).
+ * Does not paint atlas — CeEmbedSession attaches mounts afterwards.
+ */
+export async function prepareSession(
+  opts: CeEmbedOptions,
+): Promise<PreparedSession> {
+  const publicBase = (opts.publicBase || "/embed/ce").replace(/\/$/, "") || "/embed/ce";
+  const dataUrl = opts.dataUrl || `${publicBase}/data.json`;
+
+  installPublicBase(publicBase);
+  const releaseFetch = await installFetchShim(publicBase);
+  await loadCeModules(publicBase);
+
+  const ce = w().CEEmbed as
+    | {
+        create?: (o: CeEmbedOptions) => Promise<{ destroy: () => void }>;
+        mount?: unknown;
+      }
+    | undefined;
+
+  let nativeRelease: { destroy: () => void } | null = null;
+  if (ce && typeof ce.create === "function") {
+    const created = await ce.create({
+      embed: true,
+      dataUrl,
+      publicBase,
+      chrome: opts.chrome ?? false,
+    });
+    nativeRelease = {
+      destroy: () => {
+        try {
+          created.destroy();
+        } catch {
+          /* ignore */
+        }
+        releaseFetch();
+      },
+    };
+  }
+
+  const res = await fetch(dataUrl, { cache: "no-store" });
+  if (!res.ok) {
+    releaseFetch();
+    throw new Error(`CE data ${res.status} from ${dataUrl}`);
+  }
+  const data = await res.json();
+
+  return {
+    data,
+    publicBase,
+    dataUrl,
+    nativeRelease,
+    releaseFetch: nativeRelease ? () => {} : releaseFetch,
   };
 }
 

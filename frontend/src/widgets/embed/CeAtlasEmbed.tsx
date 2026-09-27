@@ -1,19 +1,13 @@
 import { useEffect, useRef, useState } from "react";
-import shellHtml from "./ceEmbedShell.html?raw";
-import { mountCeAtlas, type CeEmbedHandle } from "./ceEmbedBootstrap.ts";
+import canvasHtml from "./ceEmbedShell.html?raw";
+import { getCeEmbedSession } from "./ceEmbedSession.ts";
 
 /**
- * Graph tab = Curiosity Engine atlas (same-origin embed skin).
- *
- * Does NOT HTML-remount CE's full index.html (that broke shell flex / rail
- * and wedged Agents on Loading). Instead:
- *   1. Inject a dedicated shell (#graph-pane + modal, no CE sidebar).
- *   2. Load CE CSS/JS from /embed/ce/static/…
- *   3. Bootstrap via window.CEEmbed.mount when present, else Switchbay stub.
+ * Graph tab = CE atlas canvas only (graph-search + interactions).
+ * Pages|Files live in the shell left column via CeSidebarSlot — same
+ * CeEmbedSession / data.json (no second page list, no full HTML remount).
  */
 
-const PUBLIC_BASE = "/embed/ce";
-const DATA_URL = "/embed/ce/data.json";
 const SOFT_REMOUNT_GRACE_MS = 8000;
 const SOFT_REMOUNT_DEBOUNCE_MS = 1500;
 
@@ -24,51 +18,29 @@ type LoadState =
 
 export default function CeAtlasEmbed() {
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const handleRef = useRef<CeEmbedHandle | null>(null);
-  const genRef = useRef(0);
   const readyAtRef = useRef(0);
   const [state, setState] = useState<LoadState>({ status: "loading" });
 
   useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
+    const el = rootRef.current;
+    if (!el) return;
+    const session = getCeEmbedSession();
 
-    let cancelled = false;
-    const gen = ++genRef.current;
-
-    async function boot() {
-      const mountEl = rootRef.current;
-      if (!mountEl) return;
-      setState({ status: "loading" });
-      try {
-        handleRef.current?.destroy();
-        handleRef.current = null;
-        mountEl.innerHTML = shellHtml;
-        mountEl.dataset.ceEmbed = "1";
-        mountEl.dataset.embedSkin = "canvas";
-        const handle = await mountCeAtlas(mountEl, {
-          embed: true,
-          dataUrl: DATA_URL,
-          publicBase: PUBLIC_BASE,
-          chrome: false,
-        });
-        if (cancelled || gen !== genRef.current) {
-          handle.destroy();
-          return;
-        }
-        handleRef.current = handle;
+    const sync = () => {
+      const st = session.getState();
+      if (st.status === "ready") {
         readyAtRef.current = Date.now();
         setState({ status: "ready" });
-      } catch (e) {
-        if (cancelled || gen !== genRef.current) return;
-        setState({
-          status: "error",
-          message: (e as Error).message || "CE atlas embed failed",
-        });
+      } else if (st.status === "error") {
+        setState({ status: "error", message: st.message });
+      } else if (st.status === "loading" || st.status === "idle") {
+        setState({ status: "loading" });
       }
-    }
+    };
 
-    void boot();
+    const unsub = session.subscribe(sync);
+    session.attachCanvas(el, canvasHtml);
+    sync();
 
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onFiles = () => {
@@ -76,26 +48,19 @@ export default function CeAtlasEmbed() {
       if (Date.now() - readyAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        if (readyAtRef.current === 0) return;
-        if (Date.now() - readyAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
-        void boot();
+        // Soft path: detach+reattach canvas on same session (keeps sidebar).
+        session.detachCanvas(el);
+        session.attachCanvas(el, canvasHtml);
       }, SOFT_REMOUNT_DEBOUNCE_MS);
     };
     window.addEventListener("sy:files-changed", onFiles);
 
     return () => {
-      cancelled = true;
       if (timer) clearTimeout(timer);
       window.removeEventListener("sy:files-changed", onFiles);
-      try {
-        handleRef.current?.destroy();
-      } catch {
-        /* ignore */
-      }
-      handleRef.current = null;
-      readyAtRef.current = 0;
-      const el = rootRef.current;
-      if (el) el.innerHTML = "";
+      unsub();
+      // Detach canvas only — session + sidebar stay for Agents/Editor.
+      session.detachCanvas(el);
     };
   }, []);
 
@@ -113,10 +78,8 @@ export default function CeAtlasEmbed() {
           <p>CE atlas embed failed.</p>
           <pre>{state.message}</pre>
           <p className="sy-ce-atlas-embed-hint">
-            Ensure CE viewer is up on loopback (:8766) and{" "}
-            <code>/embed/ce/data.json</code> is reachable. When CE ships{" "}
-            <code>window.CEEmbed.mount</code>, this panel will call it
-            automatically (see docs/CE-EMBED-HOOK.md).
+            Dual-mount session: shell hosts CE Pages|Files; this pane is
+            canvas-only. See docs/CE-EMBED-HOOK.md.
           </p>
         </div>
       )}
