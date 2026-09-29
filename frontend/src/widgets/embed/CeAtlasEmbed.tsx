@@ -113,7 +113,7 @@ export default function CeAtlasEmbed() {
           <pre>{state.message}</pre>
           <p className="sy-ce-atlas-embed-hint">
             Dual-mount session: shell hosts CE Pages|Files; this pane is
-            canvas-only. See docs/CE-EMBED-HOOK.md.
+            canvas-only. See docs/architecture.md.
           </p>
         </div>
       )}

@@ -13,6 +13,8 @@ running tools, and turning raw material into a knowledge graph.
 > If a detail here disagrees with the code, the code wins — this doc is
 > the map, not the territory.
 
+Skill hosting (same-origin embed proxy, CEEmbed dual-mount Graph, core-skills auto-start, pack/ingest drain, Settings → okstratr registry): **[`architecture.md`](architecture.md)**.
+
 ---
 
 ## The core loop

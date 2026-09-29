@@ -21,7 +21,7 @@ import {
  * 5. Tear down (clear root + remove injected scripts) before soft-reload
  *    or unmount to avoid duplicate roots/listeners.
  *
- * JSON responses keep the pretty-print path. No nested frames (ADR-004 / 004b).
+ * JSON responses keep the pretty-print path. No nested frames (see docs/architecture.md).
  */
 
 export type SkillEmbedKind = "ce" | "okstratr";

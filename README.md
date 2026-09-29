@@ -182,6 +182,7 @@ don’t need to quit and reopen the PWA after each restart.
 
 ## More
 
+- **[`docs/architecture.md`](docs/architecture.md)** — current hosting architecture (embed proxy, CEEmbed, core-skills, drains).
 - **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)** — the map: concepts + data flows.
 - **[`docs/known-issues.md`](docs/known-issues.md)** — rough edges + deliberate deferrals in this release.
 - **[`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md)** — third-party attributions.

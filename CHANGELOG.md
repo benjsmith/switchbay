@@ -24,7 +24,7 @@ Skill pins for this wave (tags pending docs merges):
 | okstratr | **v0.2.0** (pending) | hosted proxy + registry SSOT + observer desk UX |
 | curiosity-merge | **v0.8.4** (pending) | Phase 3 installer / UI-boundary contract |
 
-See [release notes](docs/releases/v0.13.0.md).
+See [release notes](docs/releases/v0.13.0.md) and [architecture](docs/architecture.md).
 
 ### Added
 

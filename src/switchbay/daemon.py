@@ -4381,7 +4381,7 @@ async def handle_ingest_drain(request: web.Request) -> web.Response:
     """Drain CE-queued ``.workbench/ingest-runs/*.json``.
 
     Prefer deterministic ``local_ingest``; escalate to rail LLM only when
-    run metadata opts in (see ADR-007). Returns
+    run metadata opts in (see ``docs/architecture.md``). Returns
     ``{drained, skipped, errors, …}``.
     """
     summary = await ingest_run_drain.drain_once(request.app)
