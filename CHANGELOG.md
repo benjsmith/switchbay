@@ -24,11 +24,7 @@ Skill pins for this wave (tags pending docs merges):
 | okstratr | **v0.2.0** (pending) | hosted proxy + registry SSOT + observer desk UX |
 | curiosity-merge | **v0.8.4** (pending) | Phase 3 installer / UI-boundary contract |
 
-See [release notes](docs/releases/v0.13.0.md), [ADR-004](docs/ADR-004-same-origin-embed-proxy.md),
-[ADR-004b](docs/ADR-004b-embed-v2-same-document-mount.md),
-[ADR-005](docs/ADR-005-okstratr-harness-registry-client.md),
-[CE-EMBED-HOOK](docs/CE-EMBED-HOOK.md), [ADR-006](docs/ADR-006-ce-pack-run-drain.md),
-[ADR-007](docs/ADR-007-ce-ingest-run-drain.md).
+See [release notes](docs/releases/v0.13.0.md).
 
 ### Added
 
@@ -48,11 +44,10 @@ See [release notes](docs/releases/v0.13.0.md), [ADR-004](docs/ADR-004-same-origi
 - **Core-skills auto-start** — always start CE + okstratr with the shell;
   rail `host_notify`; `OKSTRATR_HOSTED=switchbay` on supervised serve.
 - **Settings → okstratr harness registry** — thin client (`/api/okstratr/harness*`);
-  no second Switchbay allowlist (ADR-005).
-- **Pack / ingest drain** — drain CE `.workbench/pack-runs/` into rail LLM
-  (ADR-006); drain ingest-runs via `local_ingest` / prefer CE drop-ingest
-  endpoint (ADR-007).
-- **Sandbox roots** — allow `/workspace` (+ env roots) in home-gate (ADR-008).
+  no second Switchbay allowlist.
+- **Pack / ingest drain** — drain CE `.workbench/pack-runs/` into rail LLM;
+  drain ingest-runs via `local_ingest` / prefer CE drop-ingest endpoint.
+- **Sandbox roots** — allow `/workspace` (+ env roots) in home-gate.
 
 ### Fixed / polish (embed wave)
 

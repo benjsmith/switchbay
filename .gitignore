@@ -51,6 +51,11 @@ docs/*-design.md
 docs/product-pilot-judge-results-*.md
 docs/product-pilot-*.md
 docs/vscode-plugin.md
+docs/ADR-*.md
+docs/CE-EMBED-HOOK.md
+
+# ── local skill-shell umbrella workspace (never ship) ──
+skill-shell-rationalization/
 
 # ── machine-level admin policy drop-in (never commit a live copy) ──
 /admin.json
