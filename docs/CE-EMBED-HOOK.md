@@ -1,6 +1,6 @@
 # CE embed hook — dual mounts (shell sidebar + Graph canvas)
 
-**Date:** 2026-09-27 (updated)  
+**Date:** 2026-09-27 (updated 2026-09-29 for v0.13.0 / CE v1.9.0)  
 **Owners:** Switchbay (mount scaffolding) · CE Benchmarker (CE `embed` mode)
 
 ## Goal
@@ -34,7 +34,11 @@
 WikiPane + Files|Sources as before. Workspace remount calls
 `resetCeEmbedSession()`.
 
-## CE hook to add (CE Benchmarker)
+## CE hook (landed in curiosity-engine v1.9.0)
+
+Prefer `window.CEEmbed.create` from `/embed/ce/static/embed.js`. Switchbay
+`ceEmbedBootstrap` / `ceEmbedSession` call it when present; the local stub
+path below remains a fallback for older CE tips.
 
 ```js
 window.CEEmbed = {
@@ -72,8 +76,9 @@ Requirements:
 - Honor `CE_PUBLIC_BASE` / `opts.dataUrl`.
 - Optional: `mount({ mounts: { sidebar, canvas } })` one-shot still OK.
 
-Until `CEEmbed.create` exists, Switchbay’s stub loads CE static modules and
-calls `Sidebar.init` + `AtlasViewer`/`Graph`/`GraphSearch` itself.
+When `CEEmbed.create` is missing (older CE), Switchbay’s stub loads CE
+static modules and calls `Sidebar.init` + `AtlasViewer`/`Graph`/`GraphSearch`
+itself. With CE **v1.9.0**+, prefer the real hook (IndexedDB cache + soft-park).
 
 ## Verify
 

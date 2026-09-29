@@ -1,6 +1,6 @@
 # ADR-004b: Embed v2 — same-document interactive mount
 
-- **Status:** Accepted (Embed v2)
+- **Status:** Accepted (Embed v2) — shipped in Switchbay **v0.13.0**
 - **Date:** 2026-09-19
 - **Parent:** [ADR-004](./ADR-004-same-origin-embed-proxy.md)
 - **Contract:** umbrella `CONTRACT-EMBED-V2.md`

@@ -45,11 +45,17 @@ frames**.
 ## Consequences
 
 - Dev Vite must proxy `/embed` to the daemon (`vite.config.ts`).
-- CE and okstratr should honor public-base + `X-*-Host` (okstratr
-  Phase 1a `public_base.py`; CE equivalent TBD).
+- CE and okstratr honor public-base + `X-*-Host` (okstratr ADR-004 /
+  `OKSTRATR_PUBLIC_BASE`; CE ADR-001 / `CE_PUBLIC_BASE` — both shipped).
 - Full atlas/observer chrome parity is gated by the parity checklist
   before any Switchbay duplicate deletion (Phase 4b+).
+  **Migrate-before-thinning:** built-in Graph/Agents/filebrowser stay
+  (v0.13.0 does not delete them).
 - WebSocket upgrade through the embed proxy is deferred; HTTP(S) first.
+- Status as of **v0.13.0:** Phase 4a proxy + Embed v2 mount + dual-mount
+  Graph + core-skills auto-start + Settings harness client are on `main`.
+  `proxied_skill_embeds` remains a Settings opt-in (default false) so the
+  built-in surfaces stay the safe default until operators flip the flag.
 
 ## Alternatives considered
 

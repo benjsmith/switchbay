@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-09-19
-- **Parent:** [ADR-004](./ADR-004-same-origin-embed-proxy.md) (Settings TODO)
+- **Parent:** [ADR-004](./ADR-004-same-origin-embed-proxy.md) (Settings thin client — **done** in v0.13.0)
 - **Deciders:** Ben / skill-shell rationalization charter
 
 ## Context
