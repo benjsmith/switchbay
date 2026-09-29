@@ -35,11 +35,6 @@ Switchbay Settings must become the write path.
    LLM panels remain as **rail** surfaces and are labeled as not the
    desk/agent SSOT.
 
-4. **okbay** mirrors the same thin-client pattern (doc note; full UI
-   follow-up) — see okbay `docs/HERDR-AND-REGISTRY.md` and Switchbay
-   `/api/okstratr/host-notify` as the precedent for path-native okstratr
-   integration.
-
 ## Consequences
 
 - okstratr must be healthy (core-skill supervisor) for Settings toggles
