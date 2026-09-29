@@ -432,12 +432,21 @@ def _trusted_enterprise_setup_script(
     return True, "trusted bundled CE setup", candidate
 
 
-def read_cached(workspace: Path) -> dict[str, Any] | None:
+def read_cached(
+    workspace: Path, *, enrich: bool = False,
+) -> dict[str, Any] | None:
     """Return the on-disk data.json from a previous viewer.sh build,
-    if one exists. Cheap (single file read + json parse) — usable on
-    the hot path so a workspace switch shows the graph instantly,
-    even if it's a few minutes stale. Pair with `build()` running in
-    the background to refresh.
+    if one exists.
+
+    Hot path (``enrich=False``, default): single file read + json
+    parse + cheap in-memory backfills. Usable on workspace switch so
+    the graph paints in milliseconds even when the vault is huge.
+    Pair with ``enrich_from_disk`` / a background rebuild to refresh
+    filesystem truth (types, decks, on-disk pages) off the request.
+
+    ``enrich=True`` also runs the full disk-truth pass (resync types,
+    inject decks, inject on-disk pages). Prefer that only on slow
+    paths (curation history, post-build) — never on ``/api/graph/data``.
 
     Returns None when no cached build is on disk yet OR the file
     parses badly OR the workspace has no wiki/."""
@@ -451,21 +460,34 @@ def read_cached(workspace: Path) -> dict[str, Any] | None:
     except (OSError, json.JSONDecodeError):
         return None
     _backfill_unclassified_types(data)
-    # Filesystem-truth pass — CE's wiki_render occasionally ships
-    # node entries typed `unclassified` even when the page's
-    # frontmatter declares a real type. The sidebar reads node.type
-    # for grouping, so without this fix tables / sources / etc. end
-    # up under UNCLASSIFIED despite the .md declaring type:table.
-    resync_types_from_disk(workspace, data)
-    # Sketch decks (`kind: deck`, title `[deck] …`) live under
-    # wiki/analyses/ but CE's graph intentionally omits them from
-    # `nodes` (curator exclusion). Inject them so the BROWSER
-    # ANALYSES group lists them alongside real analyses.
-    inject_deck_nodes(workspace, data)
-    from . import wiki_sync
-    wiki_sync.inject_on_disk_pages(workspace, data)
     _override_palette(data)
+    if enrich:
+        enrich_from_disk(workspace, data)
     return data
+
+
+def enrich_from_disk(workspace: Path, data: dict[str, Any]) -> dict[str, int]:
+    """Filesystem-truth pass over an in-memory viewer bundle.
+
+    Runs the three expensive walks that used to live inside
+    ``read_cached``:
+      1. ``resync_types_from_disk`` — align node/page types with
+         frontmatter (full wiki rglob + per-file reads).
+      2. ``inject_deck_nodes`` — ensure ``kind: deck`` pages appear
+         in nodes/pages.
+      3. ``wiki_sync.inject_on_disk_pages`` — fold in new/deleted
+         wiki docs + wikilink edges (full-file reads).
+
+    Mutates ``data``. Returns per-stage change counts so callers can
+    surface progress. Safe to call repeatedly; designed for the
+    background sync kicked by ``/api/graph/data``.
+    """
+    from . import wiki_sync
+    types_n = int(resync_types_from_disk(workspace, data) or 0)
+    decks_n = int(inject_deck_nodes(workspace, data) or 0)
+    pages_n = int(wiki_sync.inject_on_disk_pages(workspace, data) or 0)
+    _override_palette(data)
+    return {"types": types_n, "decks": decks_n, "pages": pages_n}
 
 
 def has_workspace_venv(workspace: Path) -> bool:
@@ -894,10 +916,12 @@ async def build(
     # follows system 3.14.
     env = _scrubbed_env()
 
+    # Prefer workspace .venv python (has kuzu) over sys.executable
+    # (Switchbay's own venv usually does not). Falls back to CE venv /
+    # uv run via _script_python.
     if render_py.is_file():
-        import sys
         cmd = [
-            sys.executable, str(render_py), "build",
+            *_script_python(Path(workspace)), str(render_py), "build",
             str(workspace / "wiki"),
             "--output-dir", str(output_dir(workspace)),
         ]
@@ -930,16 +954,9 @@ async def build(
         log.warning("could not parse %s: %s", data_path, e)
         return None
     _backfill_unclassified_types(data)
-    # Filesystem-truth pass — CE's wiki_render occasionally ships
-    # node entries typed `unclassified` even when the page's
-    # frontmatter declares a real type. The sidebar reads node.type
-    # for grouping, so without this fix tables / sources / etc. end
-    # up under UNCLASSIFIED despite the .md declaring type:table.
-    resync_types_from_disk(workspace, data)
-    inject_deck_nodes(workspace, data)
-    from . import wiki_sync
-    wiki_sync.inject_on_disk_pages(workspace, data)
-    _override_palette(data)
+    # Post-build disk-truth pass — same stages as enrich_from_disk.
+    # Build is already the slow path, so running them here is fine.
+    enrich_from_disk(workspace, data)
     return data
 
 
@@ -984,6 +1001,10 @@ _PALETTE_OVERRIDE: dict[str, str] = {
     "notes":           "#6f4070",
     "todo":            "#9656a2",  # lighter purple
     "todo-list":       "#9656a2",
+    "procedure":       "#5e4fa2",  # indigo — CE how-to hubs
+    "procedures":      "#5e4fa2",
+    "execution":       "#c51b8a",  # pink-magenta — dated instances
+    "executions":      "#c51b8a",
     "unclassified":    "#ffffff",  # white + black stroke via graph.js
 }
 
@@ -1012,6 +1033,8 @@ _PREFIX_TO_TYPE: dict[str, str] = {
     "note": "note",
     "todo": "todo",
     "proj": "project",
+    "proc": "procedure",
+    "exec": "execution",
     # Decks scaffolded by switchbay's → Slides path. CE doesn't
     # ship a `deck` type; render them as `analysis` so the existing
     # palette / sidebar bucket picks them up. The `[deck]` title
@@ -1129,6 +1152,7 @@ def resync_types_from_disk(workspace: Path, data: dict) -> int:
             "tables": "table", "sources": "source",
             "notes": "note", "todo": "todo-list",
             "todos": "todo-list",
+            "procedures": "procedure", "executions": "execution",
             "extracted-table": "table",
             "extracted_table": "table",
         }.get(type_line, type_line)

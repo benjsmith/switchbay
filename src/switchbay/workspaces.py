@@ -63,28 +63,75 @@ def _path() -> Path:
     return config_dir() / "workspaces.json"
 
 
-# ── Home-directory sandbox (cross-platform) ──────────────────────────
-# Hardcoded safety net: workspaces are restricted to paths inside the
-# current user's home (`~`). On macOS that's /Users/<u>, on Linux
-# /home/<u>, on Windows C:\Users\<u>. The risk: cebridge, fileops, and
-# cebridge.setup() all run subprocesses with cwd=workspace and write
-# to it. A bad workspace value (`/etc`, `/`, `/Volumes/SystemDisk`,
-# etc.) would let the daemon's file-ops endpoints touch system files.
-# We refuse anywhere outside the user's home.
+# ── Workspace-path sandbox (cross-platform) ───────────────────────────
+# Stage-5 home rule: workspaces must live under a small set of allowed
+# roots so cebridge / fileops / setup never get a cwd of `/`, `/etc`,
+# etc. Default root is `$HOME` (macOS `/Users/<u>`, Linux `/home/<u>`,
+# Windows `C:\Users\<u>`). Extra roots:
+#   - `/workspace` when that directory exists (Grok Bot / agent-box
+#     scratch — corpora like `/workspace/ce-cb-biocure` live there;
+#     bind-mounting under `~/Workspaces` is no longer required).
+#   - `SWITCHBAY_WORKSPACE_ROOTS` (os.pathsep-separated, expanduser +
+#     resolve; missing / non-dir entries skipped).
+# Membership uses resolve() so `..` and symlink escapes still fail.
+
+def allowed_workspace_roots() -> list[Path]:
+    """Resolved directories a workspace path may live under.
+
+    Always includes ``Path.home()``. Adds ``/workspace`` when present,
+    then any existing directories from ``SWITCHBAY_WORKSPACE_ROOTS``.
+    """
+    roots: list[Path] = []
+    seen: set[str] = set()
+
+    def _add(raw: Path | str) -> None:
+        try:
+            p = Path(raw).expanduser().resolve()
+        except OSError:
+            return
+        if not p.is_dir():
+            return
+        key = str(p)
+        if key in seen:
+            return
+        seen.add(key)
+        roots.append(p)
+
+    _add(Path.home())
+    _add(Path("/workspace"))
+    extra = os.environ.get("SWITCHBAY_WORKSPACE_ROOTS") or ""
+    for part in extra.split(os.pathsep):
+        part = part.strip()
+        if part:
+            _add(part)
+    return roots
+
 
 def is_within_home(path: Path) -> bool:
+    """True if ``path`` resolves under any :func:`allowed_workspace_roots`.
+
+    Name kept for call-site compatibility (stage-5 "home" sandbox);
+    prefer thinking of it as "allowed workspace path".
+    """
     try:
         target = Path(path).expanduser().resolve()
-        home = Path.home().resolve()
-        target.relative_to(home)
-        return True
-    except (ValueError, OSError):
+    except OSError:
         return False
+    for root in allowed_workspace_roots():
+        try:
+            target.relative_to(root)
+            return True
+        except ValueError:
+            continue
+    return False
 
 
 def home_label() -> str:
-    """Human-readable home root, for error messages."""
-    return str(Path.home())
+    """Human-readable allowed roots for error messages ("a or b")."""
+    roots = allowed_workspace_roots()
+    if not roots:
+        return str(Path.home())
+    return " or ".join(str(r) for r in roots)
 
 
 def load() -> dict[str, Any]:
@@ -101,10 +148,11 @@ def load() -> dict[str, Any]:
     active = data.get("active")
     if not isinstance(raw_paths, list):
         raw_paths = []
-    # Defense in depth: silently drop registry entries that aren't
-    # inside $HOME — protects against an older binary having added
-    # something dangerous (e.g. /etc) before the guard existed, or
-    # against a hand-edited workspaces.json.
+    # Defense in depth: silently drop registry entries outside the
+    # allowed roots (home, optional /workspace, SWITCHBAY_WORKSPACE_ROOTS)
+    # — protects against an older binary having added something
+    # dangerous (e.g. /etc) before the guard existed, or against a
+    # hand-edited workspaces.json.
     safe_paths: list[str] = []
     for entry in raw_paths:
         s = str(entry)
@@ -114,7 +162,7 @@ def load() -> dict[str, Any]:
     # Permit `active` to be a path that's NOT in `paths` — the daemon
     # may be serving an unregistered workspace (the CLI-supplied
     # cwd) the user hasn't explicitly added to the dropdown. Only
-    # require that it lives inside $HOME for safety.
+    # require that it lives under an allowed root for safety.
     if safe_active and not is_within_home(Path(safe_active)):
         safe_active = safe_paths[0] if safe_paths else None
     cleaned = {"paths": safe_paths, "active": safe_active}
@@ -141,8 +189,9 @@ def resolve_path(
 ) -> Path:
     """Resolve a workspace path from HTTP/tool input.
 
-    Expands ``~``, requires the path under ``$HOME``, and optionally
-    that it is an existing directory. Raises ``OutsideHomeError`` or
+    Expands ``~``, requires the path under an allowed workspace root
+    (see :func:`allowed_workspace_roots`), and optionally that it is
+    an existing directory. Raises ``OutsideHomeError`` or
     ``ValueError`` on bad input.
     """
     raw = (path_str or "").strip()
@@ -167,7 +216,7 @@ class OutsideHomeError(ValueError):
 def register(path: Path, set_active: bool = True) -> dict[str, Any]:
     """Add path to registry (no-op if already present); optionally make active.
 
-    Raises `OutsideHomeError` if `path` resolves outside the user's home.
+    Raises `OutsideHomeError` if `path` resolves outside allowed roots.
     """
     if not is_within_home(path):
         raise OutsideHomeError(
@@ -395,9 +444,9 @@ def cleanup_migrated_source(old: Path, new: Path) -> str | dict[str, Any]:
 
 
 def set_active_only(path: Path) -> dict[str, Any]:
-    """Validate the CLI-supplied cwd lives inside $HOME, but DON'T
-    touch the registry's `active` field — that's reserved for the
-    user's explicit picks via the workspace switcher. The daemon
+    """Validate the CLI-supplied cwd lives under an allowed root, but
+    DON'T touch the registry's `active` field — that's reserved for
+    the user's explicit picks via the workspace switcher. The daemon
     keeps its own `app["workspace"]` for the path it actually
     serves; the registry stays a record of user intent only.
 

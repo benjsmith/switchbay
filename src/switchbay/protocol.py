@@ -228,6 +228,37 @@ def files_changed() -> dict[str, Any]:
     return custom({"type": "files_changed"})
 
 
+def graph_progress(
+    stage: str,
+    message: str,
+    *,
+    workspace: str | None = None,
+    current: int | None = None,
+    total: int | None = None,
+    done: bool = False,
+) -> dict[str, Any]:
+    """Progress for a background graph cache sync.
+
+    Stages (advisory): ``cache`` → ``types`` → ``decks`` → ``pages``
+    → ``ready``. Frontend shows a non-blocking banner so large
+    workspaces never white-screen while enrich runs off the hot path.
+    ``done=True`` on the terminal ``ready`` (or error) frame.
+    """
+    payload: dict[str, Any] = {
+        "type": "graph_progress",
+        "stage": stage,
+        "message": message,
+        "done": bool(done),
+    }
+    if workspace:
+        payload["workspace"] = workspace
+    if current is not None:
+        payload["current"] = int(current)
+    if total is not None:
+        payload["total"] = int(total)
+    return custom(payload)
+
+
 def artifact(
     kind: str, label: str, selection: dict[str, Any] | None = None,
 ) -> dict[str, Any]:

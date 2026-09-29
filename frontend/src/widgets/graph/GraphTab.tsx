@@ -25,6 +25,23 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
   const containerRef = useRef<HTMLDivElement>(null);
   const addFileInputRef = useRef<HTMLInputElement>(null);
   const [addingFile, setAddingFile] = useState(false);
+  const [progressMsg, setProgressMsg] = useState<string | null>(
+    data ? null : "Loading graph from cache…",
+  );
+  useEffect(() => {
+    const onProg = (ev: Event) => {
+      const d = (ev as CustomEvent<{ message?: string; done?: boolean }>).detail;
+      if (!d) return;
+      if (d.done) setProgressMsg(null);
+      else if (d.message) setProgressMsg(d.message);
+    };
+    window.addEventListener("sy:graph-progress", onProg);
+    return () => window.removeEventListener("sy:graph-progress", onProg);
+  }, []);
+  useEffect(() => {
+    if (data && !progressMsg) return;
+    if (!data && !progressMsg) setProgressMsg("Loading graph from cache…");
+  }, [data, progressMsg]);
   // The curation replay is OPT-IN now (top-left ↻ button) — it
   // never auto-mounts on workspace load. First-load shows the
   // "Building bundle…" placeholder until data arrives, then the
@@ -287,19 +304,22 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     );
   }
   if (!data) {
-    // First-load / workspace-switch placeholder. The animation is
-    // opt-in via the replay button (which only appears once data
-    // is ready) so cold loads stay quiet instead of getting
-    // distracted by the unfinished history.
+    // First-load / workspace-switch placeholder. Prefer live
+    // graph_progress messages so large vaults never look wedged.
     return (
       <div className="sy-placeholder">
         <h2>Graph</h2>
-        <p>Building bundle (running <code>viewer.sh build</code>)…</p>
+        <p>{progressMsg ?? "Loading graph from cache…"}</p>
       </div>
     );
   }
   return (
     <div className="sy-graph-host">
+      {progressMsg && (
+        <div className="sy-graph-progress" role="status" aria-live="polite">
+          {progressMsg}
+        </div>
+      )}
       {hasEditor && selection?.kind === "page" && (
         <button
           type="button"

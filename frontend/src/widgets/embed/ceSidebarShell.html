@@ -1,0 +1,47 @@
+<!-- CE sidebar embed shell: Pages|Files + search (persistent shell left column). -->
+<aside id="sidebar">
+    <header class="sidebar-head">
+      <button id="sidebar-toggle" class="icon-btn" title="Collapse sidebar" aria-label="Collapse sidebar">
+        <svg viewBox="0 0 16 16" width="14" height="14"><path d="M10 4 L6 8 L10 12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <span class="workspace-name">{{WORKSPACE}}</span>
+      <div class="sidebar-mode-seg" role="group" aria-label="Sidebar mode">
+        <button type="button" id="sidebar-mode-pages" class="sidebar-mode-btn" aria-pressed="true">Pages</button>
+        <button type="button" id="sidebar-mode-files" class="sidebar-mode-btn" aria-pressed="false" title="Browse vault/ and wiki/ files">Files</button>
+      </div>
+    </header>
+    <div class="sidebar-search-wrap">
+      <input id="sidebar-search" type="search" placeholder="Search pages…" autocomplete="off" spellcheck="false">
+      <button id="sidebar-toggle-all" class="icon-btn sidebar-toggle-all" data-action="toggle-all-groups" title="Collapse or expand all page types" aria-label="Collapse or expand all page types">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6 L8 2.5 L13 6"/>
+          <path d="M3 10 L8 13.5 L13 10"/>
+        </svg>
+      </button>
+      <button id="sidebar-upload" class="icon-btn sidebar-upload" title="Upload to vault" aria-label="Upload to vault">
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="3" x2="8" y2="13"/>
+          <line x1="3" y1="8" x2="13" y2="8"/>
+        </svg>
+      </button>
+      <input id="sidebar-upload-input" type="file" multiple style="display:none">
+    </div>
+    <div id="sidebar-list" class="sidebar-list" role="listbox"></div>
+    <div id="filebrowser-pane" class="filebrowser-pane" hidden>
+      <div class="filebrowser-toolbar">
+        <input id="filebrowser-search" type="search" placeholder="Filter files… /re/ or *.md" autocomplete="off" spellcheck="false" aria-label="Filter files">
+        <button type="button" id="filebrowser-sort" class="icon-btn" title="Sort A→Z" aria-label="Sort A→Z">⇅</button>
+        <button type="button" id="filebrowser-refresh" class="icon-btn" title="Refresh tree" aria-label="Refresh tree">↻</button>
+      </div>
+      <div id="filebrowser-list" class="filebrowser-list" role="tree" aria-label="Vault and wiki files"></div>
+      <div id="filebrowser-status" class="filebrowser-status" aria-live="polite"></div>
+    </div>
+    <div id="filebrowser-menu" class="filebrowser-menu" hidden role="menu"></div>
+    <footer class="sidebar-foot">
+      <button id="theme-toggle" class="icon-btn" title="Toggle theme" aria-label="Toggle theme">
+        <svg id="theme-icon-sun" viewBox="0 0 16 16" width="14" height="14"><circle cx="8" cy="8" r="3" fill="currentColor"/><g stroke="currentColor" stroke-width="1.3" stroke-linecap="round"><line x1="8" y1="1.5" x2="8" y2="3"/><line x1="8" y1="13" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3" y2="8"/><line x1="13" y1="8" x2="14.5" y2="8"/><line x1="3.4" y1="3.4" x2="4.5" y2="4.5"/><line x1="11.5" y1="11.5" x2="12.6" y2="12.6"/><line x1="3.4" y1="12.6" x2="4.5" y2="11.5"/><line x1="11.5" y1="4.5" x2="12.6" y2="3.4"/></g></svg>
+        <svg id="theme-icon-moon" viewBox="0 0 16 16" width="14" height="14"><path d="M12.5 9.5 a 5 5 0 1 1 -6 -6 a 4 4 0 0 0 6 6 z" fill="currentColor"/></svg>
+      </button>
+      <span class="meta-counts" id="meta-counts"></span>
+    </footer>
+  </aside>

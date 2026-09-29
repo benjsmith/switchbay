@@ -6,6 +6,9 @@ import WikiPane from "./WikiPane";
 import { useIngestDrop } from "./ingestDrop";
 import ThemeToggle from "../layout/ThemeToggle";
 import ModeToggle from "../layout/ModeToggle";
+import CeSidebarSlot from "../widgets/embed/CeSidebarSlot";
+import { useProxiedSkillEmbeds } from "../widgets/embed/useProxiedSkillEmbeds";
+import { resetCeEmbedSession } from "../widgets/embed/ceEmbedSession";
 
 type Props = {
   data: GraphData | null;
@@ -65,6 +68,7 @@ function BottomSeg({
  * ZenBrowserTab, which composes the same parts.
  */
 export default function Sidebar({ data, error, filesVersion }: Props) {
+  const proxied = useProxiedSkillEmbeds();
   const [refreshKey, setRefreshKey] = useState(0);
   // Bottom-pane mode (D1): the wiki page list stays always-visible on
   // top; the BOTTOM pane is the lower-level browse surface and flips
@@ -76,6 +80,14 @@ export default function Sidebar({ data, error, filesVersion }: Props) {
     const onReveal = () => setView("files");
     window.addEventListener("sy:reveal-file", onReveal);
     return () => window.removeEventListener("sy:reveal-file", onReveal);
+  }, []);
+
+  // Workspace-keyed remount of <Sidebar> tears the CE dual-mount session
+  // so the next workspace does not keep the previous wiki's Pages list.
+  useEffect(() => {
+    return () => {
+      resetCeEmbedSession();
+    };
   }, []);
 
   return (
@@ -93,35 +105,49 @@ export default function Sidebar({ data, error, filesVersion }: Props) {
           </span>
         )}
       </div>
-      <div className="sy-side-pages">
-        <WikiPane
-          data={data}
-          onGraphBuild={() => setRefreshKey((k) => k + 1)}
-          onUploadFile={ingestOne}
-        />
-      </div>
-      {error && (
-        <div className="sy-side-body" style={{ color: "var(--type-fact)" }}>
-          {error}
+      {proxied === null ? (
+        <div className="sy-side-pages">
+          <p className="sy-ce-sidebar-slot-status">Loading browser…</p>
         </div>
+      ) : proxied === true ? (
+        // One CE page list (Pages|Files) in the shell — persists across
+        // Graph/Agents/Editor. Graph pane is canvas-only via CeAtlasEmbed.
+        <div className="sy-side-pages sy-side-pages--ce-embed">
+          <CeSidebarSlot />
+        </div>
+      ) : (
+        <>
+          <div className="sy-side-pages">
+            <WikiPane
+              data={data}
+              onGraphBuild={() => setRefreshKey((k) => k + 1)}
+              onUploadFile={ingestOne}
+            />
+          </div>
+          {error && (
+            <div className="sy-side-body" style={{ color: "var(--type-fact)" }}>
+              {error}
+            </div>
+          )}
+          <div className="sy-side-files">
+            {view === "files" ? (
+              <FileBrowser
+                refreshKey={refreshKey + filesVersion}
+                headExtra={
+                  <BottomSeg view={view} onChange={setView} />
+                }
+              />
+            ) : (
+              <SourceBrowser
+                refreshKey={refreshKey + filesVersion}
+                headExtra={
+                  <BottomSeg view={view} onChange={setView} />
+                }
+              />
+            )}
+          </div>
+        </>
       )}
-      <div className="sy-side-files">
-        {view === "files" ? (
-          <FileBrowser
-            refreshKey={refreshKey + filesVersion}
-            headExtra={
-              <BottomSeg view={view} onChange={setView} />
-            }
-          />
-        ) : (
-          <SourceBrowser
-            refreshKey={refreshKey + filesVersion}
-            headExtra={
-              <BottomSeg view={view} onChange={setView} />
-            }
-          />
-        )}
-      </div>
       <footer className="sy-side-bottom">
         <ThemeToggle />
         <ModeToggle />

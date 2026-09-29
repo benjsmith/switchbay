@@ -67,7 +67,13 @@ export default function ProviderPicker() {
   const refresh = () =>
     fetch("/api/llm/providers")
       .then((r) => r.json())
-      .then((b: ProvidersBody) => setInfo(b))
+      .then((b: ProvidersBody) => {
+        // Guard: some embeds / older daemons returned providers as an
+        // object (or omitted it). Workspace switcher focus refreshes
+        // this picker — a non-array would crash on .find.
+        const providers = Array.isArray(b?.providers) ? b.providers : [];
+        setInfo({ ...b, providers });
+      })
       .catch(() => setInfo(null));
 
   useEffect(() => {
@@ -104,7 +110,8 @@ export default function ProviderPicker() {
   }, [open]);
 
   if (!info) return null;
-  const active = info.providers.find((p) => p.id === info.default_provider);
+  const providers = Array.isArray(info.providers) ? info.providers : [];
+  const active = providers.find((p) => p.id === info.default_provider);
   const activeModel = info.default_model || active?.default_model || "?";
   const activeShort = shortModel(activeModel);
   const activeLabel = shortProvider(active?.label ?? info.default_provider);
@@ -112,7 +119,7 @@ export default function ProviderPicker() {
   const warnings = info.routing?.warnings ?? [];
   // Providers that can actually orchestrate a curation run (shell +
   // file-write). A propose-only provider is rejected server-side too.
-  const execProviders = info.providers.filter(
+  const execProviders = providers.filter(
     (p) => p.has_key && p.capabilities?.shell && p.capabilities?.file_write,
   );
   const runProvider = execProviders.find((p) => p.id === runOn) ?? execProviders[0];
@@ -189,7 +196,7 @@ export default function ProviderPicker() {
       </button>
       {open && (
         <div className="sy-rail-pickmenu" role="menu">
-          {info.providers.filter((p) => p.has_key).length === 0 && (
+          {providers.filter((p) => p.has_key).length === 0 && (
             <div className="sy-rail-pickprov">
               <div className="sy-rail-pickprovhd">
                 <span className="sy-rail-pickproname">No providers ready</span>
@@ -199,7 +206,7 @@ export default function ProviderPicker() {
               </div>
             </div>
           )}
-          {info.providers.filter((p) => p.has_key).map((p) => {
+          {providers.filter((p) => p.has_key).map((p) => {
             // Same union as Settings (`modelsForProvider`): live list +
             // suggestions + default/chosen. Preferring only `models`
             // made Copilot's rail list diverge from Settings whenever

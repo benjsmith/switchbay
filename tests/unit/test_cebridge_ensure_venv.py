@@ -165,3 +165,66 @@ async def test_build_skips_ensure_when_disabled(
     data = await cebridge.build(wiki_ws, ensure_env=False)
     assert data is not None
     ensure.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_build_uses_workspace_venv_python_for_wiki_render(
+    wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """wiki_render must run under workspace .venv (kuzu), not sys.executable."""
+    py = wiki_ws / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("#!/bin/sh\n", encoding="utf-8")
+    py.chmod(0o755)
+
+    scripts = wiki_ws / "fake-ce" / "scripts"
+    scripts.mkdir(parents=True)
+    render_py = scripts / "wiki_render.py"
+    render_py.write_text("# fake\n", encoding="utf-8")
+    monkeypatch.setattr(cebridge, "ce_root", lambda: wiki_ws / "fake-ce")
+
+    out_dir = wiki_ws / "cache-out"
+    out_dir.mkdir()
+    monkeypatch.setattr(cebridge, "output_dir", lambda _ws: out_dir)
+
+    captured: dict = {}
+
+    async def fake_exec(*argv, **kwargs):
+        captured["argv"] = argv
+        (out_dir / "data.json").write_text(
+            '{"nodes":[{"id":"a","type":"note"}],"edges":[{"source":"a","target":"a"}],'
+            '"pages":{},"palette":{}}',
+            encoding="utf-8",
+        )
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"", b""))
+        return proc
+
+    monkeypatch.setattr(
+        __import__("asyncio"), "create_subprocess_exec", fake_exec,
+    )
+    monkeypatch.setattr(cebridge, "resync_types_from_disk", lambda *_a, **_k: None)
+    monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: None)
+    monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
+    monkeypatch.setattr(cebridge, "_backfill_unclassified_types", lambda *_a, **_k: None)
+    monkeypatch.setattr("switchbay.wiki_sync.inject_on_disk_pages", lambda *_a, **_k: 0)
+
+    data = await cebridge.build(wiki_ws, ensure_env=False)
+    assert data is not None
+    argv = captured["argv"]
+    assert argv[0] == str(py), argv
+    assert argv[1] == str(render_py)
+    assert argv[2] == "build"
+    assert len(data.get("edges") or []) == 1
+
+
+def test_script_python_prefers_workspace_venv(wiki_ws: Path) -> None:
+    py = wiki_ws / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("x", encoding="utf-8")
+    assert cebridge._script_python(wiki_ws) == [str(py)]
+
+
+def test_script_python_falls_back_to_uv_run(wiki_ws: Path) -> None:
+    assert cebridge._script_python(wiki_ws) == ["uv", "run", "python3"]
