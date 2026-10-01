@@ -69,6 +69,21 @@ Graph / Agents skill surfaces.
   `local_ingest` (prefer CE drop-ingest endpoint; rail LLM only when
   run metadata opts in).
 
+## Developer decision records
+
+Short public map above; detailed living developer docs below (Accepted as of
+v0.13.0):
+
+| Doc | Topic |
+|-----|--------|
+| [ADR-004](ADR-004-same-origin-embed-proxy.md) | Same-origin embed reverse-proxy (no iframes) |
+| [ADR-004b](ADR-004b-embed-v2-same-document-mount.md) | Embed v2 same-document interactive mount |
+| [CE-EMBED-HOOK](CE-EMBED-HOOK.md) | Dual-mount Graph (CE sidebar + atlas canvas) |
+| [ADR-005](ADR-005-okstratr-harness-registry-client.md) | Settings → okstratr harness registry thin client |
+| [ADR-006](ADR-006-ce-pack-run-drain.md) | CE pack-queue → rail LLM drain |
+| [ADR-007](ADR-007-ce-ingest-run-drain.md) | CE ingest-queue → local_ingest / rail drain |
+| [ADR-008](ADR-008-workspace-sandbox-roots.md) | Workspace sandbox roots (`/workspace` + env) |
+
 ## Migrate-before-thinning
 
 Built-in GraphTab, AgentDashboardTab, and filebrowser **stay** until the
