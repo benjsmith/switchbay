@@ -52,6 +52,10 @@ docs/product-pilot-judge-results-*.md
 docs/product-pilot-*.md
 docs/vscode-plugin.md
 
+# ── internal ADRs / embed hook (living developer docs — not public tip) ──
+docs/ADR-*.md
+docs/CE-EMBED-HOOK.md
+
 # ── local skill-shell umbrella workspace (never ship) ──
 skill-shell-rationalization/
 
