@@ -9267,3 +9267,110 @@ body.sy-embed-hosting {
   font-family: ui-monospace, Menlo, monospace;
   font-size: 0.85em;
 }
+
+/* ── Agents / okstratr theme sync (light + dark) ───────────────────
+ * Observer CSS hard-codes Omarchy dark tokens on :root. Same-document
+ * embed inherits the host document, so under Switchbay light chrome
+ * --panel/--recessed/--chip stay dark while --bg/--text flip light
+ * (Switchbay :root[data-theme] wins on those shared names) → dark-on-
+ * light desk/DAG. Remap okstratr tokens on the proxied mount so both
+ * themes match SPA chrome. :root[data-theme] flips live with the
+ * footer toggle (no reload); no Attention / network_org_hooks here.
+ */
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html {
+  --bg: #f8f9fb;
+  --panel: #ffffff;
+  --recessed: #f0f2f5;
+  --border: #dfe2e7;
+  --divider: #dfe2e7;
+  --text: #1a1d22;
+  --fg: #1a1d22;
+  --muted: #5a6068;
+  --accent: #2f9874; /* Switchbay light mint */
+  --ok: #3d8b4f;
+  --warn: #b8860b;
+  --bad: #c44;
+  --purple: #7c5cbf;
+  --chip: #e8ebf0;
+  --focus: #2f987433;
+  --focus-border: #2f9874;
+  color-scheme: light;
+  background: var(--bg) !important;
+  color: var(--text) !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .top,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .panel,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .main,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .rail,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .config,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .desk-card,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .card,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .side,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .board {
+  border-color: var(--border) !important;
+}
+/* Neutral chips/buttons only — do not wipe .chip.running / .chip.idle status colours. */
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip:not(.running):not(.idle),
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn {
+  background: var(--chip) !important;
+  border-color: var(--border) !important;
+  color: var(--text) !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.running,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.idle {
+  background: var(--chip) !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.running {
+  color: var(--ok) !important;
+  border-color: #3d5a3a !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.idle {
+  color: var(--warn) !important;
+  border-color: var(--border) !important;
+}
+/* Standing placeholder badge (.desk-obj--standing) uses idle amber, not --text/--muted. */
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .desk-obj--standing {
+  color: var(--warn) !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn.primary,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn.mini.active,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .kind-chip.active {
+  background: var(--focus) !important;
+  border-color: var(--accent) !important;
+  color: var(--fg) !important;
+}
+
+:root[data-theme="dark"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html {
+  /* Keep okstratr desk tokens coherent with Switchbay dark SPA (mint accent). */
+  --bg: #0f1115;
+  --panel: #161a21;
+  --recessed: #14181f;
+  --border: #232830;
+  --divider: #232830;
+  --text: #e6e8eb;
+  --fg: #e6e8eb;
+  --muted: #9aa0a8;
+  --accent: #6be8b3; /* Switchbay dark mint */
+  --ok: #9ece6a;
+  --warn: #e0af68;
+  --bad: #f7768e;
+  --purple: #bb9af7;
+  --chip: #1f242c;
+  --focus: #6be8b344;
+  --focus-border: #6be8b3;
+  color-scheme: dark;
+  background: var(--bg) !important;
+  color: var(--text) !important;
+}
+
+/* Dark: same standing badge amber. Do not inherit the mount's --text. */
+:root[data-theme="dark"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .desk-obj--standing {
+  color: var(--warn) !important;
+}
+
+:root[data-theme="light"] .sy-agents,
+:root[data-theme="light"] .sy-agents-section,
+:root[data-theme="light"] .sy-agents-row {
+  background: var(--bg-modal, #fff);
+  color: var(--text, #1a1d22);
+}
