@@ -5,7 +5,7 @@ Curiosity Engine's drop-ingest
 ``vault/raw/`` and writes ``.workbench/ingest-runs/<run_id>.json`` with
 ``status: "queued"`` — it does not run ``local_ingest`` or seat an LLM.
 Switchbay owns deterministic CE ingest + skill/LLM execution (same
-pattern as ``pack_run_drain`` / ADR-006).
+pattern as ``pack_run_drain``; see ``docs/architecture.md``).
 
 Default path: deterministic ``local_ingest`` (via ``ce_tools._ce_ingest``)
 for normal vault sources. Escalate to ``_dispatch_chat`` only when the

@@ -1,7 +1,7 @@
 /**
  * Embed v2 same-document mount helpers (no iframe).
  *
- * Mount algorithm (see docs/ADR-004b-embed-v2-same-document-mount.md):
+ * Mount algorithm (see docs/architecture.md):
  * 1. Tear down prior mount (clear panel root + remove injected <script> nodes).
  * 2. fetch(`/embed/{ce|okstratr}/…`) for proxied HTML.
  * 3. rewriteHtmlUrls → absolute `/embed/…` asset paths.

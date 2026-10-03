@@ -2,10 +2,10 @@
 
 **Charter position:** Switchbay v0.12.19 is a **behavior/performance gate under
 the import charter**, not a source-parity, source-merge, or implementation
-plan. Switchbay and okbay import and invoke the CE, curiosity-merge (CM), and
-okstratr skills through their public skill contracts. They must **not vendor
+plan. Switchbay imports and invokes the CE, curiosity-merge (CM), and
+okstratr skills through their public skill contracts. It must **not vendor
 their servers, merge their source, copy their internals, or re-implement them
-for either shell**. The shell owns its adapter/UI policy; the skills remain
+for the shell**. The shell owns its adapter/UI policy; the skills remain
 the owners of their behavior and services.
 
 This document records the v0.12.19 release behavior matrix and the additional
@@ -75,6 +75,6 @@ are **additional import-boundary acceptance gates**; the v0.12.19 release
 tests above do not certify the three-skill integration.
 
 Do not use this matrix as permission to merge CE/CM/okstratr source into
-Switchbay or okbay, vendor their servers, or grow shell-specific rewrites.
+Switchbay, vendor their servers, or grow shell-specific rewrites.
 Any retirement of pre-import duplicate shell behavior is a separate decision
 after the imported-skill behavior/performance gate passes.

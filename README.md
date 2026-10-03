@@ -15,8 +15,10 @@ curate captured material into linked wiki pages, run Auto orchestration
 It runs **entirely on your machine**, against whatever models you choose,
 and nothing leaves unless you send it.
 
-- **Local & private** — two processes and your files. No cloud, no
-  accounts; your data and API keys stay on your machine.
+- **Local & private** — a Switchbay daemon on your machine (auto-starts
+  curiosity-engine + okstratr) and your files. No cloud, no accounts; your
+  data and API keys stay on your machine. See
+  [`docs/architecture.md`](docs/architecture.md).
 - **Bring your own models** — hosted APIs (Anthropic, xAI Grok, OpenAI,
   Gemini, Meta Muse Spark), subscription coding CLIs (Claude Code, Grok
   Build, Muse Code, Codex, Copilot), or fully-local models (llama.cpp /
@@ -39,7 +41,8 @@ and nothing leaves unless you send it.
 New here? Read **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)**
 — how Switch Bay is put together in one read: the core vocabulary
 (**Workspace → Thread → Run → Turn**), the runtime shape, and the data
-flows behind the things you do most. Provider coverage (what's
+flows behind the things you do most. Hosting / embed architecture:
+**[`docs/architecture.md`](docs/architecture.md)**. Provider coverage (what's
 first-class vs preview, including Muse Code) is
 **[`docs/providers.md`](docs/providers.md)**. The default **open**
 profile is today's consumer product. An optional **enterprise** profile
@@ -99,7 +102,9 @@ make sync           # uv sync (base Python deps; add `make sync-semantic` for em
 make sync-frontend  # pnpm install in frontend/
 ```
 
-Two processes. In one terminal:
+Dev needs the daemon and Vite. The daemon **auto-starts** curiosity-engine
+(`:8766`) + okstratr (`:8767`); Vite is only for hot frontend reload. In
+one terminal:
 
 ```sh
 WORKSPACE=/path/to/workspace make dev-daemon
@@ -112,7 +117,8 @@ make dev-frontend
 ```
 
 Then open the URL vite prints (default `http://localhost:5173`). Vite
-proxies `/api` and `/ws` to the daemon on `:8765`.
+proxies `/api`, `/ws`, and `/embed` to the daemon on `:8765`. Architecture:
+[`docs/architecture.md`](docs/architecture.md).
 
 ## Test
 
@@ -182,6 +188,7 @@ don’t need to quit and reopen the PWA after each restart.
 
 ## More
 
+- **[`docs/architecture.md`](docs/architecture.md)** — how Switchbay hosts CE and okstratr (embed proxy, core-skills, pack/ingest queues).
 - **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)** — the map: concepts + data flows.
 - **[`docs/known-issues.md`](docs/known-issues.md)** — rough edges + deliberate deferrals in this release.
 - **[`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md)** — third-party attributions.

@@ -205,7 +205,7 @@ normal-sensitivity thread stays pending until explicit Approve, and
 confirm Revoke stops a subsequent poll. Do not treat a green unit suite
 as tenant certification.
 
-Release notes for this cut: [`releases/v0.12.19.md`](releases/v0.12.19.md).
+Release notes: [`releases/v0.13.0.md`](releases/v0.13.0.md); prior [`releases/v0.12.19.md`](releases/v0.12.19.md).
 
 ## SentinelOne / EDR
 

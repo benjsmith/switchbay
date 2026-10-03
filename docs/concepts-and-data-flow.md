@@ -13,6 +13,8 @@ running tools, and turning raw material into a knowledge graph.
 > If a detail here disagrees with the code, the code wins — this doc is
 > the map, not the territory.
 
+Skill hosting (same-origin embed proxy, dual-mount Graph, core-skills auto-start, pack/ingest queues, Settings → okstratr registry): **[`architecture.md`](architecture.md)**.
+
 ---
 
 ## The core loop
@@ -41,21 +43,26 @@ local. Nothing leaves unless you send it.
 
 ## Runtime shape
 
-Two processes and your files. No cloud, no accounts.
+Your browser, the Switchbay daemon, auto-started core skills, and your
+files. No cloud, no accounts. Hosting / embed detail:
+**[`architecture.md`](architecture.md)**.
 
 ```
  ┌─────────────────────────┐         ┌──────────────────────────────┐
- │  Browser frontend (PWA)  │  WS +   │   Python daemon (aiohttp)    │
- │  installed from          │◀──HTTP─▶│   always-on launchd agent    │
- │  http://127.0.0.1:8765   │  :8765  │   :8765                      │
+ │  Browser frontend (PWA)  │  WS +   │  Switchbay daemon            │
+ │  installed from          │◀──HTTP─▶│  always-on launchd agent     │
+ │  http://127.0.0.1:8765   │  :8765  │  :8765                       │
  │  Power mode · Zen mode   │         │                              │
- └─────────────────────────┘         │  ┌────────────────────────┐  │
-                                      │  │ LLM gateway (providers) │  │
-   Your knowledge base                │  │  APIs: Anthropic · xAI  │  │
-   (a "workspace"):                   │  │    · OpenAI · Gemini ·  │  │
-     <ws>/wiki/     docs + graph      │  │    Meta                 │  │
-     <ws>/vault/    raw sources       │  │  CLIs: Claude Code ·    │  │
-     <ws>/.workbench/  config+state ◀─┼──┤    Grok Build · Muse ·  │  │
+ └─────────────────────────┘         │  reverse-proxy /embed/…       │
+                                      │    /embed/ce/*       → :8766 │
+                                      │    /embed/okstratr/* → :8767 │
+                                      │  ┌────────────────────────┐  │
+   Your knowledge base                │  │ LLM gateway (providers) │  │
+   (a "workspace"):                   │  │  APIs: Anthropic · xAI  │  │
+     <ws>/wiki/     docs + graph      │  │    · OpenAI · Gemini ·  │  │
+     <ws>/vault/    raw sources       │  │    Meta                 │  │
+     <ws>/.workbench/  config+state ◀─┼──┤  CLIs: Claude Code ·    │  │
+                                      │  │    Grok Build · Muse ·  │  │
                                       │  │    Codex · Copilot      │  │
                                       │  │  local: llama.cpp/Ollama│  │
                                       │  │ tools · MCP bridge      │  │
@@ -67,11 +74,15 @@ Two processes and your files. No cloud, no accounts.
 - **Frontend**: a pure-browser PWA (no Electron/Tauri). Talks to the
   daemon over a WebSocket (live events) plus REST (`/api/*`). Installed
   from `http://127.0.0.1:8765` so it gets a dock icon + standalone
-  window. In dev, vite serves `:5173` and proxies `/api` + `/ws`.
-- **Daemon**: one aiohttp process, always on (launchd agent, restart on
-  crash). Owns everything: the LLM providers, the tool registry, the
-  rail history, the managed local model server, PTY sessions. Closing
-  the window does **not** stop work — runs live in the daemon.
+  window. In dev, vite serves `:5173` and proxies `/api` + `/ws` +
+  `/embed`.
+- **Daemon**: one always-on process (launchd agent, restart on crash).
+  Owns the LLM providers, tool registry, rail history, managed local
+  model server, PTY sessions, and same-origin `/embed` reverse proxy.
+  **Auto-starts** curiosity-engine (`:8766`) and okstratr (`:8767`).
+  Closing the window does **not** stop work — runs live in the daemon.
+  Skill UI mounts (dual-mount Graph, pack/ingest queues, Settings →
+  okstratr harness): see [`architecture.md`](architecture.md).
 - **Knowledge base**: a **curiosity-engine**-shaped folder (curiosity-
   engine is bundled as a first-party skill). Durable, user-facing files
   (`wiki/`, `vault/`, figures,
@@ -495,6 +506,7 @@ all. Two interop layers sit on top:
 
 ## See also
 
+- [`architecture.md`](architecture.md) — how Switchbay hosts CE and okstratr (v0.13).
 - `README.md` — what Switch Bay is and how to run it.
 - `CLAUDE.md` — orientation for AI coding sessions.
 - `src/switchbay/` — the daemon; each module's docstring carries its rationale.

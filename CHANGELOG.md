@@ -3,6 +3,62 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-09-29 — v0.13.0
+
+**Migration:** none. **Breaking:** none for wiki/vault format. After pull,
+run `make refresh BUILD=1` and hard-reload the PWA. No new VSIX.
+
+Switchbay **0.13.0** same-origin reverse-proxies curiosity-engine and
+okstratr (no iframes), mounts skill UIs in the same document, dual-mounts
+CE sidebar + Graph canvas, auto-starts core skills, and is a thin client
+over okstratr’s harness registry. Built-in Graph, Agents, and filebrowser
+remain; proxied embeds are opt-in in Settings.
+
+Skill versions:
+
+| Skill | Version | Notes |
+|---|---|---|
+| curiosity-engine | **1.9.0** | Dual-mount Pages + atlas; IndexedDB cache |
+| okstratr | **0.2.0** | Hosted proxy; registry SSOT; observer desk UX |
+| curiosity-merge | **0.8.4** | Installer / UI-boundary contract |
+
+See [release notes](docs/releases/v0.13.0.md) and [architecture](docs/architecture.md).
+
+### Added
+
+- **Same-origin embed reverse-proxy** — `/embed/ce/*` → `:8766`,
+  `/embed/okstratr/*` → `:8767`; loopback-only upstreams; inject
+  `X-CE-Host` / `X-Okstratr-Host: switchbay`. Feature flag
+  `proxied_skill_embeds` (Settings) switches Graph → CE / Agents → okstratr;
+  daemon proxy is always on. Built-ins **not** deleted.
+- **Same-document skill mount** — fetch proxied HTML when core-skills
+  healthy; rewrite assets; execute scripts in-panel; wait chrome via
+  `GET /api/core-skills/status` (`starting` / `unhealthy` / `building_wiki` /
+  `live`). Soft-reload on `sy:files-changed`.
+- **Dual-mount CE Graph** — shell-left `CeSidebarSlot` (Pages|Files persists
+  across Graph/Agents/Editor) + Graph-pane `CeAtlasEmbed` canvas; shared
+  `ceEmbedSession`; prefers `window.CEEmbed.create` when present; keeps
+  atlas warm across tab switches; loads `atlas-cache.js` for cold Graph cache.
+- **Core-skills auto-start** — always start CE + okstratr with the shell;
+  rail `host_notify`; `OKSTRATR_HOSTED=switchbay` on supervised serve.
+- **Settings → okstratr harness registry** — thin client (`/api/okstratr/harness*`);
+  no second Switchbay allowlist.
+- **Pack / ingest queues** — process CE `.workbench/pack-runs/` via rail LLM;
+  process ingest-runs via `local_ingest` / prefer CE drop-ingest endpoint.
+- **Sandbox roots** — allow `/workspace` (+ env roots) in home-gate.
+
+### Fixed / polish
+
+- Keep CE atlas warm across Graph tab switches; dual-mount sidebar bugs after
+  Graph mount; gzip large JSON + guard soft-remount during CE load; retarget
+  viewer on workspace switch; serve `data.json` fast / enrich off hot path;
+  vault missing-extract UX from `vault.db`.
+
+### Unchanged
+
+- v0.12.19 Curate / desks / Web / Comms / watch-folder / Zen behavior remains
+  the product baseline. Graph and Agents chrome stay; proxied mode is opt-in.
+
 ## 2026-09-20 — v0.12.19
 
 No wiki/vault format migration. Review Web, Comms, and watch-folder behavior changes below. After updating, run `make refresh BUILD=1` and hard-reload the PWA. No new VSIX.

@@ -5,7 +5,7 @@
  * CE static modules from `/embed/ce/static/…` and run a Switchbay stub that
  * mirrors `main.js` without Sidebar / filebrowser chrome.
  *
- * CE hook (for CE Benchmarker) — see docs/CE-EMBED-HOOK.md:
+ * CE hook (for CE Benchmarker) — see docs/architecture.md:
  *   window.CEEmbed.mount(container, {
  *     embed: true,
  *     dataUrl: "/embed/ce/data.json",

@@ -9,7 +9,7 @@
  * Prefer window.CEEmbed.create/mount when CE ships dual-mount embed mode;
  * stub path below coordinates Sidebar + AtlasViewer until then.
  *
- * See docs/CE-EMBED-HOOK.md.
+ * See docs/architecture.md.
  */
 
 import {
