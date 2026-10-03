@@ -60,6 +60,10 @@
   --type-notes:         #6f4070;
   --type-todo:          #9656a2;   /* lighter purple */
   --type-todo-list:     #9656a2;
+  --type-procedure:     #5e4fa2;   /* indigo — how-to hubs */
+  --type-procedures:    #5e4fa2;
+  --type-execution:     #c51b8a;   /* pink-magenta — dated instances */
+  --type-executions:    #c51b8a;
   /* Unclassified is a placeholder for "no type yet" — render with
    * a white fill + a thicker black ring so it visually reads as
    * "outline only", obviously different from the typed colour
@@ -426,6 +430,10 @@ body[data-sidebar="collapsed"] #sidebar > * { display: none; }
 .dot.dot-notes     { background: var(--type-notes); }
 .dot.dot-todo         { background: var(--type-todo); }
 .dot.dot-todo-list    { background: var(--type-todo-list); }
+.dot.dot-procedure    { background: var(--type-procedure); }
+.dot.dot-procedures   { background: var(--type-procedures); }
+.dot.dot-execution    { background: var(--type-execution); }
+.dot.dot-executions   { background: var(--type-executions); }
 .dot.dot-project      { background: var(--type-project); }
 .dot.dot-projects     { background: var(--type-projects); }
 /* Unclassified gets a white fill + thicker black ring (1.5px) so

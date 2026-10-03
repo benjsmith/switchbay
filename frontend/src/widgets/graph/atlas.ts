@@ -16,7 +16,8 @@ const LABEL_DEFAULTS = ["concept", "entity", "note", "todo"];
 const PHYSICS_DEFAULTS = { charge: -420, link: 110, collide: 10 };
 const TYPE_KEYS = [
   "project", "analysis", "concept", "entity", "evidence", "fact",
-  "figure", "table", "source", "note", "todo-list", "unclassified",
+  "figure", "table", "source", "note", "todo-list", "procedure",
+  "execution", "unclassified",
 ] as const;
 
 export type ViewerMode = "classic" | "atlas";

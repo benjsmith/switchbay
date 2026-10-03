@@ -31,6 +31,10 @@ const TYPE_COLOR: Record<string, string> = {
   source: "#94346e",
   note: "#6f4070",
   "todo-list": "#9656a2",
+  procedure: "#5e4fa2",
+  procedures: "#5e4fa2",
+  execution: "#c51b8a",
+  executions: "#c51b8a",
   unclassified: "#ffffff",
 };
 function colorFor(t: string): string {
