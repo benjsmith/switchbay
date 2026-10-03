@@ -5,62 +5,59 @@ Human-curated release notes. Earlier 0.9.x notes also live on the
 
 ## 2026-09-29 — v0.13.0
 
-**Migration:** none (feature-preserving vs v0.12.19 architecture cutover).
-**Breaking:** none for wiki/vault format. After pull, run `make refresh BUILD=1`
-and hard-reload the PWA. No new VSIX. Do **not** tag from the docs PR alone.
+**Migration:** none. **Breaking:** none for wiki/vault format. After pull,
+run `make refresh BUILD=1` and hard-reload the PWA. No new VSIX.
 
-Architecture cutover under the skill-shell import charter: Switchbay
-**same-origin reverse-proxies** CE + okstratr (no iframes), mounts skill UIs
-same-document (Embed v2), dual-mounts CE sidebar + Graph canvas, auto-starts
-core skills, and becomes a thin client over okstratr’s harness registry.
-Built-in Graph / Agents / filebrowser remain until the parity checklist is
-green (**migrate-before-thinning**).
+Switchbay **0.13.0** same-origin reverse-proxies curiosity-engine and
+okstratr (no iframes), mounts skill UIs in the same document, dual-mounts
+CE sidebar + Graph canvas, auto-starts core skills, and is a thin client
+over okstratr’s harness registry. Built-in Graph, Agents, and filebrowser
+remain; proxied embeds are opt-in in Settings.
 
-Skill pins for this wave (tags pending docs merges):
+Skill versions:
 
 | Skill | Version | Notes |
 |---|---|---|
-| curiosity-engine | **v1.9.0** (pending) | tip `3018580`; CEEmbed dual-mount + IndexedDB cache + soft-park |
-| okstratr | **v0.2.0** (pending) | hosted proxy + registry SSOT + observer desk UX |
-| curiosity-merge | **v0.8.4** (pending) | Phase 3 installer / UI-boundary contract |
+| curiosity-engine | **1.9.0** | Dual-mount Pages + atlas; IndexedDB cache |
+| okstratr | **0.2.0** | Hosted proxy; registry SSOT; observer desk UX |
+| curiosity-merge | **0.8.4** | Installer / UI-boundary contract |
 
 See [release notes](docs/releases/v0.13.0.md) and [architecture](docs/architecture.md).
 
 ### Added
 
-- **Phase 4a same-origin embed reverse-proxy** — `/embed/ce/*` → `:8766`,
+- **Same-origin embed reverse-proxy** — `/embed/ce/*` → `:8766`,
   `/embed/okstratr/*` → `:8767`; loopback-only upstreams; inject
   `X-CE-Host` / `X-Okstratr-Host: switchbay`. Feature flag
   `proxied_skill_embeds` (Settings) switches Graph → CE / Agents → okstratr;
   daemon proxy is always on. Built-ins **not** deleted.
-- **Embed v2 same-document mount** — fetch proxied HTML when core-skills
+- **Same-document skill mount** — fetch proxied HTML when core-skills
   healthy; rewrite assets; execute scripts in-panel; wait chrome via
   `GET /api/core-skills/status` (`starting` / `unhealthy` / `building_wiki` /
   `live`). Soft-reload on `sy:files-changed`.
 - **Dual-mount CE Graph** — shell-left `CeSidebarSlot` (Pages|Files persists
   across Graph/Agents/Editor) + Graph-pane `CeAtlasEmbed` canvas; shared
-  `ceEmbedSession`; prefers `window.CEEmbed.create` when present; soft-park
-  atlas across tab switches; loads `atlas-cache.js` for cold Graph cache.
+  `ceEmbedSession`; prefers `window.CEEmbed.create` when present; keeps
+  atlas warm across tab switches; loads `atlas-cache.js` for cold Graph cache.
 - **Core-skills auto-start** — always start CE + okstratr with the shell;
   rail `host_notify`; `OKSTRATR_HOSTED=switchbay` on supervised serve.
 - **Settings → okstratr harness registry** — thin client (`/api/okstratr/harness*`);
   no second Switchbay allowlist.
-- **Pack / ingest drain** — drain CE `.workbench/pack-runs/` into rail LLM;
-  drain ingest-runs via `local_ingest` / prefer CE drop-ingest endpoint.
+- **Pack / ingest queues** — process CE `.workbench/pack-runs/` via rail LLM;
+  process ingest-runs via `local_ingest` / prefer CE drop-ingest endpoint.
 - **Sandbox roots** — allow `/workspace` (+ env roots) in home-gate.
 
-### Fixed / polish (embed wave)
+### Fixed / polish
 
 - Keep CE atlas warm across Graph tab switches; dual-mount sidebar bugs after
   Graph mount; gzip large JSON + guard soft-remount during CE load; retarget
   viewer on workspace switch; serve `data.json` fast / enrich off hot path;
   vault missing-extract UX from `vault.db`.
 
-### Unchanged (feature-preserving)
+### Unchanged
 
 - v0.12.19 Curate / desks / Web / Comms / watch-folder / Zen behavior remains
-  the product baseline. This release is the embed/architecture cutover on top
-  of that gate — not a revert of Graph/Agents chrome.
+  the product baseline. Graph and Agents chrome stay; proxied mode is opt-in.
 
 ## 2026-09-20 — v0.12.19
 

@@ -13,7 +13,7 @@ running tools, and turning raw material into a knowledge graph.
 > If a detail here disagrees with the code, the code wins — this doc is
 > the map, not the territory.
 
-Skill hosting (same-origin embed proxy, CEEmbed dual-mount Graph, core-skills auto-start, pack/ingest drain, Settings → okstratr registry): **[`architecture.md`](architecture.md)**.
+Skill hosting (same-origin embed proxy, dual-mount Graph, core-skills auto-start, pack/ingest queues, Settings → okstratr registry): **[`architecture.md`](architecture.md)**.
 
 ---
 
@@ -43,13 +43,13 @@ local. Nothing leaves unless you send it.
 
 ## Runtime shape
 
-Your browser, the Switchbay aiohttp shell, auto-started core skills, and
-your files. No cloud, no accounts. Hosting / embed detail:
+Your browser, the Switchbay daemon, auto-started core skills, and your
+files. No cloud, no accounts. Hosting / embed detail:
 **[`architecture.md`](architecture.md)**.
 
 ```
  ┌─────────────────────────┐         ┌──────────────────────────────┐
- │  Browser frontend (PWA)  │  WS +   │  Switchbay daemon (aiohttp)  │
+ │  Browser frontend (PWA)  │  WS +   │  Switchbay daemon            │
  │  installed from          │◀──HTTP─▶│  always-on launchd agent     │
  │  http://127.0.0.1:8765   │  :8765  │  :8765                       │
  │  Power mode · Zen mode   │         │                              │
@@ -76,14 +76,13 @@ your files. No cloud, no accounts. Hosting / embed detail:
   from `http://127.0.0.1:8765` so it gets a dock icon + standalone
   window. In dev, vite serves `:5173` and proxies `/api` + `/ws` +
   `/embed`.
-- **Daemon (shell)**: one aiohttp process, always on (launchd agent,
-  restart on crash). Owns the LLM providers, tool registry, rail
-  history, managed local model server, PTY sessions, and same-origin
-  `/embed` reverse proxy. **Auto-starts** curiosity-engine (`:8766`) and
-  okstratr (`:8767`). Closing the window does **not** stop work — runs
-  live in the daemon. Skill UI mounts (CEEmbed dual-mount Graph, soft-
-  park, pack/ingest drain, Settings → okstratr harness): see
-  [`architecture.md`](architecture.md).
+- **Daemon**: one always-on process (launchd agent, restart on crash).
+  Owns the LLM providers, tool registry, rail history, managed local
+  model server, PTY sessions, and same-origin `/embed` reverse proxy.
+  **Auto-starts** curiosity-engine (`:8766`) and okstratr (`:8767`).
+  Closing the window does **not** stop work — runs live in the daemon.
+  Skill UI mounts (dual-mount Graph, pack/ingest queues, Settings →
+  okstratr harness): see [`architecture.md`](architecture.md).
 - **Knowledge base**: a **curiosity-engine**-shaped folder (curiosity-
   engine is bundled as a first-party skill). Durable, user-facing files
   (`wiki/`, `vault/`, figures,
@@ -507,7 +506,7 @@ all. Two interop layers sit on top:
 
 ## See also
 
-- [`architecture.md`](architecture.md) — current hosting / embed architecture (v0.13).
+- [`architecture.md`](architecture.md) — how Switchbay hosts CE and okstratr (v0.13).
 - `README.md` — what Switch Bay is and how to run it.
 - `CLAUDE.md` — orientation for AI coding sessions.
 - `src/switchbay/` — the daemon; each module's docstring carries its rationale.

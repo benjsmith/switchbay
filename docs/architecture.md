@@ -15,7 +15,7 @@ Browser PWA  ──WS/HTTP──▶  Switchbay daemon :8765
                               ├── /embed/okstratr/* → 127.0.0.1:8767  (okstratr)
                               ├── /api/core-skills/*   (auto-start + status)
                               ├── /api/okstratr/harness*  (Settings thin client)
-                              └── pack / ingest drainers  (.workbench queues)
+                              └── pack / ingest queues  (.workbench)
 ```
 
 Same-origin reverse proxy + **same-document** mounts — **no iframes** for
@@ -32,24 +32,24 @@ Graph / Agents skill surfaces.
   okstratr observer; turning it off restores built-ins. The proxy itself
   stays on either way.
 
-## Embed v2 — same-document mount
+## Same-document skill mount
 
 - Poll `GET /api/core-skills/status`; wait chrome while `starting` /
   `building_wiki` / `unhealthy`; mount only when healthy.
 - `fetch` proxied HTML, rewrite asset URLs onto `/embed/…`, inject markup,
-  **execute** scripts via `createElement` + append (not script-stripped).
+  **execute** scripts via `createElement` + append.
 - Soft-reload on wiki `files_changed`; tear down scripts on unmount.
 - Implementation: `frontend/src/widgets/embed/` (`ProxiedSkillPanel`,
   `embedMount.ts`).
 
-## Dual-mount Graph (CEEmbed)
+## Dual-mount Graph
 
 - Shell left column: CE Pages|Files (`CeSidebarSlot`) persists across
   Graph / Agents / Editor when proxied embeds are on for a CE workspace.
-- Graph pane: atlas canvas only (`CeAtlasEmbed`); soft-park on leave;
-  `atlas-cache.js` + workspace key for cold Graph cache.
-- Prefers `window.CEEmbed.create` / `mount` when CE ships it; one session
-  singleton survives Graph unmount.
+- Graph pane: atlas canvas only (`CeAtlasEmbed`); keeps the atlas warm
+  when you leave the tab; `atlas-cache.js` + workspace key for cold Graph cache.
+- Prefers `window.CEEmbed.create` / `mount` when CE provides it; one
+  session survives Graph unmount.
 
 ## Core-skills auto-start
 
@@ -62,15 +62,14 @@ Graph / Agents skill surfaces.
 - `/api/okstratr/harness*` is a thin client over okstratr’s harness /
   model registry. No second Switchbay allowlist.
 
-## Pack + ingest drain
+## Pack + ingest queues
 
 - CE queues pack-runs and ingest-runs under `.workbench/`.
-- Switchbay drains pack-runs into the rail LLM and ingest-runs via
+- Switchbay processes pack-runs via the rail LLM and ingest-runs via
   `local_ingest` (prefer CE drop-ingest endpoint; rail LLM only when
   run metadata opts in).
 
-## Migrate-before-thinning
+## Built-in Graph and Agents
 
-Built-in GraphTab, AgentDashboardTab, and filebrowser **stay** until the
-skill-shell parity checklist is green. v0.13.0 does not delete them;
-proxied embeds are opt-in.
+Built-in GraphTab, AgentDashboardTab, and filebrowser stay available.
+Proxied skill embeds are opt-in in Settings.

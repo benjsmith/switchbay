@@ -15,9 +15,10 @@ curate captured material into linked wiki pages, run Auto orchestration
 It runs **entirely on your machine**, against whatever models you choose,
 and nothing leaves unless you send it.
 
-- **Local & private** — a Switchbay aiohttp shell on your machine (auto-starts
-  CE + okstratr) and your files. No cloud, no accounts; your data and API
-  keys stay on your machine. See [`docs/architecture.md`](docs/architecture.md).
+- **Local & private** — a Switchbay daemon on your machine (auto-starts
+  curiosity-engine + okstratr) and your files. No cloud, no accounts; your
+  data and API keys stay on your machine. See
+  [`docs/architecture.md`](docs/architecture.md).
 - **Bring your own models** — hosted APIs (Anthropic, xAI Grok, OpenAI,
   Gemini, Meta Muse Spark), subscription coding CLIs (Claude Code, Grok
   Build, Muse Code, Codex, Copilot), or fully-local models (llama.cpp /
@@ -101,9 +102,9 @@ make sync           # uv sync (base Python deps; add `make sync-semantic` for em
 make sync-frontend  # pnpm install in frontend/
 ```
 
-Dev needs the daemon and Vite. The daemon is the Switchbay aiohttp shell
-and **auto-starts** curiosity-engine (`:8766`) + okstratr (`:8767`); Vite
-is only for hot frontend reload. In one terminal:
+Dev needs the daemon and Vite. The daemon **auto-starts** curiosity-engine
+(`:8766`) + okstratr (`:8767`); Vite is only for hot frontend reload. In
+one terminal:
 
 ```sh
 WORKSPACE=/path/to/workspace make dev-daemon
@@ -187,7 +188,7 @@ don’t need to quit and reopen the PWA after each restart.
 
 ## More
 
-- **[`docs/architecture.md`](docs/architecture.md)** — current hosting architecture (embed proxy, CEEmbed, core-skills, drains).
+- **[`docs/architecture.md`](docs/architecture.md)** — how Switchbay hosts CE and okstratr (embed proxy, core-skills, pack/ingest queues).
 - **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)** — the map: concepts + data flows.
 - **[`docs/known-issues.md`](docs/known-issues.md)** — rough edges + deliberate deferrals in this release.
 - **[`docs/THIRD-PARTY-NOTICES.md`](docs/THIRD-PARTY-NOTICES.md)** — third-party attributions.
