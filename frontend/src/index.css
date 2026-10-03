@@ -9286,14 +9286,14 @@ body.sy-embed-hosting {
   --text: #1a1d22;
   --fg: #1a1d22;
   --muted: #5a6068;
-  --accent: #3d6fd9;
+  --accent: #2f9874; /* Switchbay light mint */
   --ok: #3d8b4f;
   --warn: #b8860b;
   --bad: #c44;
   --purple: #7c5cbf;
   --chip: #e8ebf0;
-  --focus: #3d6fd933;
-  --focus-border: #3d6fd9;
+  --focus: #2f987433;
+  --focus-border: #2f9874;
   color-scheme: light;
   background: var(--bg) !important;
   color: var(--text) !important;
@@ -9309,11 +9309,24 @@ body.sy-embed-hosting {
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .board {
   border-color: var(--border) !important;
 }
-:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip,
+/* Neutral chips/buttons only — do not wipe .chip.running / .chip.idle status colours. */
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip:not(.running):not(.idle),
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn {
   background: var(--chip) !important;
   border-color: var(--border) !important;
   color: var(--text) !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.running,
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.idle {
+  background: var(--chip) !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.running {
+  color: var(--ok) !important;
+  border-color: #3d5a3a !important;
+}
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .chip.idle {
+  color: var(--warn) !important;
+  border-color: var(--border) !important;
 }
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn.primary,
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn.mini.active,
@@ -9324,7 +9337,7 @@ body.sy-embed-hosting {
 }
 
 :root[data-theme="dark"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html {
-  /* Keep okstratr desk tokens coherent with Switchbay dark SPA. */
+  /* Keep okstratr desk tokens coherent with Switchbay dark SPA (mint accent). */
   --bg: #0f1115;
   --panel: #161a21;
   --recessed: #14181f;
@@ -9333,14 +9346,14 @@ body.sy-embed-hosting {
   --text: #e6e8eb;
   --fg: #e6e8eb;
   --muted: #9aa0a8;
-  --accent: #7aa2f7;
+  --accent: #6be8b3; /* Switchbay dark mint */
   --ok: #9ece6a;
   --warn: #e0af68;
   --bad: #f7768e;
   --purple: #bb9af7;
   --chip: #1f242c;
-  --focus: #7aa2f744;
-  --focus-border: #7aa2f7;
+  --focus: #6be8b344;
+  --focus-border: #6be8b3;
   color-scheme: dark;
   background: var(--bg) !important;
   color: var(--text) !important;
