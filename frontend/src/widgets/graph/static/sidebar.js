@@ -22,6 +22,8 @@ window.Sidebar = (function () {
     analysis:     'analysis',     analyses: 'analysis',
     concept:      'concept',      concepts: 'concept',
     entity:       'entity',       entities: 'entity',
+    procedure:    'procedure',    procedures: 'procedure',
+    execution:    'execution',    executions: 'execution',
     evidence:     'evidence',
     fact:         'fact',         facts:    'fact',
     figure:       'figure',       figures:  'figure',
@@ -41,16 +43,19 @@ window.Sidebar = (function () {
   // → fact → figure → table → source → note → todo-list →
   // unclassified).
   const TYPE_ORDER = [
-    'project', 'analysis', 'concept', 'entity', 'evidence', 'fact',
-    'figure', 'table', 'source', 'note', 'todo-list', 'unclassified',
+    'project', 'analysis', 'concept', 'entity', 'procedure', 'execution',
+    'evidence', 'fact', 'figure', 'table', 'source', 'note', 'todo-list',
+    'unclassified',
   ];
   const TYPE_LABEL = {
     project:      'Projects',
+    analysis:     'Analyses',
     concept:      'Concepts',
     entity:       'Entities',
+    procedure:    'Procedures',
+    execution:    'Executions',
     evidence:     'Evidence',
     fact:         'Facts',
-    analysis:     'Analyses',
     figure:       'Figures',
     table:        'Tables',
     source:       'Sources',

@@ -20,13 +20,15 @@ export const template = /* html */ `
       <span class="ctrl-label">edges:</span><span id="edge-mode-state">auto</span>
     </button>
     <button id="label-types" class="ctrl-btn" title="Which page types show labels" aria-label="Which page types show labels">
-      <span class="ctrl-label">types:</span><span id="label-types-state">4/11</span>
+      <span class="ctrl-label">types:</span><span id="label-types-state">4/13</span>
     </button>
     <div id="label-types-panel" class="label-types-panel hidden" role="dialog" aria-label="Label types">
       <div class="label-types-head">Show labels for</div>
       <label class="label-types-row" data-type="project"><input type="checkbox"><span class="dot dot-project"></span><span>Projects</span></label>
       <label class="label-types-row" data-type="concept"><input type="checkbox"><span class="dot dot-concept"></span><span>Concepts</span></label>
       <label class="label-types-row" data-type="entity"><input type="checkbox"><span class="dot dot-entity"></span><span>Entities</span></label>
+      <label class="label-types-row" data-type="procedure"><input type="checkbox"><span class="dot dot-procedure"></span><span>Procedures</span></label>
+      <label class="label-types-row" data-type="execution"><input type="checkbox"><span class="dot dot-execution"></span><span>Executions</span></label>
       <label class="label-types-row" data-type="evidence"><input type="checkbox"><span class="dot dot-evidence"></span><span>Evidence</span></label>
       <label class="label-types-row" data-type="fact"><input type="checkbox"><span class="dot dot-fact"></span><span>Facts</span></label>
       <label class="label-types-row" data-type="analysis"><input type="checkbox"><span class="dot dot-analysis"></span><span>Analyses</span></label>

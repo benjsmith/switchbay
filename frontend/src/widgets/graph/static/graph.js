@@ -87,6 +87,8 @@ window.Graph = (function () {
     source:       'source',       sources:  'source',
     note:         'note',         notes:    'note',
     todo:         'todo',         'todo-list': 'todo',
+    procedure:    'procedure',    procedures: 'procedure',
+    execution:    'execution',    executions: 'execution',
     unclassified: 'unclassified',
   };
   function canonicalType(t) { return TYPE_CANONICAL[t] || t || 'default'; }
@@ -101,8 +103,8 @@ window.Graph = (function () {
   // via the label-types popover.
   const LABEL_TYPE_DEFAULTS = ['concept', 'entity', 'note', 'todo'];
   const ALL_LABEL_TYPES = [
-    'concept', 'entity', 'evidence', 'fact', 'analysis',
-    'figure',  'table',  'source',   'note', 'todo',
+    'concept', 'entity', 'procedure', 'execution', 'evidence', 'fact',
+    'analysis', 'figure', 'table', 'source', 'note', 'todo',
     'unclassified',
   ];
   let _labelTypeFilter = (() => {
