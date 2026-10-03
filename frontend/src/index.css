@@ -9328,6 +9328,10 @@ body.sy-embed-hosting {
   color: var(--warn) !important;
   border-color: var(--border) !important;
 }
+/* Standing placeholder badge (.desk-obj--standing) uses idle amber, not --text/--muted. */
+:root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .desk-obj--standing {
+  color: var(--warn) !important;
+}
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn.primary,
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .btn.mini.active,
 :root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .kind-chip.active {
@@ -9357,6 +9361,11 @@ body.sy-embed-hosting {
   color-scheme: dark;
   background: var(--bg) !important;
   color: var(--text) !important;
+}
+
+/* Dark: same standing badge amber. Do not inherit the mount's --text. */
+:root[data-theme="dark"] .sy-proxied-skill[data-kind="okstratr"] .sy-proxied-skill-html .desk-obj--standing {
+  color: var(--warn) !important;
 }
 
 :root[data-theme="light"] .sy-agents,

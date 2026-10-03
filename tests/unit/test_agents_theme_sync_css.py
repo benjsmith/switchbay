@@ -11,7 +11,7 @@ def _okstratr_theme_block() -> str:
     text = CSS.read_text()
     start = text.index("Agents / okstratr theme sync")
     # Stop before the built-in Agents light block that follows.
-    end = text.index(":root[data-theme=\"light\"] .sy-agents", start)
+    end = text.index(':root[data-theme="light"] .sy-agents', start)
     return text[start:end]
 
 
@@ -30,3 +30,34 @@ def test_light_chip_rule_preserves_running_and_idle():
     assert "color: var(--ok)" in block
     assert ".chip.idle" in block
     assert "color: var(--warn)" in block
+
+
+def _rule_body(block: str, selector_needle: str) -> str:
+    idx = block.index(selector_needle)
+    return block[idx:block.index("}", idx)]
+
+
+def test_standing_badge_stays_warn_not_text():
+    """Placeholder .desk-obj--standing is idle amber in light and dark.
+
+    A blanket color: var(--text) must not wash the standing badge gray.
+    """
+    block = _okstratr_theme_block()
+    light = _rule_body(
+        block,
+        ':root[data-theme="light"] .sy-proxied-skill[data-kind="okstratr"] '
+        ".sy-proxied-skill-html .desk-obj--standing",
+    )
+    dark = _rule_body(
+        block,
+        ':root[data-theme="dark"] .sy-proxied-skill[data-kind="okstratr"] '
+        ".sy-proxied-skill-html .desk-obj--standing",
+    )
+    for rule in (light, dark):
+        assert "color: var(--warn)" in rule
+        assert "var(--text)" not in rule
+        assert "var(--muted)" not in rule
+    # Neutral chip wash still excludes status chips (idle amber / running green).
+    neutral = _rule_body(block, ".chip:not(.running):not(.idle)")
+    assert "desk-obj--standing" not in neutral
+    assert ".chip.idle" not in neutral.split("{", 1)[0]
