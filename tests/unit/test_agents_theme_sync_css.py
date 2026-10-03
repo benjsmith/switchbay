@@ -8,7 +8,7 @@ CSS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "index.css"
 
 
 def _okstratr_theme_block() -> str:
-    text = CSS.read_text()
+    text = CSS.read_text(encoding="utf-8")
     start = text.index("Agents / okstratr theme sync")
     # Stop before the built-in Agents light block that follows.
     end = text.index(':root[data-theme="light"] .sy-agents', start)
