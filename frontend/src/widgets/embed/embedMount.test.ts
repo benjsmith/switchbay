@@ -154,6 +154,15 @@ test("isSwitchbayReservedApi protects control-plane paths", () => {
   assert.equal(isSwitchbayReservedApi("/api/workspaces/switch"), true);
   assert.equal(isSwitchbayReservedApi("/api/tree"), true);
   assert.equal(isSwitchbayReservedApi("/api/llm/providers"), true);
+  // Settings power controls must stay on the Switchbay daemon while an
+  // embed fetch shim is installed (otherwise Restart/Update toast "not found"
+  // from okstratr/CE via /embed/*/api/restart).
+  assert.equal(isSwitchbayReservedApi("/api/restart"), true);
+  assert.equal(isSwitchbayReservedApi("/api/update"), true);
+  assert.equal(isSwitchbayReservedApi("/api/update/check"), true);
+  assert.equal(isSwitchbayReservedApi("/api/quit"), true);
+  assert.equal(isSwitchbayReservedApi("/api/versions"), true);
+  assert.equal(isSwitchbayReservedApi("/api/admin-policy"), true);
   assert.equal(isSwitchbayReservedApi("/api/page?path=x"), false);
   assert.equal(isSwitchbayReservedApi("/api/vault/foo"), false);
   assert.equal(isSwitchbayReservedApi("/api/desk/status"), false);
@@ -187,6 +196,9 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   void g.fetch("/api/core-skills/status");
   void g.fetch("/api/tree");
   void g.fetch("/api/llm/providers");
+  void g.fetch("/api/restart", { method: "POST" });
+  void g.fetch("/api/update", { method: "POST" });
+  void g.fetch("/api/quit", { method: "POST" });
   assert.equal(calls[0], "/embed/ce/data.json");
   assert.equal(calls[1], "/embed/ce/data.json?t=1");
   assert.equal(calls[2], "/embed/ce/api/page?path=notes/x.md");
@@ -195,6 +207,9 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   assert.equal(calls[5], "/api/core-skills/status");
   assert.equal(calls[6], "/api/tree");
   assert.equal(calls[7], "/api/llm/providers");
+  assert.equal(calls[8], "/api/restart");
+  assert.equal(calls[9], "/api/update");
+  assert.equal(calls[10], "/api/quit");
   // Release restores fetch
   assert.equal(typeof g.window.__syEmbedReleaseFetch, "function");
   g.window.__syEmbedReleaseFetch();
