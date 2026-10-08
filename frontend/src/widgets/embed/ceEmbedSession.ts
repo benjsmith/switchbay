@@ -326,7 +326,11 @@ class CeEmbedSession {
           if (nameEl) nameEl.textContent = workspaceLabel(data);
         }
         try {
-          handle.mountSidebar(this.sidebarEl);
+          // Guard: CE's mountSidebar appendChilds into #sidebar. Skip when
+          // the slot was unmounted mid-sync (disconnected) or inject failed.
+          if (this.sidebarEl.isConnected && this.sidebarEl.querySelector("#sidebar")) {
+            handle.mountSidebar(this.sidebarEl);
+          }
         } catch (e) {
           console.warn("[CeEmbedSession] mountSidebar failed", e);
         }

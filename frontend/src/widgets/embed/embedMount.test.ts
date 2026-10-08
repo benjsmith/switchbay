@@ -163,6 +163,23 @@ test("isSwitchbayReservedApi protects control-plane paths", () => {
   assert.equal(isSwitchbayReservedApi("/api/quit"), true);
   assert.equal(isSwitchbayReservedApi("/api/versions"), true);
   assert.equal(isSwitchbayReservedApi("/api/admin-policy"), true);
+  // Same class: other Switchbay-owned chrome/settings paths that Settings or
+  // the shell call while a Graph/Agents embed fetch shim is installed.
+  assert.equal(isSwitchbayReservedApi("/api/fs/reveal"), true);
+  assert.equal(isSwitchbayReservedApi("/api/file"), true);
+  assert.equal(isSwitchbayReservedApi("/api/file-routes"), true);
+  assert.equal(isSwitchbayReservedApi("/api/tabs/terminal"), true);
+  assert.equal(isSwitchbayReservedApi("/api/runs/active"), true);
+  assert.equal(isSwitchbayReservedApi("/api/permission/pending"), true);
+  assert.equal(isSwitchbayReservedApi("/api/okstratr/harness"), true);
+  assert.equal(isSwitchbayReservedApi("/api/localllm/status"), true);
+  assert.equal(isSwitchbayReservedApi("/api/easter/thrusters"), true);
+  assert.equal(isSwitchbayReservedApi("/api/report-packages/open"), true);
+  assert.equal(isSwitchbayReservedApi("/api/micro-edits/model"), true);
+  assert.equal(isSwitchbayReservedApi("/api/walkthrough/status"), true);
+  assert.equal(isSwitchbayReservedApi("/api/share/status"), true);
+  assert.equal(isSwitchbayReservedApi("/api/web-policy"), true);
+  // Skill-owned paths stay remappable onto /embed/*
   assert.equal(isSwitchbayReservedApi("/api/page?path=x"), false);
   assert.equal(isSwitchbayReservedApi("/api/vault/foo"), false);
   assert.equal(isSwitchbayReservedApi("/api/desk/status"), false);
@@ -199,6 +216,10 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   void g.fetch("/api/restart", { method: "POST" });
   void g.fetch("/api/update", { method: "POST" });
   void g.fetch("/api/quit", { method: "POST" });
+  void g.fetch("/api/fs/reveal", { method: "POST" });
+  void g.fetch("/api/runs/active");
+  void g.fetch("/api/easter/thrusters", { method: "POST" });
+  void g.fetch("/api/okstratr/harness");
   assert.equal(calls[0], "/embed/ce/data.json");
   assert.equal(calls[1], "/embed/ce/data.json?t=1");
   assert.equal(calls[2], "/embed/ce/api/page?path=notes/x.md");
@@ -210,6 +231,10 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   assert.equal(calls[8], "/api/restart");
   assert.equal(calls[9], "/api/update");
   assert.equal(calls[10], "/api/quit");
+  assert.equal(calls[11], "/api/fs/reveal");
+  assert.equal(calls[12], "/api/runs/active");
+  assert.equal(calls[13], "/api/easter/thrusters");
+  assert.equal(calls[14], "/api/okstratr/harness");
   // Release restores fetch
   assert.equal(typeof g.window.__syEmbedReleaseFetch, "function");
   g.window.__syEmbedReleaseFetch();
