@@ -3,6 +3,21 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-10-08 — v0.13.1
+
+**Migration:** none. **Breaking:** none.
+
+### Fixed
+
+- **Restart / Update / Quit with skill embeds** — when proxied Graph or Agents
+  embeds were open, Settings → Restart, Update, and Quit were rewritten onto
+  `/embed/{ce|okstratr}/api/*` and came back as a red "not found" toast. Those
+  control-plane paths (and the other Switchbay-owned `/api/*` prefixes the shell
+  and Settings call) now stay on the Switchbay daemon.
+- **CE sidebar remount** — skip `mountSidebar` when the sidebar slot is
+  disconnected or missing `#sidebar`, avoiding a console appendChild error
+  during sync.
+
 ## 2026-09-29 — v0.13.0
 
 **Migration:** none. **Breaking:** none for wiki/vault format. After pull,
