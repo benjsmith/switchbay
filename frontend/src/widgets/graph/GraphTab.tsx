@@ -3,7 +3,7 @@ import { mountGraph } from "./init";
 import type { GraphData } from "./types";
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
-import { ingestFile } from "../../lib/ingest";
+import { openUploadVaultDialog } from "../../lib/uploadVault.ts";
 import CurationReplay from "./CurationReplay";
 import { peekPersistedQuery } from "./graphSearch";
 import { installSyHostMarker } from "../../lib/localPath";
@@ -23,8 +23,6 @@ type Props = {
 
 export default function GraphTab({ data, error, suppressDocModal, showAddFile }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
-  const addFileInputRef = useRef<HTMLInputElement>(null);
-  const [addingFile, setAddingFile] = useState(false);
   const [progressMsg, setProgressMsg] = useState<string | null>(
     data ? null : "Loading graph from cache…",
   );
@@ -65,34 +63,6 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
     setReplayFading(false);
     setShowReplay(true);
     setReplayKey((k) => k + 1);
-  };
-
-  // Zen add-file: same ingest pipeline + Agents-jump as the Power
-  // sidebar's `+`. The sy:open-agents-run handler (App) is Zen-aware,
-  // so it opens the Agents surface with the run auto-expanded.
-  const onAddFileChosen = async (ev: React.ChangeEvent<HTMLInputElement>) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = "";
-    if (!file) return;
-    setAddingFile(true);
-    try {
-      const runId = await ingestFile(file);
-      if (!runId) {
-        window.dispatchEvent(new CustomEvent("sy:toast", {
-          detail: { text: `Couldn't ingest ${file.name}`, err: true },
-        }));
-        return;
-      }
-      window.dispatchEvent(new CustomEvent("sy:open-agents-run", {
-        detail: { run_id: runId },
-      }));
-    } catch (e) {
-      window.dispatchEvent(new CustomEvent("sy:toast", {
-        detail: { text: `Ingest failed: ${(e as Error).message}`, err: true },
-      }));
-    } finally {
-      setAddingFile(false);
-    }
   };
 
   // Track which dataset is currently mounted so a workspace switch
@@ -374,24 +344,15 @@ export default function GraphTab({ data, error, suppressDocModal, showAddFile }:
         ✂
       </button>}
       {showAddFile && (
-        <>
-          <button
-            type="button"
-            className="sy-graph-add-btn"
-            onClick={() => addFileInputRef.current?.click()}
-            disabled={addingFile}
-            title="Add a file — ingests it into this workspace"
-            aria-label="Add a file"
-          >
-            {addingFile ? "…" : "+"}
-          </button>
-          <input
-            ref={addFileInputRef}
-            type="file"
-            style={{ display: "none" }}
-            onChange={(e) => void onAddFileChosen(e)}
-          />
-        </>
+        <button
+          type="button"
+          className="sy-graph-add-btn"
+          onClick={openUploadVaultDialog}
+          title="Add files to the vault"
+          aria-label="Add files"
+        >
+          +
+        </button>
       )}
       <div ref={containerRef} className="sy-graph-mount" />
       {viewerMode === "classic" && splitActive && (

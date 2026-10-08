@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import sidebarHtml from "./ceSidebarShell.html?raw";
 import { getCeEmbedSession } from "./ceEmbedSession.ts";
+import { openUploadVaultDialog } from "../../lib/uploadVault.ts";
 
 /**
  * Persistent shell-left mount for CE's Pages|Files sidebar.
@@ -32,6 +33,23 @@ export default function CeSidebarSlot() {
       unsub();
       session.detachSidebar(el);
     };
+  }, []);
+
+  // CE's edit.js binds its `+` (#sidebar-upload) to a bare file picker.
+  // Catch the click on the way down and open Switchbay's upload dialog
+  // instead, so both sidebar modes share one uploader.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onClick = (ev: MouseEvent) => {
+      const t = ev.target as Element | null;
+      if (!t || typeof t.closest !== "function" || !t.closest("#sidebar-upload")) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      openUploadVaultDialog();
+    };
+    el.addEventListener("click", onClick, true);
+    return () => el.removeEventListener("click", onClick, true);
   }, []);
 
   return (

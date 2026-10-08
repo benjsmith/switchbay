@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { sidebarTemplate } from "../widgets/graph/template";
 import type { GraphData } from "../widgets/graph/types";
+import { openUploadVaultDialog } from "../lib/uploadVault.ts";
 
 /**
  * The wiki page list — CE's forked sidebar (pages grouped by type,
@@ -21,14 +22,11 @@ type Props = {
    *  on-disk file set may have shifted too, so consumers bump their
    *  browsers' refreshKey. */
   onGraphBuild?: () => void;
-  /** The `+` button's handler (vault upload → background ingest). */
-  onUploadFile: (file: File) => void | Promise<void>;
 };
 
-export default function WikiPane({ data, onGraphBuild, onUploadFile }: Props) {
+export default function WikiPane({ data, onGraphBuild }: Props) {
   const slotRef = useRef<HTMLDivElement>(null);
   const lastDataRef = useRef<GraphData | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
   // Kept in a ref so the mount effect doesn't re-run (and re-init the
   // CE sidebar) just because the parent passed a new closure.
   const onBuildRef = useRef(onGraphBuild);
@@ -56,34 +54,17 @@ export default function WikiPane({ data, onGraphBuild, onUploadFile }: Props) {
     }
   }, [data]);
 
-  // Wire the CE-template `#sidebar-upload` button to a hidden file
-  // input. Hooking up after the template lands; runs after every
-  // re-mount (workspace switch re-injects the markup).
+  // Wire the CE-template `#sidebar-upload` button to the upload dialog.
+  // Hooking up after the template lands; runs after every re-mount
+  // (workspace switch re-injects the markup).
   useEffect(() => {
     const btn = slotRef.current?.querySelector<HTMLButtonElement>("#sidebar-upload");
     if (!btn) return;
     btn.setAttribute("data-tour", "add-files");
-    const onClick = () => fileInputRef.current?.click();
+    const onClick = () => openUploadVaultDialog();
     btn.addEventListener("click", onClick);
     return () => btn.removeEventListener("click", onClick);
   }, [data]);
 
-  const onFileChosen = (ev: React.ChangeEvent<HTMLInputElement>) => {
-    const file = ev.target.files?.[0];
-    ev.target.value = "";  // reset so re-picking the same file fires change
-    if (!file) return;
-    void onUploadFile(file);
-  };
-
-  return (
-    <>
-      <input
-        ref={fileInputRef}
-        type="file"
-        style={{ display: "none" }}
-        onChange={onFileChosen}
-      />
-      <div ref={slotRef} className="sy-side-pages-mount" />
-    </>
-  );
+  return <div ref={slotRef} className="sy-side-pages-mount" />;
 }

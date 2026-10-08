@@ -75,9 +75,10 @@ function buildSteps(): Step[] {
       id: "add-files",
       title: "Add files",
       body:
-        "Drop files or a folder onto the Browser, or use the + upload "
-        + "control. Each file is staged into the vault and a background "
-        + "ingest agent extracts wiki pages.",
+        "Drop files or a folder onto the Browser and each file is staged "
+        + "into the vault for a background ingest agent. Or use + to save "
+        + "files to vault/raw/, ticking Ingest automatically to ingest them "
+        + "too.",
       target: "[data-tour='add-files']",
       targets: ["[data-tour='browser']"],
       requireMode: "power",

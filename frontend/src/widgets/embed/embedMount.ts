@@ -291,6 +291,10 @@ export const SWITCHBAY_API_RESERVED_PREFIXES = [
   "/api/fs",
   "/api/sources",
   "/api/ingest",
+  // Graph sidebar upload (vault/raw/ + optional ingest). Kept on the
+  // daemon so both sidebar modes share it and proxied mode skips the
+  // embed proxy's 1 MiB body limit.
+  "/api/upload-vault",
   "/api/watch-folders",
   "/api/curation",
   "/api/curator-profile",
