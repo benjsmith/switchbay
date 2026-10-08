@@ -121,7 +121,7 @@ export type GraphSearchDetail = {
   sourcePaths: string[];
 };
 
-/** Lives outside GraphTab so leaving for Editor doesn't wipe the query. */
+/** Module-level so a remount doesn't wipe the query. */
 let persistedQuery = "";
 let persistedWorkspace = "";
 
@@ -155,7 +155,7 @@ function paint(
   // The wiki page list rings the same hits as the canvas. Always call —
   // an empty list is how a cancelled search clears the browser.
   try {
-    window.Sidebar.setSearchHits?.(ids);
+    window.Sidebar?.setSearchHits?.(ids);
   } catch { /* sidebar not mounted (webview / no wiki) */ }
   clearBtn.hidden = !q;
   if (countEl) {

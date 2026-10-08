@@ -37,7 +37,7 @@
   --shadow:       0 12px 36px rgba(20, 30, 50, 0.10);
 }
 
-/* Type palette is defined in widgets/graph/ce-graph.css — that file
+/* Type palette is defined in palette.css — that file
  * is the single source of truth for `--type-*` variables (sidebar
  * dots, label-types panel, graph node fills via data.palette
  * override on the daemon side). Removed the duplicate set from this
@@ -838,27 +838,13 @@ a.sy-source-cite { color: var(--accent); }
   font-size: 11px;
 }
 
-/* CE's #sidebar wrapper now lives inside .sy-side-pages. Drop CE's
- * own width/border/background — our column owns the chrome. */
+/* The CE page sidebar (top) and Files|Sources (bottom) split the
+ * column; without CE the Files pane takes the whole column. */
 .sy-side-pages {
   flex: 1 1 50%;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.sy-side-pages-mount {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-}
-.sy-side-pages-mount > #sidebar {
-  width: 100%;
-  flex: 1 1 auto;
-  min-height: 0;
-  background: transparent;
-  border-right: none;
-  transition: none;
 }
 .sy-side-files {
   flex: 1 1 50%;
@@ -866,6 +852,10 @@ a.sy-source-cite { color: var(--accent); }
   border-top: 1px solid var(--line);
   display: flex;
   flex-direction: column;
+}
+.sy-side-files--full {
+  flex: 1 1 auto;
+  border-top: none;
 }
 .sy-side-bottom {
   flex-shrink: 0;
@@ -2539,37 +2529,13 @@ a.sy-source-cite { color: var(--accent); }
   min-height: 0;
 }
 /* Bare = no padding/scroll/overflow handling (the tab widget owns it).
- * Used by GraphTab and other widgets that fill their container. */
+ * Used by the Graph embed and other widgets that fill their container. */
 .sy-tab-content--bare {
   padding: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
   min-height: 0;
-}
-.sy-graph-host {
-  position: relative;
-  width: 100%;
-  height: 100%;
-}
-.sy-graph-progress {
-  position: absolute;
-  top: 10px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 6;
-  padding: 6px 14px;
-  border-radius: 999px;
-  font-size: 12px;
-  color: var(--text);
-  background: color-mix(in srgb, var(--bg-soft) 92%, transparent);
-  border: 1px solid var(--line);
-  box-shadow: 0 2px 8px color-mix(in srgb, #000 18%, transparent);
-  pointer-events: none;
-  max-width: min(520px, 90%);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 /* ── Sheet tab (Univer) ──────────────────────────────────────────── */
 .sy-sheet {
@@ -3041,51 +3007,6 @@ a.sy-source-cite { color: var(--accent); }
 }
 
 /* ── Sketch tab (Excalidraw + drawio) ────────────────────────────── */
-/* Opening-graph replay (curation-history animation). Renders as
- * an overlay above the real graph so we can crossfade out once
- * the timeline finishes — the real graph sits underneath, already
- * laid out. */
-.sy-curation-replay {
-  position: absolute;
-  inset: 0;
-  background: var(--bg);
-  overflow: hidden;
-  z-index: 5;
-  opacity: 1;
-  /* Fade duration must match the JS setTimeout in GraphTab that
-   * unmounts the component (1500ms). Mismatch = either pop or
-   * empty canvas while the timeout finishes. */
-  transition: opacity 1.4s ease-out;
-  /* Pointer events ENABLED here (was none) so d3.zoom on the
-   * SVG can receive wheel + drag for manual zoom/pan during the
-   * animation. The fading state below disables them so a
-   * mid-fade click reaches the real graph beneath. */
-}
-.sy-curation-replay--fading {
-  pointer-events: none;
-}
-.sy-curation-replay--fading {
-  opacity: 0;
-}
-.sy-curation-replay-svg {
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-.sy-curation-replay-label {
-  position: absolute;
-  left: 50%;
-  bottom: 24px;
-  transform: translateX(-50%);
-  font-size: 11px;
-  color: var(--text-faint);
-  letter-spacing: 0.4px;
-  pointer-events: none;
-  user-select: none;
-  opacity: 0.85;
-}
-.sy-curation-replay--fading .sy-curation-replay-label { opacity: 0; }
-
 /* Node/edge counter, shared between the replay overlay and the
  * real graph. Sits to the left of the Classic/Atlas minimap
  * (190px + 12px inset + 12px gap) so the two never stack. */
@@ -3129,58 +3050,6 @@ a.sy-source-cite { color: var(--accent); }
   color: #d29922;
   border-color: #d29922;
 }
-.sy-split-bar {
-  position: absolute;
-  bottom: 18px;
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 7;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 14px;
-  background: var(--bg-soft);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.25);
-  font-size: 12px;
-  max-width: 92%;
-}
-.sy-split-bar-count { font-weight: 600; white-space: nowrap; }
-.sy-split-bar-hint {
-  color: var(--text-faint);
-  font-size: 10.5px;
-  white-space: nowrap;
-  cursor: help;
-}
-.sy-split-bar-name {
-  width: 180px;
-  padding: 3px 8px;
-  font-size: 12px;
-  background: var(--bg-elev);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--text);
-}
-.sy-split-bar-go {
-  padding: 3px 12px;
-  border-radius: 6px;
-  border: 1px solid #d29922;
-  background: transparent;
-  color: #d29922;
-  font-weight: 600;
-  cursor: pointer;
-}
-.sy-split-bar-go:disabled { opacity: 0.5; cursor: default; }
-.sy-split-bar-cancel {
-  padding: 3px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--line);
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-}
-.sy-split-bar-err { color: var(--err, #f38ba8); font-size: 11px; }
 
 .sy-graph-replay-btn {
   position: absolute;
@@ -5556,10 +5425,6 @@ a.sy-source-cite { color: var(--accent); }
   color: var(--text);
 }
 .sy-duckdb-results tr:hover td { background: var(--bg-elev); }
-.sy-graph-mount {
-  width: 100%;
-  height: 100%;
-}
 .sy-tab-swap {
   position: absolute;
   top: 8px;
@@ -5829,8 +5694,7 @@ a.sy-source-cite { color: var(--accent); }
 .sy-editor-view-chev:hover:not(:disabled) { background: var(--bg-hover, rgba(128, 128, 128, 0.14)); color: var(--text); }
 .sy-editor-view-chev:disabled { opacity: 0.3; cursor: default; }
 /* Typography (.sy-mdview, .sy-mdview-title, .sy-mdview-properties)
- * lives in widgets/graph/ce-graph.css so it stays in lockstep with
- * #modal-body. */
+ * lives in palette.css next to the wiki-type palette. */
 
 /* Placeholder tab body (replaced step-by-step as each widget lands). */
 .sy-placeholder {
@@ -8329,8 +8193,8 @@ a.sy-source-cite { color: var(--accent); }
   flex-direction: column;
   overflow: hidden;
 }
-.sy-zen-browse-pages #sidebar,
-.sy-zen-browse-pages .sy-side-pages-mount {
+.sy-zen-browse-pages .sy-ce-sidebar-slot,
+.sy-zen-browse-pages #sidebar {
   flex: 1 1 auto;
   min-height: 0;
   display: flex;
@@ -8961,9 +8825,9 @@ a.sy-source-cite { color: var(--accent); }
    Power mode (graph as a center tab, no floating chrome) is untouched. */
 .sy-zen-left .sy-tab-swap { top: 44px; }
 /* In the graph, the "↗ Editor" tab-swap shares the top-right corner
-   with the forked viewer's physics-settings gear (.settings-trigger,
-   right:14px). Shift it left of the gear so it never covers it. */
-.sy-graph-host .sy-tab-swap { right: 52px; }
+   with CE's physics-settings gear (.settings-trigger, right:14px).
+   Shift it left of the gear so it never covers it. */
+.sy-ce-atlas-embed .sy-tab-swap { right: 52px; }
 
 /* ── OWID pack browse tab ─────────────────────────────────────────── */
 .sy-owid { display: flex; flex-direction: column; height: 100%; min-height: 0;
@@ -9265,16 +9129,40 @@ body.sy-embed-hosting {
   font-size: 0.85em;
 }
 
-/* Dual-mount Graph: Switchbay ↻/✂ sit top-left (prior GraphTab chrome).
+/* CE's page modal sizes itself against the full viewport (it assumes
+ * it owns the window minus its own sidebar). Inside the Graph tab it
+ * would run under the rail, so fit it to the graph pane instead. */
+.sy-ce-atlas-embed-root #modal-backdrop {
+  left: 0 !important;
+}
+.sy-ce-atlas-embed-root #modal {
+  top: 4% !important;
+  bottom: 4% !important;
+  left: 8% !important;
+  width: 84% !important;
+}
+/* Slideshow button sits left of CE's padlock (right:44px) and close X. */
+.sy-ce-atlas-embed-root .modal-slides {
+  position: absolute;
+  top: 14px;
+  right: 74px;
+  z-index: 51;
+  color: var(--text-faint);
+}
+.sy-ce-atlas-embed-root .modal-slides:hover { color: var(--text-muted); }
+.sy-ce-atlas-embed-root .modal-slides:disabled { opacity: 0.4; cursor: progress; }
+
+/* CE Graph: Switch Bay ↻/✂ sit top-left.
    Hide CE's bottom-bar copies so we don't double up. */
 .sy-ce-atlas-embed-root #split-toggle,
 .sy-ce-atlas-embed-root #replay-toggle {
   display: none !important;
 }
 
-/* CE dual-mount: shell-left sidebar slot (Pages|Files) */
+/* CE dual-mount: shell-left sidebar slot (Pages|Files). Shares the
+ * column 50/50 with Switch Bay's Files|Sources pane below it. */
 .sy-side-pages--ce-embed {
-  flex: 1 1 auto;
+  flex: 1 1 50%;
   min-height: 0;
   display: flex;
   flex-direction: column;

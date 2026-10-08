@@ -2,12 +2,11 @@ import { useEffect, useState } from "react";
 import type { GraphData } from "../widgets/graph/types";
 import FileBrowser from "./FileBrowser";
 import SourceBrowser from "./SourceBrowser";
-import WikiPane from "./WikiPane";
 import { useIngestDrop } from "./ingestDrop";
 import ThemeToggle from "../layout/ThemeToggle";
 import ModeToggle from "../layout/ModeToggle";
 import CeSidebarSlot from "../widgets/embed/CeSidebarSlot";
-import { useProxiedSkillEmbeds } from "../widgets/embed/useProxiedSkillEmbeds";
+import { useCeGraph } from "../widgets/embed/useProxiedSkillEmbeds";
 import { resetCeEmbedSession } from "../widgets/embed/ceEmbedSession";
 
 type Props = {
@@ -55,8 +54,10 @@ function BottomSeg({
 /**
  * Switch Bay Browser (Power mode). Stacks two views vertically inside
  * the left column:
- *   - top: CE's forked sidebar (page list grouped by type, search,
- *     `+` upload) — the wiki stays always in view.
+ *   - top: Curiosity Engine's own page sidebar (Pages|Files, search,
+ *     `+` upload), mounted through /embed/ce and shared with the Graph
+ *     canvas — the wiki stays always in view. Only shown when CE is
+ *     installed and the workspace has a wiki.
  *   - bottom: the lower-level browse surface — Files|Sources toggle
  *     (D1) between the on-disk file tree (OS-style ops) and the
  *     provenance tree over external `extracted_from` paths.
@@ -68,9 +69,9 @@ function BottomSeg({
  * Zen mode shows the same three browsers side by side instead — see
  * ZenBrowserTab, which composes the same parts.
  */
-export default function Sidebar({ data, error, filesVersion }: Props) {
-  const proxied = useProxiedSkillEmbeds();
-  const [refreshKey, setRefreshKey] = useState(0);
+export default function Sidebar({ error, filesVersion }: Props) {
+  const ce = useCeGraph();
+  const showWiki = !!ce?.installed && ce.hasWiki;
   // Bottom-pane mode (D1): the wiki page list stays always-visible on
   // top; the BOTTOM pane is the lower-level browse surface and flips
   // between the on-disk file tree and the external-sources
@@ -106,48 +107,39 @@ export default function Sidebar({ data, error, filesVersion }: Props) {
           </span>
         )}
       </div>
-      {proxied === null ? (
+      {ce === null ? (
         <div className="sy-side-pages">
           <p className="sy-ce-sidebar-slot-status">Loading browser…</p>
         </div>
-      ) : proxied === true ? (
-        // One CE page list (Pages|Files) in the shell — persists across
-        // Graph/Agents/Editor. Graph pane is canvas-only via CeAtlasEmbed.
+      ) : showWiki ? (
+        // CE's page list (Pages|Files) persists across Graph/Agents/Editor;
+        // the Graph tab mounts the canvas from the same embed session.
         <div className="sy-side-pages sy-side-pages--ce-embed">
           <CeSidebarSlot />
         </div>
-      ) : (
-        <>
-          <div className="sy-side-pages">
-            <WikiPane
-              data={data}
-              onGraphBuild={() => setRefreshKey((k) => k + 1)}
-            />
-          </div>
-          {error && (
-            <div className="sy-side-body" style={{ color: "var(--type-fact)" }}>
-              {error}
-            </div>
-          )}
-          <div className="sy-side-files">
-            {view === "files" ? (
-              <FileBrowser
-                refreshKey={refreshKey + filesVersion}
-                headExtra={
-                  <BottomSeg view={view} onChange={setView} />
-                }
-              />
-            ) : (
-              <SourceBrowser
-                refreshKey={refreshKey + filesVersion}
-                headExtra={
-                  <BottomSeg view={view} onChange={setView} />
-                }
-              />
-            )}
-          </div>
-        </>
+      ) : null}
+      {error && showWiki && (
+        <div className="sy-side-body" style={{ color: "var(--type-fact)" }}>
+          {error}
+        </div>
       )}
+      <div className={"sy-side-files" + (showWiki ? "" : " sy-side-files--full")}>
+        {view === "files" ? (
+          <FileBrowser
+            refreshKey={filesVersion}
+            headExtra={
+              <BottomSeg view={view} onChange={setView} />
+            }
+          />
+        ) : (
+          <SourceBrowser
+            refreshKey={filesVersion}
+            headExtra={
+              <BottomSeg view={view} onChange={setView} />
+            }
+          />
+        )}
+      </div>
       <footer className="sy-side-bottom">
         <ThemeToggle />
         <ModeToggle />

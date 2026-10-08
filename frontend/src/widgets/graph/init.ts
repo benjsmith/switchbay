@@ -1,13 +1,10 @@
 /**
- * Forked CE wiki-view orchestrator. Mirrors the work of CE's
- * `template/wiki-view/static/main.js`, but mounts inside React
- * containers instead of taking over `<body>`. The sidebar lives in
- * Switch Bay's Browser column; this file only renders the graph-tab
- * portion (graph pane + modal + subgraph).
+ * Forked CE wiki-view orchestrator for the VS Code graph webview
+ * (src/webview-graph.ts). Mirrors CE's `template/wiki-view/static/main.js`
+ * but mounts into a given container instead of taking over `<body>`.
  *
- * Hash routing is owned by App.tsx (translates `#page=<id>` →
- * selection layer dispatch). Modal-close → selection clear is wired by
- * GraphTab.tsx so it can use the React context.
+ * The PWA does not use this: its Graph tab is Curiosity Engine's own
+ * viewer mounted through /embed/ce (widgets/embed/).
  */
 
 import { installSyHostMarker } from "../../lib/localPath";
@@ -25,7 +22,6 @@ export function mountGraph(
     onSelectPage?: (id: string) => void;
     /** Pin classic or atlas. Unset follows the PWA localStorage/query choice. */
     forceMode?: ViewerMode;
-    skipEdit?: boolean;
   },
 ): GraphMount {
   destroyAtlas();
@@ -61,23 +57,5 @@ export function mountGraph(
   document.body.dataset.viewer = mode;
   initAtlasChoice(data, mode);
   installGraphSearch(data);
-
-  // Edit module wires the modal padlock + textarea editor. The refetch
-  // callback re-pulls the rebuilt data.json (cebridge updates its
-  // cache server-side after POST /api/page).
-  if (window.Edit && !opts?.skipEdit) {
-    window.Edit.init(data, async (currentPageId) => {
-      const res = await fetch(`/api/graph/data?t=${Date.now()}`);
-      if (!res.ok) return;
-      const fresh = await res.json();
-      window.Sidebar.init(fresh);
-      window.Subgraph.init(fresh);
-      if (window.Modal.refresh) window.Modal.refresh(fresh);
-      if (currentPageId && window.Modal.open) {
-        window.Modal.open(currentPageId);
-        window.Sidebar.setActive(currentPageId);
-      }
-    });
-  }
   return { mode };
 }

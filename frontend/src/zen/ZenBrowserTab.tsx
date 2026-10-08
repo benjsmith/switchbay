@@ -1,8 +1,8 @@
-import { useState } from "react";
 import type { GraphData } from "../widgets/graph/types";
 import FileBrowser from "../sidebar/FileBrowser";
 import SourceBrowser from "../sidebar/SourceBrowser";
-import WikiPane from "../sidebar/WikiPane";
+import CeSidebarSlot from "../widgets/embed/CeSidebarSlot";
+import { useCeGraph } from "../widgets/embed/useProxiedSkillEmbeds";
 import { useIngestDrop } from "../sidebar/ingestDrop";
 
 /**
@@ -23,17 +23,18 @@ type Props = {
   filesVersion: number;
 };
 
-export default function ZenBrowserTab({ data, error, filesVersion }: Props) {
-  const [refreshKey, setRefreshKey] = useState(0);
+export default function ZenBrowserTab({ error, filesVersion }: Props) {
   const { uploading, dragOver, dropProps } = useIngestDrop();
-  const key = refreshKey + filesVersion;
+  const ce = useCeGraph();
+  const showWiki = !!ce?.installed && ce.hasWiki;
+  const key = filesVersion;
 
   return (
     <div className="sy-zen-browse" {...dropProps}>
       <div className="sy-zen-browse-col">
         <FileBrowser refreshKey={key} />
       </div>
-      <div className="sy-zen-browse-col sy-zen-browse-col--wiki">
+      {showWiki && <div className="sy-zen-browse-col sy-zen-browse-col--wiki">
         <div className="sy-fb-head">
           <span>WIKI</span>
           {uploading && (
@@ -51,13 +52,10 @@ export default function ZenBrowserTab({ data, error, filesVersion }: Props) {
           </div>
         ) : (
           <div className="sy-zen-browse-pages">
-            <WikiPane
-              data={data}
-              onGraphBuild={() => setRefreshKey((k) => k + 1)}
-            />
+            <CeSidebarSlot />
           </div>
         )}
-      </div>
+      </div>}
       <div className="sy-zen-browse-col">
         <SourceBrowser refreshKey={key} />
       </div>

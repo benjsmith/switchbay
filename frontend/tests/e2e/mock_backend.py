@@ -24,6 +24,11 @@ STATE: dict[str, Any] = {
     "fail_save": False,
     "clients": set(),
     "desk_max_live_workers": 8,
+    # Curiosity Engine embed fixture: "absent" (no CE install) or "stub"
+    # (a tiny fake CEEmbed under /embed/ce). graph_tab adds a Graph tab
+    # to the mode so the shell's hide-without-CE rule can be observed.
+    "ce": "absent",
+    "graph_tab": False,
     "comms": [
         {
             "key": "gmail:acct:thread-e2e",
@@ -104,7 +109,9 @@ def _hello() -> dict[str, Any]:
                 {"id": "wiki", "title": "Wiki", "kind": "wiki", "source": "core"},
                 {"id": "agents", "title": "Agents", "kind": "agents", "source": "system"},
                 {"id": "comms", "title": "Comms", "kind": "comms", "source": "user"},
-            ],
+            ] + ([
+                {"id": "graph", "title": "Graph", "kind": "graph", "source": "core"},
+            ] if STATE["graph_tab"] else []),
         },
         "selection": None,
         "workspaces": {
@@ -266,6 +273,11 @@ async def handle_settings_get(_request: web.Request) -> web.Response:
         "admin_ceiling": None,
         "chief_counted": True,
         "note": "Total live seats per desk, including the chief-of-staff.",
+        "proxied_skill_embeds": False,
+        "ce_graph": {
+            "installed": STATE["ce"] == "stub",
+            "has_wiki": STATE["ce"] == "stub",
+        },
     })
 
 
@@ -463,6 +475,67 @@ async def handle_push(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+async def handle_ce_mode(request: web.Request) -> web.Response:
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    mode = str((body or {}).get("mode") or "absent")
+    STATE["ce"] = mode if mode in ("absent", "stub") else "absent"
+    STATE["graph_tab"] = bool((body or {}).get("graph_tab"))
+    return web.json_response({"ok": True, "ce": STATE["ce"], "graph_tab": STATE["graph_tab"]})
+
+
+# A stand-in for CE's embed.js: enough of CEEmbed.create for Switch Bay's
+# dual-mount session (sidebar shell + canvas shell are Switch Bay markup).
+_CE_EMBED_STUB = """
+(function () {
+  window.CEEmbed = {
+    create: function (opts) {
+      return fetch(opts.dataUrl).then(function (r) { return r.json(); }).then(function (data) {
+        var live = false;
+        return {
+          getData: function () { return data; },
+          mountSidebar: function (el) {
+            var list = el.querySelector('#sidebar-list');
+            if (list) list.innerHTML = '<div class="sidebar-row" data-id="p1">Page one</div>';
+          },
+          mountCanvas: function () { live = true; },
+          unmountCanvas: function (o) { if (o && o.destroy) live = false; },
+          isCanvasLive: function () { return live; },
+          revalidate: function () {},
+          destroy: function () { live = false; },
+        };
+      });
+    },
+  };
+})();
+"""
+
+
+async def handle_ce_static(request: web.Request) -> web.Response:
+    if STATE["ce"] != "stub":
+        return web.Response(status=502, text="CE viewer not running")
+    name = request.match_info.get("name", "")
+    if name.endswith(".css"):
+        return web.Response(text="/* stub */", content_type="text/css")
+    body = _CE_EMBED_STUB if name == "embed.js" else "/* stub */"
+    return web.Response(text=body, content_type="application/javascript")
+
+
+async def handle_ce_data(_request: web.Request) -> web.Response:
+    if STATE["ce"] != "stub":
+        return web.Response(status=502, text="CE viewer not running")
+    return web.json_response({
+        "workspace": STATE["workspace"],
+        "palette": {},
+        "nodes": [{"id": "p1", "path": "wiki/concepts/p1.md", "title": "Page one", "type": "concept"}],
+        "edges": [],
+        "pages": {"p1": {"id": "p1", "path": "wiki/concepts/p1.md", "title": "Page one",
+                         "type": "concept", "body_html": "<p>one</p>"}},
+    })
+
+
 def build_app(dist: pathlib.Path) -> web.Application:
     app = web.Application()
     app["dist"] = dist
@@ -488,6 +561,9 @@ def build_app(dist: pathlib.Path) -> web.Application:
     app.router.add_get("/api/graph/data", handle_graph)
     app.router.add_post("/api/e2e/fail-save", handle_fail_save)
     app.router.add_post("/api/e2e/push", handle_push)
+    app.router.add_post("/api/e2e/ce", handle_ce_mode)
+    app.router.add_get("/embed/ce/data.json", handle_ce_data)
+    app.router.add_get("/embed/ce/static/{name:.*}", handle_ce_static)
     app.router.add_get("/ws", handle_ws)
     app.router.add_route("GET", "/api/{tail:.*}", handle_json)
     app.router.add_route("POST", "/api/{tail:.*}", handle_json)

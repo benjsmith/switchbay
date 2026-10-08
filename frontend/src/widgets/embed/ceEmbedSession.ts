@@ -17,6 +17,7 @@ import {
   type CeEmbedHandle,
   type CeEmbedOptions,
 } from "./ceEmbedBootstrap.ts";
+import { renderSidebarShell, workspaceLabel } from "./ceSidebarHeader.ts";
 
 export type CeMountPoints = {
   sidebar?: HTMLElement | null;
@@ -74,22 +75,10 @@ function win(): CeWin {
 }
 
 
-function workspaceLabel(data: unknown): string {
-  if (data && typeof data === "object" && "workspace" in data) {
-    const w = (data as { workspace?: unknown }).workspace;
-    if (typeof w === "string" && w.trim()) {
-      const parts = w.split("/").filter(Boolean);
-      return parts[parts.length - 1] || w;
-    }
-  }
-  return "workspace";
-}
-
 function injectSidebarHtml(el: HTMLElement, html: string, data: unknown): void {
-  const label = workspaceLabel(data);
-  el.innerHTML = html.replace(/\{\{WORKSPACE\}\}/g, label);
+  el.innerHTML = renderSidebarShell(html, data);
   const nameEl = el.querySelector(".workspace-name");
-  if (nameEl) nameEl.textContent = label;
+  if (nameEl) nameEl.textContent = workspaceLabel(data);
 }
 
 class CeEmbedSession {

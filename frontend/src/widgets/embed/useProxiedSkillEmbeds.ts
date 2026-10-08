@@ -1,58 +1,96 @@
 import { useEffect, useState } from "react";
 
 /**
- * Phase 4a feature flag: when true, Graph/Agents use `/embed/*` panels.
- * Returns `null` until `/api/settings` resolves so adapters do not flash the
- * built-in (lazy) tabs — that flash caused "Importing a module script failed"
- * when Agents opened while proxied was actually on.
+ * Two shell switches read from `/api/settings`:
  *
- * Module-level cache: tab switches remount adapters; without a cache each
- * remount starts at `null` and shows "Loading…" until settings returns
- * (and a stale CE fetch shim could strand that request).
+ * - `proxied_skill_embeds`: when true, the Agents tab shows okstratr's own
+ *   observer through `/embed/okstratr`; when false, Switch Bay's built-in
+ *   Agents dashboard. (Graph no longer depends on it — Graph is always
+ *   CE's viewer through `/embed/ce`.)
+ * - `ce_graph`: whether a Curiosity Engine install with its viewer exists
+ *   (`installed`) and whether this workspace has a `wiki/` (`has_wiki`).
+ *   The shell hides Graph when CE isn't installed.
+ *
+ * Both hooks return `null` until settings resolve so adapters don't flash
+ * the wrong surface. Module-level caches keep tab switches instant; each
+ * mount still refetches so a workspace switch picks up the new wiki state.
  */
+
+export type CeGraphAvailability = { installed: boolean; hasWiki: boolean };
+
 let cachedProxied: boolean | null = null;
+let cachedCeGraph: CeGraphAvailability | null = null;
+const listeners = new Set<() => void>();
 
-export function useProxiedSkillEmbeds(): boolean | null {
-  const [on, setOn] = useState<boolean | null>(() => cachedProxied);
+function notify(): void {
+  for (const fn of listeners) fn();
+}
 
+function applySettings(j: unknown): void {
+  const body = (j && typeof j === "object" ? j : {}) as {
+    proxied_skill_embeds?: unknown;
+    ce_graph?: { installed?: unknown; has_wiki?: unknown };
+  };
+  cachedProxied = typeof body.proxied_skill_embeds === "boolean"
+    ? body.proxied_skill_embeds
+    : false;
+  const cg = body.ce_graph;
+  cachedCeGraph = cg && typeof cg === "object"
+    ? { installed: cg.installed === true, hasWiki: cg.has_wiki === true }
+    : { installed: false, hasWiki: false };
+  notify();
+}
+
+let inflight: Promise<void> | null = null;
+
+/** Refetch `/api/settings` (deduped while one is in flight). */
+export function refreshEmbedSettings(): Promise<void> {
+  if (inflight) return inflight;
+  inflight = fetch("/api/settings")
+    .then((r) => (r.ok ? r.json() : null))
+    .then((j) => {
+      if (j) applySettings(j);
+      else if (cachedProxied === null) applySettings({});
+    })
+    .catch(() => {
+      // Keep the last known values on a transient error; first visit
+      // falls back to "off / not installed".
+      if (cachedProxied === null) applySettings({});
+    })
+    .finally(() => { inflight = null; });
+  return inflight;
+}
+
+function useSettingsValue<T>(read: () => T): T {
+  const [value, setValue] = useState<T>(read);
   useEffect(() => {
-    let cancelled = false;
-    void fetch("/api/settings")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((j) => {
-        if (cancelled) return;
-        if (j && typeof j.proxied_skill_embeds === "boolean") {
-          cachedProxied = j.proxied_skill_embeds;
-          setOn(j.proxied_skill_embeds);
-        } else {
-          cachedProxied = false;
-          setOn(false);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          // Prefer last known cache over forcing false on transient errors
-          // (e.g. brief network blip). First visit still falls back to off.
-          if (cachedProxied === null) {
-            cachedProxied = false;
-            setOn(false);
-          }
-        }
-      });
-
-    const onEvt = (ev: Event) => {
+    const sync = () => setValue(read());
+    listeners.add(sync);
+    void refreshEmbedSettings();
+    const onProxied = (ev: Event) => {
       const detail = (ev as CustomEvent<{ enabled?: boolean }>).detail;
       if (detail && typeof detail.enabled === "boolean") {
         cachedProxied = detail.enabled;
-        setOn(detail.enabled);
+        notify();
       }
     };
-    window.addEventListener("sy:proxied-skill-embeds", onEvt);
+    window.addEventListener("sy:proxied-skill-embeds", onProxied);
     return () => {
-      cancelled = true;
-      window.removeEventListener("sy:proxied-skill-embeds", onEvt);
+      listeners.delete(sync);
+      window.removeEventListener("sy:proxied-skill-embeds", onProxied);
     };
+    // `read` is a stable module accessor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+  return value;
+}
 
-  return on;
+/** Agents tab: okstratr embed (true) vs built-in dashboard (false). */
+export function useProxiedSkillEmbeds(): boolean | null {
+  return useSettingsValue(() => cachedProxied);
+}
+
+/** Graph tab availability (CE installed / workspace has a wiki). */
+export function useCeGraph(): CeGraphAvailability | null {
+  return useSettingsValue(() => cachedCeGraph);
 }

@@ -17,7 +17,7 @@ what was remediated.
 |------|------|--------|
 | Proprietary code in the dependency tree | `@univerjs-pro/*` (Univer commercial tier) | ✅ **RESOLVED** — dropped `@univerjs/presets`; built on granular Apache-2.0 packages; Pro tree fully removed (0 in lockfile/bundle); Sheet tab verified working |
 | No aggregated attribution file | ~460 MIT/BSD/Apache/ISC deps require notice preservation | ✅ **RESOLVED** — `docs/THIRD-PARTY-NOTICES.md` generated |
-| Forked MIT code without its notice | graph static JS forked from curiosity-engine (MIT) | ✅ **RESOLVED** — MIT attribution header added to the 5 forked files + NOTICES entry |
+| Forked MIT code without its notice | graph static JS forked from curiosity-engine (MIT) | ✅ **RESOLVED** — MIT attribution header added to the forked files + NOTICES entry (since 0.14 the fork ships only in the VS Code graph webview; `edit.js` and `sidebar.js` were removed) |
 | Undocumented dual-license elections | jszip, dompurify, certifi, tqdm | ✅ **RESOLVED** — recorded in NOTICES |
 
 **No GPL / AGPL / LGPL / SSPL anywhere** in either dependency tree — the

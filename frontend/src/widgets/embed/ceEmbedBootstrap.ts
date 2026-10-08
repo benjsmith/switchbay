@@ -14,6 +14,7 @@
  *   }) => { destroy(): void }
  */
 
+import { guardCeModal, routeCeSplit } from "./ceHostBridge.ts";
 import { isSwitchbayReservedApi } from "./embedMount.ts";
 export type CeEmbedOptions = {
   embed: true;
@@ -53,7 +54,7 @@ type CeEmbedGlobal = {
   mount: (container: HTMLElement, opts: CeEmbedOptions) => CeEmbedHandle | Promise<CeEmbedHandle>;
 };
 
-/** Loose CE globals (wiki-view IIFEs). Avoid augmenting Window — GraphTab already does. */
+/** Loose CE globals (wiki-view IIFEs). Avoid augmenting Window — static.d.ts already does. */
 type CeWindow = Window & {
   CEEmbed?: CeEmbedGlobal;
   CE_PUBLIC_BASE?: string;
@@ -183,6 +184,7 @@ async function installFetchShim(publicBase: string): Promise<() => void> {
   el.textContent = shim.content ?? "";
   document.head.appendChild(el);
   el.remove();
+  routeCeSplit(publicBase);
   return () => {
     try {
       w().__syEmbedReleaseFetch?.();
@@ -195,6 +197,15 @@ async function installFetchShim(publicBase: string): Promise<() => void> {
 async function loadCeModules(publicBase: string): Promise<void> {
   const base = publicBase.replace(/\/$/, "") || "";
   loadCss(`${base}/static/main.css`);
+  try {
+    await loadOrdered(base);
+  } finally {
+    // CE renders page HTML with innerHTML on the daemon origin.
+    guardCeModal();
+  }
+}
+
+async function loadOrdered(base: string): Promise<void> {
   for (const rel of SCRIPT_ORDER) {
     // split/replay may 404 on older wiki-view bundles — skip soft-fail
     try {

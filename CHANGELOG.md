@@ -3,6 +3,40 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-10-08 — v0.14.0
+
+**Migration:** none. Your settings carry over. **Breaking:** the Graph tab is
+now always Curiosity Engine's own viewer; Switch Bay's separate copy of it is
+gone.
+
+Works with curiosity-engine 1.9.2, curiosity-merge 0.8.4, and okstratr 0.2.0.
+
+### Changed
+
+- **Graph is Curiosity Engine's viewer** — the Graph tab, the wiki page list
+  in the left column, and the graph in Zen all show Curiosity Engine's own
+  viewer. Search, type filters, Atlas and Classic views, keyboard shortcuts,
+  the page window, note editing, curation replay and splitting a workspace
+  all come from Curiosity Engine, so they match what you see in its own
+  viewer and pick up its improvements when you update it.
+- **Switch Bay extras inside the CE viewer** — pages still render maths,
+  tables still open as a Sheet or Plot, pages can still start a slideshow,
+  Procedures and Executions have their own label colours, and the + button
+  still opens Switch Bay's upload dialog.
+- **Without Curiosity Engine** — the Graph tab is hidden and links that would
+  open it go to the Editor instead. Files, uploading to the vault, RAG,
+  Agents and Library work as before. A workspace with no wiki yet shows a
+  short note in the Graph tab instead of an empty canvas.
+- **Settings → "Agents: okstratr observer"** — the old "Proxied skill
+  embeds" switch now only chooses between the okstratr observer and the
+  built-in Agents dashboard. It no longer changes the Graph tab. Your
+  existing choice is kept.
+
+### Fixed
+
+- **Safer page window** — page content shown in the Graph page window is
+  cleaned before it is displayed, so scripts embedded in a wiki page can't run.
+
 ## 2026-10-08 — v0.13.2
 
 **Migration:** none. **Breaking:** none.

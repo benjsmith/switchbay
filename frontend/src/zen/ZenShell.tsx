@@ -3,7 +3,7 @@ import type { TabSpec, Workspaces } from "../ws";
 import type { GraphData } from "../widgets/graph/types";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 import type { ActiveRun } from "../center/activeRun";
-import GraphTab from "../widgets/graph/GraphTab";
+import CeGraphSurface from "../widgets/embed/CeGraphSurface";
 import ZenSurfaceHost, { type ZenArtifact } from "./ZenSurfaceHost";
 import ZenChatBox from "./ZenChatBox";
 import Rail, { type RailEntry } from "../rail/Rail";
@@ -17,8 +17,8 @@ import WorkspaceSwitcher from "../layout/WorkspaceSwitcher";
 
 /**
  * Zen mode (charter, designed 2026-07-05): a minimal alternate shell —
- * three parts only. Left = the graph view, always (same GraphTab, no
- * tab header). Right = every other surface, one at a time, behind a
+ * three parts only. Left = the graph view, always (Curiosity Engine's
+ * viewer, same as Power's Graph tab, no tab header). Right = every other surface, one at a time, behind a
  * dropdown. A draggable central divider resizes them (full-range;
  * double-click resets 50/50). The chat box floats at the bottom over
  * both panes; chrome affordances float too — faint until hovered.
@@ -198,10 +198,8 @@ export default function ZenShell({
         {/* Key by workspace: a switch fully remounts the CE graph so
             nothing from the previous workspace lingers (same contract
             as Power's CenterColumn). */}
-        <GraphTab
+        <CeGraphSurface
           key={workspace}
-          data={graphData}
-          error={graphError}
           suppressDocModal
           showAddFile
         />

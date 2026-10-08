@@ -36,8 +36,9 @@ export default function CeSidebarSlot() {
   }, []);
 
   // CE's edit.js binds its `+` (#sidebar-upload) to a bare file picker.
-  // Catch the click on the way down and open Switchbay's upload dialog
-  // instead, so both sidebar modes share one uploader.
+  // Catch the click on the way down and open Switch Bay's upload dialog
+  // instead (vault/raw/ via /api/upload-vault, optional ingest), the same
+  // one the Files toolbar uses.
   useEffect(() => {
     const el = ref.current;
     if (!el) return;

@@ -1044,6 +1044,9 @@ async def handle_settings_get(request: web.Request) -> web.Response:
         "orchestration_denied_models": orchestration_policy.get_denied_models(workspace),
         **_desk_live_view(workspace),
         "proxied_skill_embeds": app_settings.get_proxied_skill_embeds(),
+        # The Graph tab is CE's viewer through /embed/ce. Without a CE
+        # install the shell hides it; Files, RAG, Agents keep working.
+        "ce_graph": cebridge.graph_availability(workspace),
     })
 
 

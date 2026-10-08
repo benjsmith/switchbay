@@ -2,7 +2,7 @@ import { lazy } from "react";
 import SketchErrorBoundary from "../widgets/sketch/ErrorBoundary";
 import { registerTabKind, type TabComponent } from "./tabRegistry";
 import ProxiedSkillPanel from "../widgets/embed/ProxiedSkillPanel";
-import CeAtlasEmbed from "../widgets/embed/CeAtlasEmbed";
+import CeGraphSurface from "../widgets/embed/CeGraphSurface";
 import { useProxiedSkillEmbeds } from "../widgets/embed/useProxiedSkillEmbeds";
 
 /**
@@ -23,7 +23,6 @@ import { useProxiedSkillEmbeds } from "../widgets/embed/useProxiedSkillEmbeds";
  * entries can keep a uniform `(ctx) => JSX` shape.
  */
 
-const GraphTab = lazy(() => import("../widgets/graph/GraphTab"));
 const EditorTab = lazy(() => import("../widgets/editor/EditorTab"));
 const DuckDBTab = lazy(() => import("../widgets/duckdb/DuckDBTab"));
 const SheetTab = lazy(() => import("../widgets/sheet/SheetTab"));
@@ -43,15 +42,8 @@ const ReportDocTab = lazy(() => import("../widgets/library/ReportDocTab"));
 const ThrustersTab = lazy(() => import("../widgets/thrusters/ThrustersTab"));
 const OwidTab = lazy(() => import("../widgets/owid/OwidTab"));
 
-const GraphAdapter: TabComponent = ({ graphData, graphError }) => {
-  const proxied = useProxiedSkillEmbeds();
-  if (proxied === null) {
-    return <div className="sy-placeholder"><p>Loading…</p></div>;
-  }
-  // Graph = CE atlas embed skin (dedicated mount; not full HTML remount).
-  if (proxied) return <CeAtlasEmbed />;
-  return <GraphTab data={graphData} error={graphError} />;
-};
+/** Graph = Curiosity Engine's own viewer, mounted through /embed/ce. */
+const GraphAdapter: TabComponent = () => <CeGraphSurface />;
 const EditorAdapter: TabComponent = ({ tab }) => <EditorTab tab={tab} />;
 const DuckDBAdapter: TabComponent = () => <DuckDBTab />;
 const SheetAdapter: TabComponent = () => <SheetTab />;

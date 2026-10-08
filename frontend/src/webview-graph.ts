@@ -108,7 +108,6 @@ async function bind(data: GraphData): Promise<void> {
   };
   mountGraph(mount, themed, {
     onSelectPage: (id) => openNode(themed, id),
-    skipEdit: true,
   });
   const pane = mount.querySelector("#graph-pane");
   if (pane instanceof HTMLElement) {
