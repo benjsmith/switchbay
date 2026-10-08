@@ -168,6 +168,9 @@ test("isSwitchbayReservedApi protects control-plane paths", () => {
   assert.equal(isSwitchbayReservedApi("/api/fs/reveal"), true);
   assert.equal(isSwitchbayReservedApi("/api/file"), true);
   assert.equal(isSwitchbayReservedApi("/api/file-routes"), true);
+  // Graph sidebar upload (CE's edit.js) writes vault/raw/ on the daemon;
+  // proxying it through /embed/ce trips the 1 MiB body limit.
+  assert.equal(isSwitchbayReservedApi("/api/upload-vault"), true);
   assert.equal(isSwitchbayReservedApi("/api/tabs/terminal"), true);
   assert.equal(isSwitchbayReservedApi("/api/runs/active"), true);
   assert.equal(isSwitchbayReservedApi("/api/permission/pending"), true);

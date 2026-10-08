@@ -5028,6 +5028,88 @@ async def handle_chat_upload(request: web.Request) -> web.Response:
 
 
 
+# Per-file cap for /api/upload-vault. CE's viewer route has no explicit
+# cap; this matches CE's own upload cap (filebrowser_ingest.MAX_BYTES)
+# and /api/ingest/from-upload below.
+UPLOAD_VAULT_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _safe_vault_filename(name: str) -> str:
+    """Same rules as CE's viewer_server: drop directory components and
+    replace anything outside ``[A-Za-z0-9._-]`` with ``_``. Empty and
+    dot-leading names are refused."""
+    name = Path(name).name
+    name = re.sub(r"[^a-zA-Z0-9._-]", "_", name)
+    if not name or name.startswith("."):
+        raise ValueError("invalid filename")
+    return name
+
+
+async def handle_upload_vault(request: web.Request) -> web.Response:
+    """Save uploaded files as-is into ``<workspace>/vault/raw/``.
+
+    Switchbay's copy of CE's ``POST /api/upload-vault`` (viewer_server.py),
+    used by the graph sidebar's upload control in edit.js. Multipart form;
+    every part that carries a filename is saved, so several ``file``
+    fields can arrive in one request. Names are sanitised with CE's rules
+    and an existing file of the same name is replaced, as in CE. Nothing
+    is ingested here: vault/raw/ is the drop folder the ingest verb
+    drains later. Returns ``{ok, saved: [names]}``."""
+    if "multipart/form-data" not in (request.headers.get("Content-Type") or ""):
+        return web.json_response(
+            {"error": "multipart/form-data required"}, status=400,
+        )
+    workspace: Path = request.app["workspace"]
+    raw_dir = workspace / "vault" / "raw"
+    try:
+        reader = await request.multipart()
+    except (ValueError, AssertionError):
+        return web.json_response({"error": "not multipart"}, status=400)
+    saved: list[str] = []
+    while True:
+        part = await reader.next()
+        if part is None:
+            break
+        if not getattr(part, "filename", None):
+            # Plain form fields (and nested multiparts) carry no file.
+            continue
+        try:
+            safe = _safe_vault_filename(part.filename)
+        except ValueError as e:
+            return web.json_response({"error": str(e)}, status=400)
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = await part.read_chunk(64 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > UPLOAD_VAULT_MAX_BYTES:
+                return web.json_response(
+                    {"error": "file too large (>50 MB)", "saved": saved},
+                    status=413,
+                )
+            chunks.append(chunk)
+        payload = b"".join(chunks)
+        target = raw_dir / safe
+
+        def _write(target: Path = target, payload: bytes = payload) -> None:
+            raw_dir.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_name(f".{target.name}.{uuid.uuid4().hex[:8]}.part")
+            tmp.write_bytes(payload)
+            os.replace(tmp, target)
+
+        await asyncio.to_thread(_write)
+        saved.append(safe)
+        log.info("vault upload: %s (%d bytes) -> vault/raw/%s",
+                 part.filename, total, safe)
+    if not saved:
+        return web.json_response(
+            {"error": "no file part with filename"}, status=400,
+        )
+    return web.json_response({"ok": True, "saved": saved})
+
+
 async def handle_ingest_from_upload(request: web.Request) -> web.Response:
     """Stage a file under the workspace's `vault/` directory (CE's
     convention for ingested raw materials) and kick a headless
@@ -17621,6 +17703,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/packs/drain", handle_packs_drain)
     app.router.add_get("/figures/{path:.*}", handle_figure_file)
     app.router.add_post("/api/chat/upload", handle_chat_upload)
+    app.router.add_post("/api/upload-vault", handle_upload_vault)
     app.router.add_post("/api/ingest/from-upload", handle_ingest_from_upload)
     app.router.add_post("/api/ingest/from-path", handle_ingest_from_path)
     app.router.add_post("/api/ingest/drain", handle_ingest_drain)
