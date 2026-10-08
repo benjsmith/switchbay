@@ -739,7 +739,7 @@ def _R(rc=0, out="", err=""):
 def _latest(repo):
     return {
         "benjsmith/switchbay": "v0.13.2",
-        "benjsmith/curiosity-engine": "v1.9.1",
+        "benjsmith/curiosity-engine": "v1.9.2",
         "benjsmith/curiosity-merge": "v0.8.4",
         "benjsmith/okstratr": "v0.2.0",
     }[repo]
@@ -901,7 +901,7 @@ def test_check_reports_every_skill_by_install_mode(tmp_path, monkeypatch):
         updater, "_skill_git_repo", lambda d: d if d == ce_dir else None,
     )
     monkeypatch.setattr(updater, "local_skill_version", lambda d: {
-        ce_dir: "v1.9.0", cm_dir: "0.8.4",
+        ce_dir: "v1.8.3", cm_dir: "0.8.4",
     }.get(d))
     monkeypatch.setattr(updater, "python_install", lambda comp: updater.PyInstall(
         "uv-tool", "/t/okstratr", python="/t/bin/python", version="0.1.0",
@@ -912,7 +912,7 @@ def test_check_reports_every_skill_by_install_mode(tmp_path, monkeypatch):
     assert (by["switchbay"]["current"], by["switchbay"]["latest"]) == ("v0.13.1", "v0.13.2")
     assert by["curiosity-engine"]["channel"] == "git"
     assert (by["curiosity-engine"]["current"], by["curiosity-engine"]["latest"]) == (
-        "v1.9.0", "v1.9.1",
+        "v1.8.3", "v1.9.2",
     )
     assert by["curiosity-engine"]["update_available"] is True
     assert by["curiosity-merge"]["channel"] == "npx"
@@ -1040,7 +1040,7 @@ def test_apply_skill_git_checks_out_release_tag(tmp_path, monkeypatch):
     monkeypatch.setattr(updater, "_git_dirty", lambda _p: False)
     monkeypatch.setattr(updater, "_git_detached", lambda _p: False)
     monkeypatch.setattr(updater, "_is_ancestor", lambda r, a, b: True)
-    monkeypatch.setattr(updater, "local_skill_version", lambda _p: "v1.9.0")
+    monkeypatch.setattr(updater, "local_skill_version", lambda _p: "v1.8.3")
     calls = []
 
     def fake_git(args, *, cwd, timeout=0):
@@ -1052,9 +1052,9 @@ def test_apply_skill_git_checks_out_release_tag(tmp_path, monkeypatch):
         return _R()
 
     monkeypatch.setattr(updater, "_git", fake_git)
-    row = updater._apply_skill_git(CE, tmp_path, "v1.9.1")
+    row = updater._apply_skill_git(CE, tmp_path, "v1.9.2")
     assert row["status"] == "updated"
-    assert ["merge", "--ff-only", "v1.9.1"] in calls
+    assert ["merge", "--ff-only", "v1.9.2"] in calls
 
 
 def test_apply_routes_ce_and_cm_by_install_source(tmp_path, monkeypatch):
@@ -1068,7 +1068,7 @@ def test_apply_routes_ce_and_cm_by_install_source(tmp_path, monkeypatch):
         ("git", c.id)) or {"status": "updated"})
     monkeypatch.setattr(updater, "_apply_skill_npx", lambda c, d, l: routed.append(
         ("npx", c.id)) or {"status": "updated"})
-    updater._apply_skill(CE, "v1.9.1")
+    updater._apply_skill(CE, "v1.9.2")
     updater._apply_skill(CM, "v0.8.4")
     assert routed == [("git", "curiosity-engine"), ("npx", "curiosity-merge")]
 
@@ -1084,7 +1084,7 @@ def _behind_report():
         "ok": True, "error": None, "update_available": True,
         "components": [
             row("switchbay", "Switch Bay", "v0.13.2", "v0.13.2", "git", behind=False),
-            row("curiosity-engine", "Curiosity Engine", "v1.9.0", "v1.9.1", "git"),
+            row("curiosity-engine", "Curiosity Engine", "v1.8.3", "v1.9.2", "git"),
             row("curiosity-merge", "Curiosity Merge", None, "v0.8.4", None,
                 installed=False, behind=False),
             row("okstratr", "okstratr", "v0.1.0", "v0.2.0", "uv-tool"),
@@ -1113,7 +1113,7 @@ def test_apply_updates_behind_skills_and_restarts_their_processes(tmp_path, monk
                         lambda: events.append(("stop", "okstratr")) or {"ok": True})
 
     result = updater.apply()
-    assert applied == [("curiosity-engine", "v1.9.1"), ("okstratr", "v0.2.0")]
+    assert applied == [("curiosity-engine", "v1.9.2"), ("okstratr", "v0.2.0")]
     assert events == [("rebuild", tmp_path), ("stop", "ce"), ("stop", "okstratr")]
     by = {r["id"]: r for r in result["components"]}
     assert by["curiosity-merge"]["status"] == "unchanged"
@@ -1121,7 +1121,7 @@ def test_apply_updates_behind_skills_and_restarts_their_processes(tmp_path, monk
     assert "viewer rebuilt" in by["curiosity-engine"]["detail"]
     assert "okstratr restarts" in by["okstratr"]["detail"]
     assert result["updated"] is True and result["ok"] is True
-    assert "Curiosity Engine (old → v1.9.1)" in result["summary"]
+    assert "Curiosity Engine (old → v1.9.2)" in result["summary"]
     assert "okstratr (old → v0.2.0)" in result["summary"]
 
 

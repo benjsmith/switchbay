@@ -3,6 +3,43 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-10-08 — v0.13.2
+
+**Migration:** none. **Breaking:** none.
+
+Works with curiosity-engine 1.9.2, curiosity-merge 0.8.4, and okstratr 0.2.0.
+
+### Added
+
+- **Upload to vault from Graph / Files / embedded CE** — the + buttons open one
+  Switchbay dialog that takes several files and an optional "Ingest
+  automatically" checkbox. Files always land in `vault/raw/`. With the box
+  ticked they go through CE's local ingest when CE is installed, or through
+  the ingest agent when a model is ready; otherwise they are only saved.
+  Works without CE's Graph viewer via `/api/upload-vault`.
+
+### Changed
+
+- **Settings → Update covers okstratr** — besides Switch Bay, Curiosity
+  Engine, and Curiosity Merge, Update now also brings an installed okstratr
+  up to its latest release. A git checkout moves to the release tag; an
+  okstratr installed as a uv tool or with pip is reinstalled from that release.
+  Anything that isn't installed is left alone, and a copy Switch Bay can't
+  safely update says so instead of guessing.
+- **Updated skills restart on the new version** — after Curiosity Engine
+  updates, its Graph viewer is rebuilt and restarted, and an updated okstratr
+  is restarted too, so the new release is what you see once Switch Bay is back.
+  Before, the old viewer and okstratr could keep running until the next full
+  restart.
+- **Update results per component** — the toast after Update lists each of
+  Switch Bay, Curiosity Engine, Curiosity Merge, and okstratr: updated (from →
+  to), up to date, not installed, skipped with the reason, or failed with the
+  error.
+
+IT-managed installs are unchanged: when the admin policy turns in-app update
+off, both the check and the update are refused, and skills are only touched
+when the policy allows skill updates.
+
 ## 2026-10-08 — v0.13.1
 
 **Migration:** none. **Breaking:** none.
