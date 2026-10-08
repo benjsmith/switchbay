@@ -523,7 +523,7 @@ export default function WorkspaceSwitcher({
       return;
     }
     // No reload — daemon broadcasts a fresh `hello` to every
-    // connected WS client; App.tsx + GraphTab + Sidebar all
+    // connected WS client; App.tsx + the Graph embed + Sidebar all
     // re-init from the new workspace's data when graphData
     // updates. Reloading just made everything blank for 3–5
     // seconds during the bundle re-parse.

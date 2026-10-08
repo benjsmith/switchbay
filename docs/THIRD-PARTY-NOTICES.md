@@ -27,7 +27,8 @@ obligation arises as we do not modify their files.
 
 - **Graph / wiki-view** (`frontend/src/widgets/graph/static/*.js`) is a
   fork of **curiosity-engine**'s wiki-view, used under the **MIT License**
-  (Copyright (c) 2026, curiosity-engine authors). Full MIT text below.
+  (Copyright (c) 2026, curiosity-engine authors), and now ships only in the
+  VS Code extension's graph webview. Full MIT text below.
 - **Knowledge Atlas** (`frontend/src/widgets/graph/static/vendor/knowledge-atlas.js`)
   is the first-party IIFE from curiosity-engine's `packages/knowledge-atlas`,
   same MIT license.

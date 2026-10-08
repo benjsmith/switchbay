@@ -1,7 +1,8 @@
-"""POST /api/upload-vault: the graph sidebar's raw upload into vault/raw/.
+"""POST /api/upload-vault: raw uploads into vault/raw/.
 
-Mirrors CE's viewer_server.py route of the same name, which edit.js was
-forked against.
+Used by the Files toolbar uploader and by the CE Graph sidebar `+`
+(both open UploadVaultDialog). Mirrors CE's viewer_server.py route of the
+same name, which CE's own edit.js posts to.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from aiohttp.test_utils import TestClient, TestServer, make_mocked_request
 from switchbay import daemon
 
 ROOT = Path(__file__).resolve().parents[2]
-EDIT_JS = ROOT / "frontend" / "src" / "widgets" / "graph" / "static" / "edit.js"
+UPLOAD_TS = ROOT / "frontend" / "src" / "lib" / "uploadVault.ts"
 
 
 def _app(ws: Path) -> web.Application:
@@ -28,7 +29,7 @@ def _app(ws: Path) -> web.Application:
 
 
 def _form(*files: tuple[str, bytes]) -> FormData:
-    # Same shape edit.js builds: one `file` field per chosen file. Browsers
+    # Same shape uploadVault.ts (and CE's edit.js) builds: one `file` field per chosen file. Browsers
     # send the filename unescaped, so don't let aiohttp percent-encode it.
     form = FormData(quote_fields=False)
     for name, data in files:
@@ -37,10 +38,10 @@ def _form(*files: tuple[str, bytes]) -> FormData:
     return form
 
 
-def test_edit_js_posts_to_a_registered_daemon_route(tmp_path: Path) -> None:
-    src = EDIT_JS.read_text(encoding="utf-8")
-    m = re.search(r"fetch\('(/api/upload-vault)',\s*\{\s*method:\s*'POST'", src)
-    assert m, "edit.js no longer posts the upload to /api/upload-vault"
+def test_uploader_posts_to_a_registered_daemon_route(tmp_path: Path) -> None:
+    src = UPLOAD_TS.read_text(encoding="utf-8")
+    m = re.search(r'UPLOAD_VAULT_URL\s*=\s*"(/api/upload-vault)"', src)
+    assert m, "uploadVault.ts no longer posts the upload to /api/upload-vault"
     app = daemon.build_app(tmp_path)
     req = make_mocked_request("POST", m.group(1), app=app)
 

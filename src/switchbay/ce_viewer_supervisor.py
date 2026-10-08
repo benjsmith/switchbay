@@ -188,9 +188,21 @@ def _public_base() -> str:
 
 
 def bundle_ready(workspace: Path) -> bool:
-    """True when wiki-view cache has enough to serve without a full build."""
+    """True when the wiki-view cache can be served as is, without a build.
+
+    The bundle must also be at least as new as the wiki: a workspace that
+    changed while another one was active would otherwise come back with a
+    stale Graph after a switch.
+    """
     out = cebridge.output_dir(Path(workspace))
-    return (out / "index.html").is_file() and (out / "data.json").is_file()
+    data = out / "data.json"
+    if not ((out / "index.html").is_file() and data.is_file()):
+        return False
+    try:
+        built = data.stat().st_mtime
+    except OSError:
+        return False
+    return _wiki_mtime(Path(workspace)) <= built
 
 
 def _spawn_argv(workspace: Path, port: int) -> tuple[list[str], str]:
@@ -434,14 +446,18 @@ def _wiki_mtime(workspace: Path) -> float:
     wiki = Path(workspace) / "wiki"
     if not wiki.is_dir():
         return 0.0
-    newest = 0.0
+    # Directories count too: deleting or renaming a page only touches
+    # its folder's mtime.
+    try:
+        newest = wiki.stat().st_mtime
+    except OSError:
+        newest = 0.0
     try:
         for p in wiki.rglob("*"):
-            if p.is_file():
-                try:
-                    newest = max(newest, p.stat().st_mtime)
-                except OSError:
-                    continue
+            try:
+                newest = max(newest, p.stat().st_mtime)
+            except OSError:
+                continue
     except OSError:
         return newest
     return newest

@@ -29,7 +29,9 @@ import { installKeyRegistry, registerChord, registerCombo } from "./keys";
 import { RailSocket, type Mode, type Selection, type ServerMessage, type TabSpec, type Workspaces } from "./ws";
 import { applyWebPolicy, bindWebPolicy, loadWebPolicy } from "./lib/webPolicy";
 import { SelectionProvider } from "./selection/SelectionContext";
-import "./widgets/graph/load";    // window.Sidebar/Subgraph/Modal/Graph + ce-graph.css
+import "./palette.css";    // theme vars + wiki-type palette + shared markdown view
+import { useCeGraph } from "./widgets/embed/useProxiedSkillEmbeds";
+import { resetCeEmbedSession } from "./widgets/embed/ceEmbedSession";
 import type { GraphData } from "./widgets/graph/types";
 import Walkthrough, { maybeAutoStartWalkthrough } from "./walkthrough/Walkthrough";
 import UploadVaultDialog from "./widgets/upload/UploadVaultDialog";
@@ -415,11 +417,18 @@ export default function App() {
   // Tab scoping (control surface v1): thread-scoped tabs render only
   // while their thread is focused. Filtered client-side so a thread
   // switch shows/hides them instantly, no round-trip.
+  // Graph is Curiosity Engine's viewer; without a CE install the tab
+  // (and every route into it) is hidden rather than shown broken.
+  const ceGraph = useCeGraph();
+  const graphHidden = ceGraph !== null && !ceGraph.installed;
+  const graphHiddenRef = useRef(graphHidden);
+  graphHiddenRef.current = graphHidden;
   const visibleTabs = useMemo(
     () => mode.tabs.filter(
-      (t) => !t.thread || t.thread === focusedThread,
+      (t) => (!t.thread || t.thread === focusedThread)
+        && !(graphHidden && t.kind === "graph"),
     ),
-    [mode, focusedThread],
+    [mode, focusedThread, graphHidden],
   );
   // If the active tab just went out of scope (thread switch), fall
   // back to the first visible one.
@@ -1820,6 +1829,10 @@ export default function App() {
     };
   }, [setSelection]);
 
+  /** A new workspace gets a fresh CE embed session (Power remounts the
+   *  sidebar per workspace too; this covers Zen, which has none). */
+  useEffect(() => () => { resetCeEmbedSession(); }, [workspace]);
+
   /** CE's sidebar + graph.js still write `#page=<id>` to window.location.hash
    *  when the user clicks. Translate that into a selection-layer dispatch. */
   useEffect(() => {
@@ -1846,13 +1859,13 @@ export default function App() {
     return () => window.removeEventListener("hashchange", onHash);
   }, [setSelection]);
 
-  /** Highlight the active row in the Browser sidebar regardless of which
-   *  tab is active. Modal/graph effects live in GraphTab (they can only
-   *  fire when that tab is mounted). */
+  /** Highlight the active row in CE's page sidebar regardless of which
+   *  tab is active. Modal/graph effects live in CeAtlasEmbed (they can
+   *  only fire when the Graph canvas is mounted). */
   useEffect(() => {
     if (!graphData) return;
     if (!selection || selection.kind !== "page") return;
-    try { window.Sidebar.setActive(selection.id); } catch { /* ignore */ }
+    try { window.Sidebar?.setActive(selection.id); } catch { /* ignore */ }
   }, [selection, graphData]);
 
   /** One-shot tips to drop into the rail the first time the user opens
@@ -1933,8 +1946,8 @@ export default function App() {
         values: detail.values,
       });
       switchToKindRef.current?.("univer");
-      // Don't call window.Modal.close() — its onClose callback
-      // (registered in GraphTab.tsx) nulls selection back to null,
+      // Don't call window.Modal.close() — closing the doc modal
+      // (CeAtlasEmbed watches it) nulls selection back to null,
       // which clobbers the table-data we just set. The modal stays
       // open behind the now-active Sheet tab and the user can dismiss
       // it on next visit.
@@ -2410,7 +2423,10 @@ export default function App() {
   }, [workspace, pushToast]);
 
   const switchToKind = useCallback(
-    (kind: string) => {
+    (kindIn: string) => {
+      // No CE → no Graph tab: page routes that would open the graph's
+      // doc modal open the page in the Editor instead.
+      const kind = kindIn === "graph" && graphHiddenRef.current ? "markdown" : kindIn;
       // Zen: the graph is always visible (left pane); every other
       // kind lands on the right-pane surface host. Reaching a kind
       // clears a pending artifact of that kind — the user got there.

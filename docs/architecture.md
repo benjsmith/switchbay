@@ -1,4 +1,4 @@
-# Architecture (v0.13)
+# Architecture (v0.14)
 
 How Switchbay **hosts** first-party skills today. Product vocabulary and
 data flows stay in [`concepts-and-data-flow.md`](concepts-and-data-flow.md).
@@ -28,8 +28,11 @@ Graph / Agents skill surfaces.
   non-loopback rejected).
 - Injects `X-CE-Host: switchbay` / `X-Okstratr-Host: switchbay`.
 - Vite dev proxies `/embed` to the daemon.
-- Settings → **Proxied skill embeds** switches Graph → CE and Agents →
-  okstratr observer; turning it off restores built-ins. The proxy itself
+- The **Graph** tab is always Curiosity Engine's own viewer, mounted
+  through `/embed/ce`. Switchbay has no built-in graph viewer.
+- Settings → **Agents: okstratr observer** (`proxied_skill_embeds`) only
+  chooses the Agents surface: okstratr observer when on, the built-in
+  Agents dashboard when off. It does not affect Graph. The proxy itself
   stays on either way.
 
 ## Same-document skill mount
@@ -42,14 +45,30 @@ Graph / Agents skill surfaces.
 - Implementation: `frontend/src/widgets/embed/` (`ProxiedSkillPanel`,
   `embedMount.ts`).
 
-## Dual-mount Graph
+## Graph comes from Curiosity Engine
 
-- Shell left column: CE Pages|Files (`CeSidebarSlot`) persists across
-  Graph / Agents / Editor when proxied embeds are on for a CE workspace.
-- Graph pane: atlas canvas only (`CeAtlasEmbed`); keeps the atlas warm
-  when you leave the tab; `atlas-cache.js` + workspace key for cold Graph cache.
-- Prefers `window.CEEmbed.create` / `mount` when CE provides it; one
-  session survives Graph unmount.
+- Graph, the wiki page list, page modal (incl. note editing), search,
+  type filters, Atlas/Classic, keybindings and curation replay are all
+  CE's viewer, loaded through `/embed/ce` with `window.CEEmbed.create`.
+- `GET /api/settings` reports `ce_graph: {installed, has_wiki}`.
+  CE not installed → the Graph tab is hidden and Graph shortcuts fall back
+  to the Editor. Installed but no `wiki/` yet → a short placeholder.
+- Shell left column: CE Pages (`CeSidebarSlot`) above Switchbay's own
+  Files | Sources browser. The Files uploader, RAG, Agents and Library do
+  not depend on CE.
+- Graph pane: canvas only (`CeAtlasEmbed`, wrapped by `CeGraphSurface`);
+  one `CeEmbedSession` per workspace shares `data.json` between sidebar and
+  canvas, parks the canvas across tab switches and remounts it on wiki
+  `files_changed`.
+- Host shims (`ceHostBridge.ts`, `ceEmbedShell.html`): page HTML is
+  sanitized before CE's modal renders it; KaTeX, table → Sheet / Plot and
+  the slideshow button are added to CE's modal; CE's split panel is routed
+  to `/api/workspaces/split`; Procedure / Execution label-type rows; the
+  sidebar `+` opens Switchbay's upload dialog (`/api/upload-vault`); the
+  sidebar header's `{{WORKSPACE}}` placeholder is filled from `data.json`.
+- The forked viewer under `frontend/src/widgets/graph/` is kept **only**
+  for the VS Code extension's graph webview (`src/webview-graph.ts`); the
+  PWA never imports it.
 
 ## Core-skills auto-start
 
@@ -69,7 +88,8 @@ Graph / Agents skill surfaces.
   `local_ingest` (prefer CE drop-ingest endpoint; rail LLM only when
   run metadata opts in).
 
-## Built-in Graph and Agents
+## Built-in Agents
 
-Built-in GraphTab, AgentDashboardTab, and filebrowser stay available.
-Proxied skill embeds are opt-in in Settings.
+The built-in Agents dashboard and file browser stay available; turning
+off **Agents: okstratr observer** in Settings selects the built-in
+dashboard. There is no built-in Graph.

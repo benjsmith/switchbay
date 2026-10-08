@@ -4058,19 +4058,18 @@ function StoragePanel({ open }: { open: boolean }) {
       </p>
 
       <h4 className="sy-settings-h4" style={{ marginTop: 22 }}>
-        Proxied skill embeds (Phase 4a)
+        Agents: okstratr observer
       </h4>
       <p className="sy-settings-blurb">
-        When on: shell left hosts CE Pages|Files (persistent); Graph hosts
-        CE atlas canvas only — one embed session, two mounts, shared{" "}
-        <code>/embed/ce/data.json</code>. Agents mounts okstratr under{" "}
-        <code>/embed/okstratr</code>. No iframes / full CE document remount.
-        Default off keeps WikiPane + GraphTab / AgentDashboard.
+        When on, the Agents tab shows okstratr's own observer (served
+        under <code>/embed/okstratr</code>). When off, it shows Switch
+        Bay's built-in Agents dashboard. The Graph tab always uses
+        Curiosity Engine's viewer and isn't affected by this switch.
       </p>
       <div className="sy-settings-perm-row">
         <span>
-          <strong>Proxied embeds:</strong>{" "}
-          {settings.proxied_skill_embeds ? "on (Graph→CE canvas, Agents→okstratr)" : "off (built-in)"}
+          <strong>okstratr observer:</strong>{" "}
+          {settings.proxied_skill_embeds ? "on" : "off (built-in dashboard)"}
         </span>
         <span className="sy-spacer" />
         <button

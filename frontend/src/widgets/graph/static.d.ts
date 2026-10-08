@@ -1,11 +1,10 @@
-/* Tell TypeScript that the forked CE JS files are side-effect imports
- * with no exports — they attach `Graph`, `Sidebar`, `Modal`, `Subgraph`
- * to `window`. */
+/* Tell TypeScript that the forked CE JS files (VS Code graph webview)
+ * are side-effect imports with no exports — they attach `Graph`, `Modal`,
+ * `Subgraph` to `window`. In the PWA the same globals (plus `Sidebar`)
+ * come from Curiosity Engine's own viewer loaded through /embed/ce. */
 declare module "./static/graph.js";
-declare module "./static/sidebar.js";
 declare module "./static/modal.js";
 declare module "./static/subgraph.js";
-declare module "./static/edit.js";
 declare module "./static/vendor/knowledge-atlas.js";
 
 declare global {
@@ -23,7 +22,7 @@ declare global {
       ): void;
       splitExit(): void;
     };
-    Sidebar: {
+    Sidebar?: {
       init(data: unknown): void;
       setActive(pageId: string): void;
       /** Mark page ids hit by the graph search. Empty clears. */
@@ -39,10 +38,6 @@ declare global {
     Subgraph: {
       init(data: unknown): void;
       render?(pageId: string, container: HTMLElement): void;
-    };
-    Edit?: {
-      init(data: unknown, refetchData: (currentPageId: string | null) => Promise<void>): void;
-      updateForPage(page: unknown): void;
     };
   }
 }

@@ -6,7 +6,7 @@
  * in webviews should call this interface; the PWA implements it with
  * REST/WS, the plugin with `acquireVsCodeApi().postMessage`.
  *
- * This file is the contract. Wiring GraphTab / AgentDashboard / preview
+ * This file is the contract. Wiring the Graph embed / AgentDashboard / preview
  * onto it is a later spike step — do not fetch the daemon from a
  * plugin webview in the meantime.
  */

@@ -1,9 +1,7 @@
 /**
- * HTML body content for the forked CE wiki-view, mounted inside the
- * graph tab. Mirrors curiosity-engine/template/wiki-view/index.html
- * minus the sidebar (which now lives in Switch Bay's Browser column —
- * see Sidebar.tsx) and the editor padlock (the editor lives in its
- * own tab, step D).
+ * HTML body content for the forked CE wiki-view used by the VS Code
+ * graph webview. Mirrors curiosity-engine/template/wiki-view/index.html
+ * minus the sidebar.
  */
 
 export const template = /* html */ `
@@ -103,30 +101,4 @@ export const template = /* html */ `
     </section>
   </div>
 </div>
-`;
-
-/** CE's sidebar HTML — now mounted in Switch Bay's Browser column.
- *  See sidebar/Sidebar.tsx. */
-export const sidebarTemplate = /* html */ `
-<aside id="sidebar">
-  <div class="sidebar-search-wrap">
-    <input id="sidebar-search" type="search" placeholder="Search pages…" autocomplete="off" spellcheck="false">
-    <button id="sidebar-toggle-all" class="icon-btn sidebar-toggle-all" data-action="toggle-all-groups" title="Collapse / expand all page types" aria-label="Collapse or expand all page types">
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M3 6 L8 2.5 L13 6"/>
-        <path d="M3 10 L8 13.5 L13 10"/>
-      </svg>
-    </button>
-    <button id="sidebar-upload" class="icon-btn sidebar-upload" title="Add files to the vault" aria-label="Add files to the vault">
-      <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-        <line x1="8" y1="3" x2="8" y2="13"/>
-        <line x1="3" y1="8" x2="13" y2="8"/>
-      </svg>
-    </button>
-  </div>
-  <div id="sidebar-list" class="sidebar-list" role="listbox"></div>
-  <footer class="sidebar-foot">
-    <span class="meta-counts" id="meta-counts"></span>
-  </footer>
-</aside>
 `;

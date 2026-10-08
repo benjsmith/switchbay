@@ -80,7 +80,7 @@ function buildSteps(): Step[] {
         + "files to vault/raw/, ticking Ingest automatically to ingest them "
         + "too.",
       target: "[data-tour='add-files']",
-      targets: ["[data-tour='browser']"],
+      targets: ["[data-testid='fb-upload-vault']", "[data-tour='browser']"],
       requireMode: "power",
       enter: (ctx) => {
         ctx.setSettingsOpen(false);
@@ -162,7 +162,7 @@ function buildSteps(): Step[] {
             id: hub.id,
             path: page?.path ?? hub.path ?? hub.id,
           });
-          // CE modal opens from selection via GraphTab effect.
+          // CeAtlasEmbed opens CE's page modal from the selection.
           await sleep(350);
         } else {
           await sleep(100);

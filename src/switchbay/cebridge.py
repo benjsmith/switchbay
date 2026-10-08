@@ -113,6 +113,27 @@ def ce_scripts_available() -> bool:
         return False
 
 
+def viewer_available() -> bool:
+    """True when the installed CE ships its wiki viewer server.
+
+    Switch Bay's Graph tab is CE's own viewer (scripts/viewer_server.py,
+    supervised by ce_viewer_supervisor) served through ``/embed/ce``;
+    without it there is no Graph to show.
+    """
+    try:
+        return (ce_root() / "scripts" / "viewer_server.py").is_file()
+    except OSError:
+        return False
+
+
+def graph_availability(workspace: Path) -> dict[str, bool]:
+    """What the shell needs to decide whether to offer the Graph tab."""
+    return {
+        "installed": viewer_available(),
+        "has_wiki": has_wiki(Path(workspace)),
+    }
+
+
 def output_dir(workspace: Path) -> Path:
     """Where viewer.sh writes the bundle for this workspace."""
     cache = Path.home() / ".cache" / "curiosity-engine" / "wiki-view"
