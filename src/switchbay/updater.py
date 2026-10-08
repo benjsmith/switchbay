@@ -553,7 +553,7 @@ def _is_uv_tool_python(python: str) -> bool:
         path = Path(python)
     if tool_dir:
         try:
-            path.relative_to(Path(tool_dir).expanduser())
+            path.relative_to(Path(tool_dir).expanduser().absolute())
             return True
         except ValueError:
             pass
