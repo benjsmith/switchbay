@@ -98,6 +98,38 @@ function sameWorkspace(a?: string | null, b?: string | null): boolean {
   return ka.length > 0 && ka === kb;
 }
 
+type UpdateComponentResult = {
+  label?: string;
+  status?: string;
+  from?: string | null;
+  to?: string | null;
+  detail?: string | null;
+};
+
+/** One line per component from POST /api/update, or "" when absent. */
+function updateResultLines(rows: UpdateComponentResult[] | undefined): string {
+  if (!Array.isArray(rows) || !rows.some((r) => r.status)) return "";
+  const lines = rows.map((r) => {
+    const label = r.label || "?";
+    const detail = (r.detail || "").trim();
+    switch (r.status) {
+      case "updated":
+        return `${label}: ${r.from || "?"} → ${r.to || "?"}`;
+      case "unchanged":
+        return detail === "not installed"
+          ? `${label}: not installed`
+          : `${label}: up to date${r.to ? ` (${r.to})` : ""}`;
+      case "skipped":
+        return `${label}: skipped${detail ? ` — ${detail}` : ""}`;
+      case "failed":
+        return `${label}: failed${detail ? ` — ${detail}` : ""}`;
+      default:
+        return `${label}: ${r.status || "?"}`;
+    }
+  });
+  return lines.join("\n");
+}
+
 export default function App() {
   // RailSocket lives entirely inside the WS effect below — see the long
   // comment there for why useMemo would leak a second connection in
@@ -314,8 +346,9 @@ export default function App() {
   }, [pushToast]);
 
   // Settings → Update: check GitHub, apply older Switch Bay / CE /
-  // curiosity-merge releases, then the same restart path as above so
-  // the boot_id watcher reloads the PWA.
+  // curiosity-merge / okstratr releases, then the same restart path as
+  // above so the boot_id watcher reloads the PWA. The toast lists one
+  // line per component so a skipped or failed skill is visible.
   const requestUpdate = useCallback(async () => {
     pushToast({ text: "Checking GitHub for updates…" });
     try {
@@ -327,21 +360,24 @@ export default function App() {
         updated?: boolean;
         restarted?: boolean;
         restart_error?: string;
+        components?: UpdateComponentResult[];
       } | null;
-      const summary = (body?.summary || body?.error || "").trim();
+      const perComponent = updateResultLines(body?.components);
+      const summary = (perComponent || body?.summary || body?.error || "").trim();
+      const sep = perComponent ? "\n" : " ";
       if (!r.ok && !summary) {
         pushToast({ text: body?.error || "Couldn't check for updates.", err: true }, 12000);
         return;
       }
       if (body?.restarted) {
         pushToast({
-          text: (summary || "Update finished.") + " Restarting… it'll reconnect automatically.",
+          text: (summary || "Update finished.") + sep + "Restarting… it'll reconnect automatically.",
         });
         return;
       }
       if (body?.restart_error) {
         pushToast({
-          text: (summary || "Updates applied.") + " " + body.restart_error,
+          text: (summary || "Updates applied.") + sep + body.restart_error,
           err: true,
         }, 14000);
         return;
