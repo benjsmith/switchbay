@@ -506,7 +506,13 @@ def _cli_python(argv: list[str]) -> tuple[str | None, Path | None]:
 def _probe_python(python: str, package: str) -> dict[str, Any] | None:
     """What `python` knows about `package`, or None if it can't import it."""
     try:
-        r = _run([python, "-c", _PY_PROBE, package], timeout=30)
+        # Neutral cwd: `-c` puts it on sys.path, and a same-named folder
+        # in the daemon's cwd must not shadow the installed package.
+        r = _run(
+            [python, "-c", _PY_PROBE, package],
+            cwd=Path(tempfile.gettempdir()),
+            timeout=30,
+        )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if r.returncode != 0:
