@@ -333,7 +333,11 @@ python3 scripts/bake_enterprise.py \
 On apply, Switch Bay snapshots `admin.json`, `admin.baked.json`, and
 `SWITCHBAY_PROFILE`, checks out the latest tag of `updates.repo`, rebuilds,
 then restores those files. Skills stay vendor-pinned unless
-`updates.include_skills` is true. Non-git payloads (MSI/pkg trees) still skip
+`updates.include_skills` is true; when it is, the installed
+curiosity-engine, curiosity-merge, and okstratr are moved to their latest
+releases too (git checkouts by tag, `npx skills` copies with `npx skills
+update`, and an okstratr Python install with `uv tool install` / `pip
+install` pinned to the release tag). Non-git payloads (MSI/pkg trees) still skip
 in-app update — they have no `frontend/dist` in git and must not run `uv` /
 `pnpm` on the endpoint.
 

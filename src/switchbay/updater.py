@@ -1,13 +1,27 @@
 """Check GitHub releases and apply updates for Switch Bay + bundled skills.
 
 Settings → Update compares the running Switch Bay version and the
-installed curiosity-engine / curiosity-merge skills against each
-repo's latest GitHub release. Anything older is updated in place,
+installed curiosity-engine / curiosity-merge / okstratr installs against
+each repo's latest GitHub release. Anything older is updated in place,
 then the daemon restarts (same path as Settings → Restart) so the
 PWA reloads via the boot_id watcher.
 
-Skill source trees are never edited here — we only invoke git or
-`npx skills` on the already-installed copies.
+How each install is updated depends on where it came from:
+
+- git checkout (skill dir or editable install inside the repo):
+  fetch tags, then check out / fast-forward to the release tag.
+- `npx skills` install (CE / curiosity-merge): `npx skills update`.
+- okstratr installed as a Python package: `uv tool install --force`
+  for a uv tool, `pip install --upgrade` otherwise, both pinned to the
+  release tag on GitHub.
+
+Skills that are not installed are skipped. After CE or okstratr
+changes, the child process Switch Bay supervises for it is stopped so
+the restarted daemon brings it back on the new code (CE's viewer
+bundle is rebuilt first so its static assets match).
+
+Skill source trees are never edited here — we only invoke git, npx,
+uv or pip on the already-installed copies.
 """
 
 from __future__ import annotations
@@ -17,10 +31,13 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
+import sys
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -57,6 +74,9 @@ class Component:
     # order when we need a content fingerprint).
     skill_md_paths: tuple[str, ...] = ()
     sentinel: str = ""  # relative path that must survive an npx update
+    # Python distribution name when the component runs as an installed
+    # package/CLI (okstratr) rather than as a skill directory alone.
+    python_package: str = ""
 
 
 POLICY_KEEP = ("admin.json", "admin.baked.json", "SWITCHBAY_PROFILE")
@@ -110,6 +130,15 @@ COMPONENTS: tuple[Component, ...] = (
         skill_name="curiosity-merge",
         skill_md_paths=("SKILL.md",),
         sentinel="scripts/setup.sh",
+    ),
+    Component(
+        id="okstratr",
+        label="okstratr",
+        repo="benjsmith/okstratr",
+        kind="skill",
+        skill_name="okstratr",
+        skill_md_paths=("skills/okstratr/SKILL.md",),
+        python_package="okstratr",
     ),
 )
 
@@ -358,6 +387,232 @@ def local_switchbay_version() -> str:
     return __version__
 
 
+# ── Python-package installs (okstratr) ──────────────────────────────
+
+
+@dataclass(frozen=True)
+class PyInstall:
+    """Where a Python-package component (okstratr) is installed from.
+
+    channel: "git" (a git checkout — the CLI is an editable install or a
+    PYTHONPATH wrapper into it, or only the skill dir exists), "uv-tool"
+    (`uv tool install` from a wheel / git URL), "pip" (any other env),
+    or "unknown" (found, but nothing we can safely update in place).
+    """
+
+    channel: str
+    path: str
+    repo: Path | None = None
+    python: str | None = None
+    version: str | None = None
+
+
+# Prints what the package's own interpreter knows about it. Runs in the
+# CLI's environment, not ours — okstratr is usually a uv tool with its
+# own Python, invisible to Switch Bay's venv.
+_PY_PROBE = r"""
+import json, sys
+name = sys.argv[1]
+out = {}
+try:
+    import importlib.metadata as md
+    d = md.distribution(name)
+    out["version"] = d.version
+    try:
+        raw = d.read_text("direct_url.json")
+        out["direct_url"] = json.loads(raw) if raw else None
+    except Exception:
+        out["direct_url"] = None
+except Exception as e:
+    out["meta_error"] = str(e)
+try:
+    mod = __import__(name)
+    out["file"] = getattr(mod, "__file__", None)
+    out["module_version"] = getattr(mod, "__version__", None)
+    out.setdefault("version", out["module_version"])
+except Exception as e:
+    out["import_error"] = str(e)
+print(json.dumps(out))
+"""
+
+_EXEC_QUOTED = re.compile(r"""exec'?\s+["']([^"']+)["']""")
+_WRAPPER_PYTHONPATH = re.compile(r"""PYTHONPATH=["']?([^"'$:]+)/src""")
+_WRAPPER_EXEC = re.compile(r"""^exec\s+(\S+)\s+-m\s""", re.M)
+
+
+def _cli_argv(comp: Component) -> list[str]:
+    """argv prefix Switch Bay itself spawns for this package's CLI."""
+    if comp.id == "okstratr":
+        from . import okstratr_supervisor
+        return okstratr_supervisor.resolve_okstratr_argv()
+    exe = shutil.which(comp.python_package)
+    if exe:
+        return [exe]
+    return [sys.executable or "python3", "-m", comp.python_package]
+
+
+def _cli_python(argv: list[str]) -> tuple[str | None, Path | None]:
+    """(interpreter that runs this CLI, wrapper repo root) — best-effort.
+
+    Reads console-script shebangs (including pip/uv's `/bin/sh` +
+    `exec "<python>"` form for long paths) and okstratr's own
+    PYTHONPATH wrapper from contrib/setup.sh.
+    """
+    if not argv:
+        return None, None
+    if len(argv) >= 3 and argv[1] == "-m":
+        return argv[0], None
+    try:
+        exe = Path(argv[0]).resolve()
+    except OSError:
+        exe = Path(argv[0])
+    if exe.suffix.lower() == ".exe":
+        for name in ("python.exe", "pythonw.exe"):
+            cand = exe.parent / name
+            if cand.is_file():
+                return str(cand), None
+        return None, None
+    try:
+        with exe.open("rb") as fh:
+            head = fh.read(4096).decode("utf-8", errors="replace")
+    except OSError:
+        return None, None
+    if not head.startswith("#!"):
+        return None, None
+    first = head.splitlines()[0][2:].strip()
+    try:
+        tokens = shlex.split(first)
+    except ValueError:
+        tokens = first.split()
+    if not tokens:
+        return None, None
+    interp = tokens[0]
+    if Path(interp).name == "env":
+        rest = [t for t in tokens[1:] if not t.startswith("-")]
+        if not rest:
+            return None, None
+        interp = shutil.which(rest[0], path=child_env().get("PATH")) or rest[0]
+    if Path(interp).name in ("sh", "bash", "zsh", "dash"):
+        wrap = _WRAPPER_PYTHONPATH.search(head)
+        m = _WRAPPER_EXEC.search(head)
+        py = m.group(1) if m else None
+        if wrap:
+            return py, Path(wrap.group(1))
+        q = _EXEC_QUOTED.search(head)
+        return (q.group(1) if q else py), None
+    return interp, None
+
+
+def _probe_python(python: str, package: str) -> dict[str, Any] | None:
+    """What `python` knows about `package`, or None if it can't import it."""
+    try:
+        r = _run([python, "-c", _PY_PROBE, package], timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    try:
+        info = json.loads((r.stdout or "").strip().splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        return None
+    if not isinstance(info, dict):
+        return None
+    if not info.get("version") and not info.get("file") and not info.get("module_version"):
+        return None
+    return info
+
+
+def _package_git_repo(src: Path, package: str) -> Path | None:
+    """Toplevel of the git checkout `src` lives in, if it is that package's repo."""
+    try:
+        r = _git(["rev-parse", "--show-toplevel"], cwd=src, timeout=8)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if r.returncode != 0:
+        return None
+    top = Path((r.stdout or "").strip())
+    if not (top / "pyproject.toml").is_file():
+        return None
+    if (top / "src" / package).is_dir() or (top / package).is_dir():
+        return top
+    return None
+
+
+def _is_uv_tool_python(python: str) -> bool:
+    """True when `python` belongs to a `uv tool install` environment."""
+    tool_dir = (os.environ.get("UV_TOOL_DIR") or "").strip()
+    try:
+        path = Path(python).absolute()
+    except OSError:
+        path = Path(python)
+    if tool_dir:
+        try:
+            path.relative_to(Path(tool_dir).expanduser())
+            return True
+        except ValueError:
+            pass
+    parts = [p.lower() for p in path.parts]
+    return any(a == "uv" and b == "tools" for a, b in zip(parts, parts[1:]))
+
+
+def _file_url_path(url: str) -> Path | None:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "file":
+        return None
+    return Path(urllib.request.url2pathname(parsed.path))
+
+
+def python_install(comp: Component) -> PyInstall | None:
+    """Locate a Python-package component. None when it isn't installed.
+
+    Prefers the CLI Switch Bay actually spawns, so an update lands on
+    the copy that runs; falls back to a git checkout of the skill dir.
+    """
+    package = comp.python_package
+    python, wrapper_repo = _cli_python(_cli_argv(comp))
+    if wrapper_repo is not None:
+        repo = _package_git_repo(wrapper_repo, package)
+        if repo is not None:
+            return PyInstall(
+                "git", str(repo), repo=repo, python=python,
+                version=_git_describe_tag(repo),
+            )
+    info = _probe_python(python, package) if python else None
+    if info is not None:
+        version = str(info.get("version") or "") or None
+        du = info.get("direct_url") if isinstance(info.get("direct_url"), dict) else {}
+        editable = bool((du.get("dir_info") or {}).get("editable"))
+        src = _file_url_path(str(du.get("url") or "")) if du else None
+        if editable:
+            # Editable metadata is frozen at install time; the source's
+            # own __version__ is what actually runs.
+            version = str(info.get("module_version") or "") or version
+            repo = _package_git_repo(src, package) if src is not None else None
+            if repo is not None:
+                return PyInstall(
+                    "git", str(repo), repo=repo, python=python,
+                    version=_git_describe_tag(repo) or version,
+                )
+            return PyInstall(
+                "unknown", str(src or info.get("file") or python),
+                python=python, version=version,
+            )
+        channel = "uv-tool" if _is_uv_tool_python(str(python)) else "pip"
+        return PyInstall(
+            channel, str(info.get("file") or python), python=python, version=version,
+        )
+    skill_dir = find_skill_dir(comp.skill_name)
+    if skill_dir is None:
+        return None
+    repo = _skill_git_repo(skill_dir)
+    if repo is not None:
+        return PyInstall(
+            "git", str(skill_dir), repo=repo, version=local_skill_version(skill_dir),
+        )
+    # Only the skill text (e.g. an `npx skills` copy) — no CLI to update.
+    return PyInstall("unknown", str(skill_dir), version=None)
+
+
 # npx skill installs have no git tag / CHANGELOG. Keyed by
 # (component id, local SKILL.md sha256) so a daemon restart is the
 # only thing that re-walks GitHub after an in-place skill update.
@@ -424,6 +679,17 @@ def installed_components() -> list[dict[str, Any]]:
             row["source"] = "app"
             rows.append(row)
             continue
+        if comp.python_package:
+            inst = python_install(comp)
+            if inst is None:
+                row["installed"] = False
+                row["source"] = "absent"
+            else:
+                row["path"] = inst.path
+                row["source"] = inst.channel
+                row["current"] = display_tag(inst.version) if inst.version else None
+            rows.append(row)
+            continue
         skill_dir = find_skill_dir(comp.skill_name)
         if skill_dir is None:
             row["installed"] = False
@@ -463,6 +729,10 @@ def resolve_unknown_versions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         comp = by_id.get(str(row.get("id") or ""))
         if comp is None or comp.kind == "app" or not comp.skill_name:
             continue
+        if comp.python_package:
+            # Package metadata already carries the version; a skill-only
+            # copy has no CLI to identify.
+            continue
         skill_dir = find_skill_dir(comp.skill_name)
         if skill_dir is None:
             continue
@@ -496,6 +766,12 @@ def _remote_skill_fingerprint(comp: Component, tag: str) -> str | None:
 # ── check ───────────────────────────────────────────────────────────
 
 
+_UNKNOWN_SOURCE = (
+    "installed, but not from a git checkout or a package Switch Bay can "
+    "upgrade — update it from a terminal"
+)
+
+
 def _component_status(comp: Component) -> dict[str, Any]:
     row: dict[str, Any] = {
         "id": comp.id,
@@ -517,6 +793,8 @@ def _component_status(comp: Component) -> dict[str, Any]:
         row["error"] = str(e)
         return row
     row["latest"] = display_tag(latest)
+    # Exact GitHub tag name — apply checks this out / installs from it.
+    row["tag"] = latest
 
     if comp.kind == "app":
         current = local_switchbay_version()
@@ -524,6 +802,23 @@ def _component_status(comp: Component) -> dict[str, Any]:
         row["repo"] = app_repo() if comp.id == "switchbay" else comp.repo
         row["channel"] = "git"
         row["update_available"] = version_less(current, latest)
+        return row
+
+    if comp.python_package:
+        inst = python_install(comp)
+        if inst is None:
+            row["installed"] = False
+            return row
+        row["path"] = inst.path
+        row["channel"] = inst.channel
+        row["current"] = display_tag(inst.version) if inst.version else "unknown"
+        if inst.channel == "unknown":
+            row["detail"] = _UNKNOWN_SOURCE
+            row["update_available"] = version_less(inst.version, latest)
+            return row
+        row["update_available"] = (
+            version_less(inst.version, latest) if inst.version else True
+        )
         return row
 
     skill_dir = find_skill_dir(comp.skill_name)
@@ -928,7 +1223,86 @@ def _apply_skill_npx(comp: Component, skill_dir: Path, latest: str) -> dict[str,
     return out
 
 
+def _uv() -> str | None:
+    return shutil.which("uv", path=child_env().get("PATH"))
+
+
+def _git_spec(comp: Component, tag: str) -> str:
+    return f"{comp.python_package} @ git+https://github.com/{comp.repo}@{tag}"
+
+
+def _apply_python_package(comp: Component, latest: str) -> dict[str, Any]:
+    """Update a Python-package component the way it was installed."""
+    inst = python_install(comp)
+    out: dict[str, Any] = {
+        "id": comp.id,
+        "label": comp.label,
+        "status": "failed",
+        "from": display_tag(inst.version) if inst and inst.version else None,
+        "to": display_tag(latest),
+        "detail": "",
+        "channel": inst.channel if inst else None,
+    }
+    if inst is None:
+        out["status"] = "skipped"
+        out["detail"] = "not installed"
+        return out
+    if inst.channel == "git" and inst.repo is not None:
+        res = _apply_skill_git(comp, inst.repo, latest)
+        res["channel"] = "git"
+        if inst.version:
+            res["from"] = display_tag(inst.version)
+        return res
+    if inst.channel not in ("uv-tool", "pip") or not inst.python:
+        out["status"] = "skipped"
+        out["detail"] = _UNKNOWN_SOURCE
+        return out
+
+    spec = _git_spec(comp, latest)
+    if inst.channel == "uv-tool":
+        uv = _uv()
+        if uv is None:
+            out["detail"] = "uv not on PATH — install uv to update this uv tool"
+            return out
+        argv = [uv, "tool", "install", "--force", spec]
+        how = "uv tool install"
+    else:
+        argv = [inst.python, "-m", "pip", "install", "--upgrade", spec]
+        how = "pip install --upgrade"
+    try:
+        proc = _run(argv, timeout=300)
+        text = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+        if (
+            proc.returncode != 0
+            and inst.channel == "pip"
+            and "No module named pip" in text
+        ):
+            # uv-created venvs ship without pip.
+            uv = _uv()
+            if uv is not None:
+                argv = [uv, "pip", "install", "--python", inst.python, "--upgrade", spec]
+                how = "uv pip install"
+                proc = _run(argv, timeout=300)
+                text = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    except (OSError, subprocess.TimeoutExpired) as e:
+        out["detail"] = f"{how} failed: {e}"
+        return out
+    if proc.returncode != 0:
+        out["detail"] = f"{how} failed: {text[-400:]}"
+        return out
+    after = _probe_python(inst.python, comp.python_package)
+    now = str((after or {}).get("version") or "") or None
+    if now and version_less(now, latest):
+        out["detail"] = f"{how} finished but {comp.label} still reports {display_tag(now)}"
+        return out
+    out["status"] = "updated"
+    out["detail"] = f"{how} → {display_tag(latest)}"
+    return out
+
+
 def _apply_skill(comp: Component, latest: str) -> dict[str, Any]:
+    if comp.python_package:
+        return _apply_python_package(comp, latest)
     skill_dir = find_skill_dir(comp.skill_name)
     if skill_dir is None:
         return {
@@ -969,6 +1343,39 @@ def _summarize(results: list[dict[str, Any]]) -> str:
             + "; ".join(f"{r['label']} ({r.get('detail') or 'skipped'})" for r in skipped)
         )
     return ". ".join(bits) + "."
+
+
+def _refresh_children(component_id: str) -> str:
+    """Stop the process Switch Bay supervises for an updated skill.
+
+    The supervisors treat a healthy child as "already running", so
+    without this the daemon restart that follows an update would keep
+    serving the old code. CE's viewer bundle is rebuilt first: the
+    served copy of its static assets only changes on a build.
+    Best-effort — returns a note for the per-component report.
+    """
+    try:
+        if component_id == "curiosity-engine":
+            from . import ce_viewer_supervisor
+            notes: list[str] = []
+            ws = ce_viewer_supervisor.bound_workspace()
+            if ws is not None:
+                built = ce_viewer_supervisor.rebuild_bundle(ws)
+                notes.append(
+                    "viewer rebuilt" if built.get("ok")
+                    else f"viewer rebuild failed ({built.get('error') or 'error'})"
+                )
+            ce_viewer_supervisor.stop()
+            notes.append("viewer restarts with Switch Bay")
+            return ", ".join(notes)
+        if component_id == "okstratr":
+            from . import okstratr_supervisor
+            okstratr_supervisor.stop()
+            return "okstratr restarts with Switch Bay"
+    except Exception as e:  # noqa: BLE001 — the update itself succeeded
+        log.exception("post-update refresh failed for %s", component_id)
+        return f"could not restart its process ({e})"
+    return ""
 
 
 def apply() -> dict[str, Any]:
@@ -1013,10 +1420,13 @@ def apply() -> dict[str, Any]:
                 "status": "unchanged",
                 "from": row.get("current"),
                 "to": row.get("latest"),
-                "detail": "not installed" if not row.get("installed") else "already current",
+                "detail": (
+                    "not installed" if not row.get("installed")
+                    else row.get("detail") or "already current"
+                ),
             })
             continue
-        latest = str(row.get("latest") or "")
+        latest = str(row.get("tag") or row.get("latest") or "")
         log.info("updating %s → %s", cid, latest)
         if comp.kind == "app":
             results.append(_apply_switchbay(comp, latest))
@@ -1032,7 +1442,12 @@ def apply() -> dict[str, Any]:
                 "detail": blocked,
             })
             continue
-        results.append(_apply_skill(comp, latest))
+        res = _apply_skill(comp, latest)
+        if res.get("status") == "updated":
+            note = _refresh_children(cid)
+            if note:
+                res["detail"] = f"{res.get('detail') or ''}; {note}".lstrip("; ")
+        results.append(res)
 
     any_updated = any(r.get("status") == "updated" for r in results)
     any_failed = any(r.get("status") == "failed" for r in results)

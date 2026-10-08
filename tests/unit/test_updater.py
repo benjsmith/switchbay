@@ -13,6 +13,14 @@ from aiohttp.test_utils import make_mocked_request
 
 from switchbay import admin_policy, daemon, updater
 
+_REAL_PYTHON_INSTALL = updater.python_install
+
+
+@pytest.fixture(autouse=True)
+def _no_real_okstratr(monkeypatch):
+    """Keep tests off whatever okstratr the test machine has installed."""
+    monkeypatch.setattr(updater, "python_install", lambda _comp: None)
+
 
 def test_parse_version_strips_v_and_trailing_text():
     assert updater.parse_version("v0.9.10") == (0, 9, 10)
@@ -196,6 +204,7 @@ def test_check_marks_older_switchbay(monkeypatch):
         "benjsmith/switchbay": "v0.9.11",
         "benjsmith/curiosity-engine": "v1.3.0",
         "benjsmith/curiosity-merge": "v0.7.0",
+        "benjsmith/okstratr": "v0.2.0",
     }[repo])
     monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.10")
     monkeypatch.setattr(updater, "find_skill_dir", lambda _name: None)
@@ -219,6 +228,7 @@ def test_check_hash_match_means_current(tmp_path, monkeypatch):
         "benjsmith/switchbay": "v0.9.10",
         "benjsmith/curiosity-engine": "v1.3.0",
         "benjsmith/curiosity-merge": "v0.7.0",
+        "benjsmith/okstratr": "v0.2.0",
     }[repo])
     monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.10")
 
@@ -248,6 +258,7 @@ def test_check_hash_mismatch_offers_update(tmp_path, monkeypatch):
         "benjsmith/switchbay": "v0.9.10",
         "benjsmith/curiosity-engine": "v1.3.0",
         "benjsmith/curiosity-merge": "v0.7.0",
+        "benjsmith/okstratr": "v0.2.0",
     }[repo])
     monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.9.10")
     monkeypatch.setattr(
@@ -712,3 +723,473 @@ def test_fetch_failure_names_the_clobber_cause():
         args=[], returncode=1, stdout="", stderr="fatal: could not read from remote",
     )
     assert "could not read from remote" in updater._fetch_failure_detail(other)
+
+
+# ── okstratr + per-install-mode coverage ────────────────────────────
+
+OKS = next(c for c in updater.COMPONENTS if c.id == "okstratr")
+CE = next(c for c in updater.COMPONENTS if c.id == "curiosity-engine")
+CM = next(c for c in updater.COMPONENTS if c.id == "curiosity-merge")
+
+
+def _R(rc=0, out="", err=""):
+    return type("R", (), {"returncode": rc, "stdout": out, "stderr": err})()
+
+
+def _latest(repo):
+    return {
+        "benjsmith/switchbay": "v0.13.2",
+        "benjsmith/curiosity-engine": "v1.9.1",
+        "benjsmith/curiosity-merge": "v0.8.4",
+        "benjsmith/okstratr": "v0.2.0",
+    }[repo]
+
+
+def test_components_cover_switchbay_and_three_main_skills():
+    assert [c.id for c in updater.COMPONENTS] == [
+        "switchbay", "curiosity-engine", "curiosity-merge", "okstratr",
+    ]
+    assert OKS.repo == "benjsmith/okstratr"
+    assert OKS.python_package == "okstratr"
+
+
+def test_cli_python_reads_plain_shebang(tmp_path):
+    exe = tmp_path / "okstratr"
+    exe.write_text("#!/home/u/.local/share/uv/tools/okstratr/bin/python\nimport x\n")
+    py, repo = updater._cli_python([str(exe)])
+    assert py == "/home/u/.local/share/uv/tools/okstratr/bin/python"
+    assert repo is None
+
+
+def test_cli_python_reads_sh_exec_form(tmp_path):
+    exe = tmp_path / "okstratr"
+    exe.write_text(
+        "#!/bin/sh\n'''exec' \"/opt/long path/venv/bin/python\" \"$0\" \"$@\"\n' '''\n"
+    )
+    py, repo = updater._cli_python([str(exe)])
+    assert py == "/opt/long path/venv/bin/python"
+    assert repo is None
+
+
+def test_cli_python_reads_okstratr_setup_wrapper(tmp_path):
+    exe = tmp_path / "okstratr"
+    exe.write_text(
+        "#!/usr/bin/env bash\n"
+        'export PYTHONPATH="/src/okstratr/src:${PYTHONPATH:-}"\n'
+        'exec /usr/bin/python3.12 -m okstratr "$@"\n'
+    )
+    py, repo = updater._cli_python([str(exe)])
+    assert py == "/usr/bin/python3.12"
+    assert repo == Path("/src/okstratr")
+
+
+def test_cli_python_module_form():
+    assert updater._cli_python(["/venv/bin/python", "-m", "okstratr"]) == (
+        "/venv/bin/python", None,
+    )
+
+
+def test_is_uv_tool_python(monkeypatch):
+    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+    assert updater._is_uv_tool_python("/home/u/.local/share/uv/tools/okstratr/bin/python")
+    assert not updater._is_uv_tool_python("/home/u/venvs/work/bin/python")
+    monkeypatch.setenv("UV_TOOL_DIR", "/custom/tools")
+    assert updater._is_uv_tool_python("/custom/tools/okstratr/bin/python")
+
+
+def _use_real_python_install(monkeypatch, *, python, probe, wrapper_repo=None):
+    monkeypatch.setattr(updater, "python_install", _REAL_PYTHON_INSTALL)
+    monkeypatch.setattr(updater, "_cli_argv", lambda _c: ["/bin/okstratr"])
+    monkeypatch.setattr(updater, "_cli_python", lambda _a: (python, wrapper_repo))
+    monkeypatch.setattr(updater, "_probe_python", lambda _py, _pkg: probe)
+
+
+def test_python_install_editable_git_checkout(tmp_path, monkeypatch):
+    repo = tmp_path / "okstratr"
+    _use_real_python_install(monkeypatch, python="/r/.venv/bin/python", probe={
+        "version": "0.1.0",
+        "direct_url": {"url": repo.as_uri(), "dir_info": {"editable": True}},
+    })
+    monkeypatch.setattr(updater, "_package_git_repo", lambda src, pkg: repo)
+    monkeypatch.setattr(updater, "_git_describe_tag", lambda _r: "v0.1.0")
+    inst = updater.python_install(OKS)
+    assert inst.channel == "git"
+    assert inst.repo == repo
+    assert inst.version == "v0.1.0"
+
+
+def test_python_install_setup_wrapper_is_git(tmp_path, monkeypatch):
+    repo = tmp_path / "okstratr"
+    _use_real_python_install(monkeypatch, python=None, probe=None, wrapper_repo=repo)
+    monkeypatch.setattr(updater, "_package_git_repo", lambda src, pkg: src)
+    monkeypatch.setattr(updater, "_git_describe_tag", lambda _r: "v0.1.0")
+    inst = updater.python_install(OKS)
+    assert inst.channel == "git" and inst.repo == repo
+
+
+def test_python_install_uv_tool(monkeypatch):
+    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+    py = "/home/u/.local/share/uv/tools/okstratr/bin/python"
+    _use_real_python_install(monkeypatch, python=py, probe={
+        "version": "0.1.0",
+        "direct_url": {
+            "url": "https://github.com/benjsmith/okstratr",
+            "vcs_info": {"vcs": "git", "requested_revision": "v0.1.0"},
+        },
+    })
+    inst = updater.python_install(OKS)
+    assert inst.channel == "uv-tool"
+    assert inst.python == py
+    assert inst.version == "0.1.0"
+
+
+def test_python_install_pip(monkeypatch):
+    monkeypatch.delenv("UV_TOOL_DIR", raising=False)
+    _use_real_python_install(
+        monkeypatch, python="/home/u/venvs/work/bin/python",
+        probe={"version": "0.1.0", "direct_url": None},
+    )
+    inst = updater.python_install(OKS)
+    assert inst.channel == "pip"
+
+
+def test_python_install_editable_outside_git_is_unknown(tmp_path, monkeypatch):
+    _use_real_python_install(monkeypatch, python="/x/bin/python", probe={
+        "version": "0.1.0",
+        "direct_url": {"url": tmp_path.as_uri(), "dir_info": {"editable": True}},
+    })
+    monkeypatch.setattr(updater, "_package_git_repo", lambda src, pkg: None)
+    assert updater.python_install(OKS).channel == "unknown"
+
+
+def test_python_install_falls_back_to_skill_git_checkout(tmp_path, monkeypatch):
+    skill = tmp_path / "okstratr" / "skills" / "okstratr"
+    skill.mkdir(parents=True)
+    _use_real_python_install(monkeypatch, python="/venv/bin/python", probe=None)
+    monkeypatch.setattr(updater, "find_skill_dir", lambda name: skill)
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda d: tmp_path / "okstratr")
+    monkeypatch.setattr(updater, "local_skill_version", lambda d: "v0.1.0")
+    inst = updater.python_install(OKS)
+    assert inst.channel == "git" and inst.repo == tmp_path / "okstratr"
+
+
+def test_python_install_skill_text_only_is_unknown(tmp_path, monkeypatch):
+    _use_real_python_install(monkeypatch, python="/venv/bin/python", probe=None)
+    monkeypatch.setattr(updater, "find_skill_dir", lambda name: tmp_path)
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda d: None)
+    assert updater.python_install(OKS).channel == "unknown"
+
+
+def test_python_install_absent(monkeypatch):
+    _use_real_python_install(monkeypatch, python="/venv/bin/python", probe=None)
+    monkeypatch.setattr(updater, "find_skill_dir", lambda name: None)
+    assert updater.python_install(OKS) is None
+
+
+def test_check_reports_every_skill_by_install_mode(tmp_path, monkeypatch):
+    """CE from git, CM from npx, okstratr as a uv tool — current vs latest each."""
+    ce_dir, cm_dir = tmp_path / "curiosity-engine", tmp_path / "curiosity-merge"
+    for d in (ce_dir, cm_dir):
+        d.mkdir()
+        (d / "SKILL.md").write_text("x", encoding="utf-8")
+    monkeypatch.setattr(updater, "fetch_latest_tag", _latest)
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.13.1")
+    monkeypatch.setattr(updater, "find_skill_dir", lambda name: {
+        "curiosity-engine": ce_dir, "curiosity-merge": cm_dir,
+    }.get(name))
+    monkeypatch.setattr(
+        updater, "_skill_git_repo", lambda d: d if d == ce_dir else None,
+    )
+    monkeypatch.setattr(updater, "local_skill_version", lambda d: {
+        ce_dir: "v1.9.0", cm_dir: "0.8.4",
+    }.get(d))
+    monkeypatch.setattr(updater, "python_install", lambda comp: updater.PyInstall(
+        "uv-tool", "/t/okstratr", python="/t/bin/python", version="0.1.0",
+    ))
+
+    report = updater.check()
+    by = {c["id"]: c for c in report["components"]}
+    assert (by["switchbay"]["current"], by["switchbay"]["latest"]) == ("v0.13.1", "v0.13.2")
+    assert by["curiosity-engine"]["channel"] == "git"
+    assert (by["curiosity-engine"]["current"], by["curiosity-engine"]["latest"]) == (
+        "v1.9.0", "v1.9.1",
+    )
+    assert by["curiosity-engine"]["update_available"] is True
+    assert by["curiosity-merge"]["channel"] == "npx"
+    assert by["curiosity-merge"]["update_available"] is False
+    assert by["okstratr"]["channel"] == "uv-tool"
+    assert (by["okstratr"]["current"], by["okstratr"]["latest"]) == ("v0.1.0", "v0.2.0")
+    assert by["okstratr"]["update_available"] is True
+    assert by["okstratr"]["tag"] == "v0.2.0"
+
+
+def test_check_skips_okstratr_when_not_installed(monkeypatch):
+    monkeypatch.setattr(updater, "fetch_latest_tag", _latest)
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.13.2")
+    monkeypatch.setattr(updater, "find_skill_dir", lambda _n: None)
+    report = updater.check()
+    oks = next(c for c in report["components"] if c["id"] == "okstratr")
+    assert oks["installed"] is False
+    assert oks["update_available"] is False
+    assert report["update_available"] is False
+
+
+def test_check_unknown_source_is_reported_not_guessed(monkeypatch):
+    monkeypatch.setattr(updater, "fetch_latest_tag", _latest)
+    monkeypatch.setattr(updater, "local_switchbay_version", lambda: "0.13.2")
+    monkeypatch.setattr(updater, "find_skill_dir", lambda _n: None)
+    monkeypatch.setattr(updater, "python_install", lambda c: updater.PyInstall(
+        "unknown", "/somewhere", version="0.1.0",
+    ))
+    oks = next(c for c in updater.check()["components"] if c["id"] == "okstratr")
+    assert oks["channel"] == "unknown"
+    assert "terminal" in oks["detail"]
+
+
+def test_apply_okstratr_uv_tool_reinstalls_at_release_tag(monkeypatch):
+    inst = updater.PyInstall("uv-tool", "/t", python="/t/bin/python", version="0.1.0")
+    monkeypatch.setattr(updater, "python_install", lambda c: inst)
+    monkeypatch.setattr(updater, "_uv", lambda: "/usr/bin/uv")
+    ran = []
+    monkeypatch.setattr(updater, "_run", lambda argv, **k: ran.append(argv) or _R())
+    monkeypatch.setattr(updater, "_probe_python", lambda py, pkg: {"version": "0.2.0"})
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert row["status"] == "updated", row
+    assert ran == [[
+        "/usr/bin/uv", "tool", "install", "--force",
+        "okstratr @ git+https://github.com/benjsmith/okstratr@v0.2.0",
+    ]]
+    assert row["from"] == "v0.1.0" and row["to"] == "v0.2.0"
+
+
+def test_apply_okstratr_uv_tool_without_uv_fails_cleanly(monkeypatch):
+    inst = updater.PyInstall("uv-tool", "/t", python="/t/bin/python", version="0.1.0")
+    monkeypatch.setattr(updater, "python_install", lambda c: inst)
+    monkeypatch.setattr(updater, "_uv", lambda: None)
+    monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("must not run"))
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert row["status"] == "failed" and "uv" in row["detail"]
+
+
+def test_apply_okstratr_pip_upgrade(monkeypatch):
+    inst = updater.PyInstall("pip", "/v", python="/v/bin/python", version="0.1.0")
+    monkeypatch.setattr(updater, "python_install", lambda c: inst)
+    ran = []
+    monkeypatch.setattr(updater, "_run", lambda argv, **k: ran.append(argv) or _R())
+    monkeypatch.setattr(updater, "_probe_python", lambda py, pkg: {"version": "0.2.0"})
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert row["status"] == "updated"
+    assert ran[0][:5] == ["/v/bin/python", "-m", "pip", "install", "--upgrade"]
+
+
+def test_apply_okstratr_pip_falls_back_to_uv_pip(monkeypatch):
+    inst = updater.PyInstall("pip", "/v", python="/v/bin/python", version="0.1.0")
+    monkeypatch.setattr(updater, "python_install", lambda c: inst)
+    monkeypatch.setattr(updater, "_uv", lambda: "/usr/bin/uv")
+    ran = []
+
+    def fake_run(argv, **_k):
+        ran.append(argv)
+        if argv[1:3] == ["-m", "pip"]:
+            return _R(1, err="/v/bin/python: No module named pip")
+        return _R()
+
+    monkeypatch.setattr(updater, "_run", fake_run)
+    monkeypatch.setattr(updater, "_probe_python", lambda py, pkg: {"version": "0.2.0"})
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert row["status"] == "updated"
+    assert ran[1][:5] == ["/usr/bin/uv", "pip", "install", "--python", "/v/bin/python"]
+
+
+def test_apply_okstratr_fails_when_version_did_not_move(monkeypatch):
+    inst = updater.PyInstall("pip", "/v", python="/v/bin/python", version="0.1.0")
+    monkeypatch.setattr(updater, "python_install", lambda c: inst)
+    monkeypatch.setattr(updater, "_run", lambda argv, **k: _R())
+    monkeypatch.setattr(updater, "_probe_python", lambda py, pkg: {"version": "0.1.0"})
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert row["status"] == "failed" and "still reports" in row["detail"]
+
+
+def test_apply_okstratr_git_checkout_uses_tag(tmp_path, monkeypatch):
+    inst = updater.PyInstall("git", str(tmp_path), repo=tmp_path, version="v0.1.0")
+    monkeypatch.setattr(updater, "python_install", lambda c: inst)
+    seen = []
+    monkeypatch.setattr(updater, "_apply_skill_git", lambda comp, repo, latest: seen.append(
+        (comp.id, repo, latest),
+    ) or {"id": comp.id, "label": comp.label, "status": "updated",
+          "from": "", "to": latest, "detail": f"checked out {latest}"})
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert seen == [("okstratr", tmp_path, "v0.2.0")]
+    assert row["status"] == "updated" and row["from"] == "v0.1.0"
+    assert row["channel"] == "git"
+
+
+def test_apply_okstratr_unknown_or_absent_is_skipped(monkeypatch):
+    monkeypatch.setattr(updater, "_run", lambda *a, **k: pytest.fail("must not run"))
+    monkeypatch.setattr(updater, "python_install", lambda c: None)
+    assert updater._apply_skill(OKS, "v0.2.0")["status"] == "skipped"
+    monkeypatch.setattr(updater, "python_install", lambda c: updater.PyInstall(
+        "unknown", "/x", version="0.1.0",
+    ))
+    row = updater._apply_skill(OKS, "v0.2.0")
+    assert row["status"] == "skipped" and "terminal" in row["detail"]
+
+
+def test_apply_skill_git_checks_out_release_tag(tmp_path, monkeypatch):
+    """CE / CM git checkouts: fetch, then fast-forward to the tag."""
+    monkeypatch.setattr(updater, "_git_dirty", lambda _p: False)
+    monkeypatch.setattr(updater, "_git_detached", lambda _p: False)
+    monkeypatch.setattr(updater, "_is_ancestor", lambda r, a, b: True)
+    monkeypatch.setattr(updater, "local_skill_version", lambda _p: "v1.9.0")
+    calls = []
+
+    def fake_git(args, *, cwd, timeout=0):
+        calls.append(args)
+        if args[:2] == ["rev-parse", "HEAD"]:
+            return _R(out="old\n")
+        if args[0] == "rev-parse" and "^{commit}" in str(args[1]):
+            return _R(out="new\n")
+        return _R()
+
+    monkeypatch.setattr(updater, "_git", fake_git)
+    row = updater._apply_skill_git(CE, tmp_path, "v1.9.1")
+    assert row["status"] == "updated"
+    assert ["merge", "--ff-only", "v1.9.1"] in calls
+
+
+def test_apply_routes_ce_and_cm_by_install_source(tmp_path, monkeypatch):
+    ce_dir, cm_dir = tmp_path / "ce", tmp_path / "cm"
+    monkeypatch.setattr(updater, "find_skill_dir", lambda name: {
+        "curiosity-engine": ce_dir, "curiosity-merge": cm_dir,
+    }[name])
+    monkeypatch.setattr(updater, "_skill_git_repo", lambda d: d if d == ce_dir else None)
+    routed = []
+    monkeypatch.setattr(updater, "_apply_skill_git", lambda c, r, l: routed.append(
+        ("git", c.id)) or {"status": "updated"})
+    monkeypatch.setattr(updater, "_apply_skill_npx", lambda c, d, l: routed.append(
+        ("npx", c.id)) or {"status": "updated"})
+    updater._apply_skill(CE, "v1.9.1")
+    updater._apply_skill(CM, "v0.8.4")
+    assert routed == [("git", "curiosity-engine"), ("npx", "curiosity-merge")]
+
+
+def _behind_report():
+    def row(cid, label, cur, latest, channel, installed=True, behind=True):
+        return {
+            "id": cid, "label": label, "kind": "skill" if cid != "switchbay" else "app",
+            "current": cur, "latest": latest, "tag": latest, "installed": installed,
+            "update_available": behind, "error": None, "channel": channel,
+        }
+    return {
+        "ok": True, "error": None, "update_available": True,
+        "components": [
+            row("switchbay", "Switch Bay", "v0.13.2", "v0.13.2", "git", behind=False),
+            row("curiosity-engine", "Curiosity Engine", "v1.9.0", "v1.9.1", "git"),
+            row("curiosity-merge", "Curiosity Merge", None, "v0.8.4", None,
+                installed=False, behind=False),
+            row("okstratr", "okstratr", "v0.1.0", "v0.2.0", "uv-tool"),
+        ],
+    }
+
+
+def test_apply_updates_behind_skills_and_restarts_their_processes(tmp_path, monkeypatch):
+    from switchbay import ce_viewer_supervisor, okstratr_supervisor
+
+    monkeypatch.setattr(updater, "check", _behind_report)
+    monkeypatch.setattr(updater, "_apply_switchbay", lambda *a: pytest.fail("current"))
+    applied = []
+    monkeypatch.setattr(updater, "_apply_skill", lambda comp, latest: applied.append(
+        (comp.id, latest)) or {
+            "id": comp.id, "label": comp.label, "status": "updated",
+            "from": "old", "to": latest, "detail": "done",
+        })
+    events = []
+    monkeypatch.setattr(ce_viewer_supervisor, "bound_workspace", lambda: tmp_path)
+    monkeypatch.setattr(ce_viewer_supervisor, "rebuild_bundle",
+                        lambda ws: events.append(("rebuild", ws)) or {"ok": True})
+    monkeypatch.setattr(ce_viewer_supervisor, "stop",
+                        lambda: events.append(("stop", "ce")) or {"ok": True})
+    monkeypatch.setattr(okstratr_supervisor, "stop",
+                        lambda: events.append(("stop", "okstratr")) or {"ok": True})
+
+    result = updater.apply()
+    assert applied == [("curiosity-engine", "v1.9.1"), ("okstratr", "v0.2.0")]
+    assert events == [("rebuild", tmp_path), ("stop", "ce"), ("stop", "okstratr")]
+    by = {r["id"]: r for r in result["components"]}
+    assert by["curiosity-merge"]["status"] == "unchanged"
+    assert by["curiosity-merge"]["detail"] == "not installed"
+    assert "viewer rebuilt" in by["curiosity-engine"]["detail"]
+    assert "okstratr restarts" in by["okstratr"]["detail"]
+    assert result["updated"] is True and result["ok"] is True
+    assert "Curiosity Engine (old → v1.9.1)" in result["summary"]
+    assert "okstratr (old → v0.2.0)" in result["summary"]
+
+
+def test_failed_skill_update_does_not_touch_its_process(monkeypatch):
+    from switchbay import ce_viewer_supervisor, okstratr_supervisor
+
+    monkeypatch.setattr(updater, "check", _behind_report)
+    monkeypatch.setattr(updater, "_apply_skill", lambda comp, latest: {
+        "id": comp.id, "label": comp.label, "status": "failed",
+        "from": "old", "to": latest, "detail": "boom",
+    })
+    monkeypatch.setattr(ce_viewer_supervisor, "stop", lambda: pytest.fail("no stop"))
+    monkeypatch.setattr(okstratr_supervisor, "stop", lambda: pytest.fail("no stop"))
+    result = updater.apply()
+    assert result["ok"] is False and result["updated"] is False
+
+
+def test_skill_include_policy_blocks_okstratr_too(monkeypatch, tmp_path):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "features": {"in_app_update": True},
+        "updates": {"include_skills": False},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "enterprise")
+    admin_policy.reset_cache()
+    try:
+        monkeypatch.setattr(updater, "check", _behind_report)
+        monkeypatch.setattr(updater, "_apply_skill", lambda *a: pytest.fail("blocked"))
+        result = updater.apply()
+        by = {r["id"]: r for r in result["components"]}
+        assert by["okstratr"]["status"] == "skipped"
+        assert "include_skills" in by["okstratr"]["detail"]
+        assert by["curiosity-engine"]["status"] == "skipped"
+    finally:
+        admin_policy.reset_cache()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("handler,method,path", [
+    ("handle_update", "POST", "/api/update"),
+    ("handle_update_check", "GET", "/api/update/check"),
+])
+async def test_in_app_update_false_blocks_check_and_apply(
+    monkeypatch, tmp_path, handler, method, path,
+):
+    p = tmp_path / "admin.json"
+    p.write_text(json.dumps({
+        "profile": "enterprise",
+        "features": {"in_app_update": False},
+        "updates": {"include_skills": True},
+    }), encoding="utf-8")
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(p))
+    monkeypatch.setenv("SWITCHBAY_PROFILE", "enterprise")
+    admin_policy.reset_cache()
+    try:
+        monkeypatch.setattr(updater, "apply", lambda: pytest.fail("must not apply"))
+        monkeypatch.setattr(updater, "check", lambda: pytest.fail("must not check"))
+        req = make_mocked_request(method, path, app={"service_managed": True})
+        resp = await getattr(daemon, handler)(req)
+        assert resp.status == 403
+    finally:
+        admin_policy.reset_cache()
+
+
+def test_probe_python_reads_a_real_interpreter():
+    import sys
+    info = updater._probe_python(sys.executable, "pytest")
+    assert info and info["version"]
+    assert updater._probe_python(sys.executable, "sb_no_such_pkg_xyz") is None

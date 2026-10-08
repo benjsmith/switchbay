@@ -477,7 +477,8 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
                     ? " using the bake-time update settings. "
                       + "admin.json / admin.baked.json / SWITCHBAY_PROFILE "
                       + "are kept."
-                    : ", Curiosity Engine, and Curiosity Merge.")
+                    : ", plus any installed Curiosity Engine, Curiosity "
+                      + "Merge, and okstratr.")
                   + " Switch Bay then restarts so the app picks up the "
                   + "changes.\n\n"
                   + "Agents that are still running will end. Nothing "

@@ -7991,7 +7991,7 @@ a.sy-source-cite { color: var(--accent); }
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
 }
 .sy-toast--err { border-color: var(--err, #f38ba8); }
-.sy-toast-text { flex: 1; min-width: 0; }
+.sy-toast-text { flex: 1; min-width: 0; white-space: pre-line; }
 .sy-toast-jump {
   flex-shrink: 0;
   padding: 1px 8px;
