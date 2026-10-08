@@ -492,7 +492,8 @@ def _cli_python(argv: list[str]) -> tuple[str | None, Path | None]:
         if not rest:
             return None, None
         interp = shutil.which(rest[0], path=child_env().get("PATH")) or rest[0]
-    if Path(interp).name in ("sh", "bash", "zsh", "dash"):
+    # `stem` + lower: `env bash` resolves to bash.EXE under Git for Windows.
+    if Path(interp).stem.lower() in ("sh", "bash", "zsh", "dash"):
         wrap = _WRAPPER_PYTHONPATH.search(head)
         m = _WRAPPER_EXEC.search(head)
         py = m.group(1) if m else None
