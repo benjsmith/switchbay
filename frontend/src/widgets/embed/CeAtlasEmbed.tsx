@@ -109,7 +109,8 @@ export default function CeAtlasEmbed({ showAddFile, suppressDocModal }: Props = 
     const sync = () => {
       const st = session.getState();
       if (st.status === "ready") {
-        readyAtRef.current = Date.now();
+        // Grace window starts at first paint, not at every data refresh.
+        if (readyAtRef.current === 0) readyAtRef.current = Date.now();
         setState({ status: "ready" });
         const d = st.data as CeDataLite | null;
         setCounts({ nodes: d?.nodes?.length ?? 0, edges: d?.edges?.length ?? 0 });
@@ -140,11 +141,13 @@ export default function CeAtlasEmbed({ showAddFile, suppressDocModal }: Props = 
       if (Date.now() - readyAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
-        // Wiki changed: drop cached layout, refetch data, hard remount.
-        session.invalidateAtlasLayoutCache();
-        session.softRevalidate();
-        session.detachCanvas(el, { destroy: true });
-        session.attachCanvas(el, canvasHtml);
+        // Wiki changed: wait for fresh data, then hard remount on it.
+        void session.refresh().then(() => {
+          if (!el.isConnected) return;
+          session.invalidateAtlasLayoutCache();
+          session.detachCanvas(el, { destroy: true });
+          session.attachCanvas(el, canvasHtml);
+        });
       }, SOFT_REMOUNT_DEBOUNCE_MS);
     };
     window.addEventListener("sy:files-changed", onFiles);

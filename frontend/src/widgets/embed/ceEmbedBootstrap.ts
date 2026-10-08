@@ -14,7 +14,7 @@
  *   }) => { destroy(): void }
  */
 
-import { guardCeModal, routeCeSplit } from "./ceHostBridge.ts";
+import { guardCeModal, guardCeSidebar, routeCeSplit } from "./ceHostBridge.ts";
 import { isSwitchbayReservedApi } from "./embedMount.ts";
 export type CeEmbedOptions = {
   embed: true;
@@ -129,7 +129,11 @@ function loadScript(src: string): Promise<void> {
       el.dataset.loaded = "1";
       resolve();
     };
-    el.onerror = () => reject(new Error(`Failed to load ${src}`));
+    el.onerror = () => {
+      // Drop the dead tag so a retry (CE viewer restarting) loads it again.
+      el.remove();
+      reject(new Error(`Failed to load ${src}`));
+    };
     document.head.appendChild(el);
   });
 }
@@ -202,6 +206,7 @@ async function loadCeModules(publicBase: string): Promise<void> {
   } finally {
     // CE renders page HTML with innerHTML on the daemon origin.
     guardCeModal();
+    guardCeSidebar();
   }
 }
 
@@ -416,6 +421,21 @@ export async function prepareSession(
 
   installPublicBase(publicBase);
   const releaseFetch = await installFetchShim(publicBase);
+  try {
+    return await prepareWithShim(opts, publicBase, dataUrl, releaseFetch);
+  } catch (e) {
+    // Leave no shim behind, so a retry starts clean.
+    releaseFetch();
+    throw e;
+  }
+}
+
+async function prepareWithShim(
+  opts: CeEmbedOptions,
+  publicBase: string,
+  dataUrl: string,
+  releaseFetch: () => void,
+): Promise<PreparedSession> {
   await loadCeModules(publicBase);
 
   const ce = w().CEEmbed as

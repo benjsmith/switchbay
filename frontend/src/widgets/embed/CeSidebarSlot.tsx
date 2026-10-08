@@ -35,6 +35,21 @@ export default function CeSidebarSlot() {
     };
   }, []);
 
+  // Keep the page list current when the wiki changes while Graph isn't
+  // open (Graph runs the same refresh itself and shares the result).
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onFiles = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => { void getCeEmbedSession().refresh(); }, 1500);
+    };
+    window.addEventListener("sy:files-changed", onFiles);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener("sy:files-changed", onFiles);
+    };
+  }, []);
+
   // CE's edit.js binds its `+` (#sidebar-upload) to a bare file picker.
   // Catch the click on the way down and open Switch Bay's upload dialog
   // instead (vault/raw/ via /api/upload-vault, optional ingest), the same

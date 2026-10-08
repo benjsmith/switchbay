@@ -75,6 +75,31 @@ function win(): CeWin {
 }
 
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * The CE viewer restarts on workspace switch and after an update. Wait
+ * (bounded) until the daemon reports it healthy so the first load doesn't
+ * land on a 502 mid-restart. Unknown / unreachable status → go ahead.
+ */
+async function waitForCeHealthy(timeoutMs = 60_000): Promise<void> {
+  const until = Date.now() + timeoutMs;
+  while (Date.now() < until) {
+    try {
+      const r = await fetch("/api/core-skills/status", { cache: "no-store" });
+      if (!r.ok) return;
+      const s = (await r.json()) as { ce?: { state?: string } };
+      const st = s?.ce?.state;
+      if (!st || st === "healthy") return;
+    } catch {
+      return;
+    }
+    await sleep(1000);
+  }
+}
+
+const BOOT_ATTEMPTS = 3;
+
 function injectSidebarHtml(el: HTMLElement, html: string, data: unknown): void {
   el.innerHTML = renderSidebarShell(html, data);
   const nameEl = el.querySelector(".workspace-name");
@@ -125,6 +150,57 @@ class CeEmbedSession {
     }
   }
 
+  private refreshPromise: Promise<void> | null = null;
+  private refreshAgain = false;
+
+  /**
+   * The wiki changed on disk: re-read data.json and wait for it. CE's
+   * `revalidate` refreshes its modal / search / file browser but not the
+   * page list, so re-init that too, then publish the new data (counts).
+   * Callers remount the canvas after this resolves so it draws the new
+   * graph. Calls made while one is in flight run once more afterwards.
+   */
+  refresh(): Promise<void> {
+    if (this.refreshPromise) {
+      this.refreshAgain = true;
+      return this.refreshPromise;
+    }
+    const run = async () => {
+      do {
+        this.refreshAgain = false;
+        const h = this.createHandle;
+        if (!h?.revalidate || this.state.status !== "ready") return;
+        try {
+          await h.revalidate();
+        } catch {
+          /* keep current data */
+        }
+        const fresh = h.getData?.();
+        if (!fresh || this.createHandle !== h || this.state.status !== "ready") return;
+        try {
+          // Re-renders the grouped list (throws after that when the
+          // canvas isn't mounted; the list is already updated by then).
+          win().Sidebar?.init(fresh);
+        } catch {
+          /* ignore */
+        }
+        // init() also appends a "show sidebar" button each time; keep one.
+        document.querySelectorAll("#graph-pane .sidebar-restore").forEach((b, i) => {
+          if (i > 0) b.remove();
+        });
+        if (this.sidebarEl) {
+          const nameEl = this.sidebarEl.querySelector(".workspace-name");
+          if (nameEl) nameEl.textContent = workspaceLabel(fresh);
+        }
+        this.setState({ status: "ready", data: fresh });
+      } while (this.refreshAgain);
+    };
+    this.refreshPromise = run().finally(() => {
+      this.refreshPromise = null;
+    });
+    return this.refreshPromise;
+  }
+
   /** Drop cached layout positions (tip / files_changed) so next mount re-layouts. */
   invalidateAtlasLayoutCache(): void {
     try {
@@ -169,12 +245,22 @@ class CeEmbedSession {
         // mountCeAtlas with a throwaway off-DOM node is heavy; load via
         // a dedicated path: import bootstrap internals.
         const { prepareSession } = await import("./ceEmbedBootstrap.ts");
-        const prepared = await prepareSession({
-          embed: true,
-          dataUrl: DATA_URL,
-          publicBase: PUBLIC_BASE,
-          chrome: false,
-        });
+        let prepared: Awaited<ReturnType<typeof prepareSession>> | null = null;
+        for (let attempt = 1; !prepared; attempt++) {
+          await waitForCeHealthy();
+          try {
+            prepared = await prepareSession({
+              embed: true,
+              dataUrl: DATA_URL,
+              publicBase: PUBLIC_BASE,
+              chrome: false,
+            });
+          } catch (e) {
+            // A load that raced a CE restart (502) gets another go.
+            if (attempt >= BOOT_ATTEMPTS) throw e;
+            await sleep(2000);
+          }
+        }
         this.modulesReady = true;
         this.createHandle = prepared.createHandle ?? null;
         this.ceNative = prepared.nativeRelease ?? {

@@ -36,6 +36,12 @@ Works with curiosity-engine 1.9.2, curiosity-merge 0.8.4, and okstratr 0.2.0.
 
 - **Safer page window** — page content shown in the Graph page window is
   cleaned before it is displayed, so scripts embedded in a wiki page can't run.
+- **Graph stays current** — adding or deleting a wiki page updates the Graph
+  and the page list without a reload, and switching back to a workspace that
+  changed in the meantime shows its latest pages.
+- **Graph after a restart** — opening or reloading Switch Bay while Curiosity
+  Engine is restarting (for example right after switching workspaces) now
+  waits for it instead of showing an error.
 
 ## 2026-10-08 — v0.13.2
 

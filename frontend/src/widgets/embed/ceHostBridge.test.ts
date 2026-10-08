@@ -5,7 +5,7 @@ import { test } from "node:test";
 (globalThis as unknown as { window: unknown }).window = globalThis;
 
 const {
-  guardCeModal, isCeSplitUrl, toSwitchbaySplitBody,
+  guardCeModal, guardCeSidebar, isCeSplitUrl, toSwitchbaySplitBody,
 } = await import("./ceHostBridge.ts");
 
 test("CE modal bodies are sanitized on open (init, refresh and re-open)", () => {
@@ -54,4 +54,19 @@ test("CE split body maps onto Switch Bay's workspace split", () => {
     { name: "side-project", move: ["x"], copy: [] },
   );
   assert.deepEqual(toSwitchbaySplitBody(null), { name: "", move: [], copy: [] });
+});
+
+test("CE Sidebar.setActive is a no-op when the page list isn't mounted", () => {
+  const calls: string[] = [];
+  const sidebar = {
+    setActive(id: string) {
+      if (id === "boom") throw new TypeError("listEl is undefined");
+      calls.push(id);
+    },
+  };
+  (globalThis as unknown as { Sidebar: typeof sidebar }).Sidebar = sidebar;
+  assert.equal(guardCeSidebar(), true);
+  assert.doesNotThrow(() => sidebar.setActive("boom"));
+  sidebar.setActive("ok");
+  assert.deepEqual(calls, ["ok"]);
 });

@@ -75,6 +75,35 @@ export function guardCeModal(clean: (html: string) => string = sanitizeHtml): bo
   return true;
 }
 
+/**
+ * CE's page list helpers assume the list is mounted. In Zen (or before
+ * the sidebar mounts) CE still calls `Sidebar.setActive` on every
+ * `#page=` change and throws, which skips the node focus after it.
+ * Make those two calls safe no-ops when the list isn't there.
+ */
+export function guardCeSidebar(): boolean {
+  type SidebarApi = {
+    setActive?: (...a: unknown[]) => unknown;
+    setSearchHits?: (...a: unknown[]) => unknown;
+    __syGuarded?: boolean;
+  };
+  const sb = (window as unknown as { Sidebar?: SidebarApi }).Sidebar;
+  if (!sb || sb.__syGuarded) return !!sb;
+  for (const key of ["setActive", "setSearchHits"] as const) {
+    const orig = sb[key];
+    if (typeof orig !== "function") continue;
+    sb[key] = (...args: unknown[]) => {
+      try {
+        return orig.apply(sb, args);
+      } catch {
+        return undefined;
+      }
+    };
+  }
+  sb.__syGuarded = true;
+  return true;
+}
+
 // ── Split: CE panel → Switch Bay workspace split ────────────────────
 
 /** True for CE's split POST (raw, or already rewritten onto /embed/ce). */
