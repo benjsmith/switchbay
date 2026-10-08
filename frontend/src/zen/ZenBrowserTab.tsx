@@ -25,7 +25,7 @@ type Props = {
 
 export default function ZenBrowserTab({ data, error, filesVersion }: Props) {
   const [refreshKey, setRefreshKey] = useState(0);
-  const { uploading, dragOver, dropProps, ingestOne } = useIngestDrop();
+  const { uploading, dragOver, dropProps } = useIngestDrop();
   const key = refreshKey + filesVersion;
 
   return (
@@ -54,7 +54,6 @@ export default function ZenBrowserTab({ data, error, filesVersion }: Props) {
             <WikiPane
               data={data}
               onGraphBuild={() => setRefreshKey((k) => k + 1)}
-              onUploadFile={ingestOne}
             />
           </div>
         )}

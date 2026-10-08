@@ -151,3 +151,157 @@ async def test_rejects_requests_without_files(tmp_path: Path) -> None:
         resp = await client.post("/api/upload-vault", data=mixed)
         assert resp.status == 200
         assert (await resp.json())["saved"] == ["a.txt"]
+
+
+# ── ingest option ─────────────────────────────────────────────────────
+
+from switchbay import ingest_run_drain  # noqa: E402
+
+
+def _ingest_form(ingest: str, *files: tuple[str, bytes]) -> FormData:
+    form = FormData(quote_fields=False)
+    form.add_field("ingest", ingest)
+    for name, data in files:
+        form.add_field("file", data, filename=name,
+                       content_type="application/octet-stream")
+    return form
+
+
+@pytest.fixture
+def kicks(monkeypatch: pytest.MonkeyPatch) -> list[object]:
+    calls: list[object] = []
+    monkeypatch.setattr(ingest_run_drain, "kick_drain", calls.append)
+    return calls
+
+
+class _FakeProvider:
+    def __init__(self, ready: bool) -> None:
+        self.ready = ready
+
+    def has_key(self) -> bool:
+        return self.ready
+
+
+def _backend(monkeypatch: pytest.MonkeyPatch, *, ce: bool, provider: bool) -> None:
+    monkeypatch.setattr(daemon.cebridge, "ce_scripts_available", lambda: ce)
+    monkeypatch.setattr(daemon, "_resolve_default_provider", lambda: "fake")
+    monkeypatch.setattr(
+        daemon.llmgateway, "get",
+        lambda pid: _FakeProvider(provider and pid == "fake"),
+    )
+
+
+async def test_ingest_false_saves_without_queueing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kicks: list[object],
+) -> None:
+    _backend(monkeypatch, ce=True, provider=True)
+    async with TestClient(TestServer(_app(tmp_path))) as client:
+        resp = await client.post(
+            "/api/upload-vault", data=_ingest_form("false", ("a.md", b"# a")),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+    assert body == {"ok": True, "saved": ["a.md"]}
+    assert (tmp_path / "vault" / "raw" / "a.md").is_file()
+    assert not ingest_run_drain.runs_dir(tmp_path).exists()
+    assert kicks == []
+
+
+async def test_ingest_with_ce_queues_local_ingest_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kicks: list[object],
+) -> None:
+    _backend(monkeypatch, ce=True, provider=False)
+    app = _app(tmp_path)
+    async with TestClient(TestServer(app)) as client:
+        resp = await client.post(
+            "/api/upload-vault",
+            data=_ingest_form("true", ("a.md", b"# a"), ("b c.csv", b"x,y\n1,2\n")),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+    assert body["saved"] == ["a.md", "b_c.csv"]
+    ing = body["ingest"]
+    assert ing["backend"] == "local_ingest" and ing["queued"] is True
+    assert [r["vault_path"] for r in ing["runs"]] == [
+        "vault/raw/a.md", "vault/raw/b_c.csv",
+    ]
+    assert len(kicks) == 1  # one drain pass for the whole upload
+    queued = ingest_run_drain.list_queued_runs(tmp_path)
+    assert {r["run_id"] for r in queued} == {r["run_id"] for r in ing["runs"]}
+    assert all(r["mode"] == "staged" for r in queued)
+    assert not any(ingest_run_drain.wants_rail(r) for r in queued)
+
+    # The existing drain sends them through local_ingest, not an agent.
+    local_calls: list[str] = []
+    dispatched: list[str] = []
+
+    def fake_local(workspace, vault_path, rec):
+        local_calls.append(vault_path)
+        return {"ok": 1, "considered": 1, "failed": 0}
+
+    async def fake_dispatch(app, **kw):
+        dispatched.append(kw["run_id"])
+
+    app["runs"] = {}
+    summary = await ingest_run_drain.drain_once(
+        app, local_ingest_fn=fake_local, dispatch_fn=fake_dispatch,
+    )
+    assert sorted(summary["drained"]) == sorted(r["run_id"] for r in ing["runs"])
+    for _ in range(50):
+        if not app.get("ingest_run_inflight"):
+            break
+        await asyncio.sleep(0.02)
+    assert sorted(local_calls) == ["vault/raw/a.md", "vault/raw/b_c.csv"]
+    assert dispatched == []
+
+
+async def test_ingest_without_ce_uses_rail_agent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kicks: list[object],
+) -> None:
+    _backend(monkeypatch, ce=False, provider=True)
+    async with TestClient(TestServer(_app(tmp_path))) as client:
+        resp = await client.post(
+            "/api/upload-vault", data=_ingest_form("on", ("notes.txt", b"hi")),
+        )
+        assert resp.status == 200
+        ing = (await resp.json())["ingest"]
+    assert ing["backend"] == "agent" and ing["queued"] is True
+    queued = ingest_run_drain.list_queued_runs(tmp_path)
+    assert len(queued) == 1 and ingest_run_drain.wants_rail(queued[0])
+    assert queued[0]["vault_path"] == "vault/raw/notes.txt"
+    assert len(kicks) == 1
+
+
+async def test_ingest_without_any_backend_saves_and_explains(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kicks: list[object],
+) -> None:
+    _backend(monkeypatch, ce=False, provider=False)
+    async with TestClient(TestServer(_app(tmp_path))) as client:
+        resp = await client.post(
+            "/api/upload-vault", data=_ingest_form("true", ("notes.txt", b"hi")),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+    assert body["saved"] == ["notes.txt"]
+    assert (tmp_path / "vault" / "raw" / "notes.txt").read_bytes() == b"hi"
+    ing = body["ingest"]
+    assert ing["backend"] == "none" and ing["queued"] is False
+    assert ing["runs"] == []
+    assert "not ingested" in ing["message"]
+    assert not ingest_run_drain.runs_dir(tmp_path).exists()
+    assert kicks == []
+
+
+async def test_oversized_ingest_field_is_not_buffered(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kicks: list[object],
+) -> None:
+    _backend(monkeypatch, ce=True, provider=True)
+    async with TestClient(TestServer(_app(tmp_path))) as client:
+        resp = await client.post(
+            "/api/upload-vault",
+            data=_ingest_form("x" * 200_000 + "true", ("a.md", b"# a")),
+        )
+        assert resp.status == 200
+        body = await resp.json()
+    assert body == {"ok": True, "saved": ["a.md"]}
+    assert kicks == []

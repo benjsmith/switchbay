@@ -32,6 +32,7 @@ import { SelectionProvider } from "./selection/SelectionContext";
 import "./widgets/graph/load";    // window.Sidebar/Subgraph/Modal/Graph + ce-graph.css
 import type { GraphData } from "./widgets/graph/types";
 import Walkthrough, { maybeAutoStartWalkthrough } from "./walkthrough/Walkthrough";
+import UploadVaultDialog from "./widgets/upload/UploadVaultDialog";
 import {
   stashFormula, stashSheetSelect, stashSheetValues, stashSql, stashSketchShow, stashPlotShow,
 } from "./lib/pendingUiCommands";
@@ -2555,6 +2556,7 @@ export default function App() {
           onUpdate={requestUpdate}
         />
         <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
+        <UploadVaultDialog />
         <Walkthrough
           open={walkthroughOpen}
           onClose={() => { setWalkthroughOpen(false); setWalkthroughSettled(true); }}

@@ -5045,16 +5045,77 @@ def _safe_vault_filename(name: str) -> str:
     return name
 
 
+def _form_truthy(value: str) -> bool:
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _upload_ingest_backend() -> str:
+    """Which ingest path /api/upload-vault hands files to.
+
+    ``local_ingest``: CE is installed, so queued runs drain through CE's
+    deterministic extraction (no model). ``agent``: no CE, but the default
+    model provider is ready, so queued runs drain through the rail ingest
+    agent (one run per file). ``none``: neither, so files are only saved.
+    """
+    if cebridge.ce_scripts_available():
+        return "local_ingest"
+    # Same check _dispatch_chat makes before it will start a run.
+    try:
+        ready = llmgateway.get(_resolve_default_provider()).has_key()
+    except Exception:  # noqa: BLE001
+        log.exception("upload-vault: provider check failed")
+        ready = False
+    return "agent" if ready else "none"
+
+
+def _queue_upload_ingest(workspace: Path, saved: list[tuple[str, int]]) -> dict[str, Any]:
+    """Queue one ingest-run per saved file for the active backend.
+
+    Reuses the ingest-run queue CE's own drop-ingest writes, so the
+    existing drain loop does the work in one pass."""
+    backend = _upload_ingest_backend()
+    if backend == "none":
+        return {
+            "requested": True,
+            "backend": "none",
+            "queued": False,
+            "runs": [],
+            "message": (
+                "Saved to vault/raw/ but not ingested: no ingest backend is "
+                "available. Install Curiosity Engine or set up a model "
+                "provider in Settings, then ingest from the drop folder."
+            ),
+        }
+    mode = "staged" if backend == "local_ingest" else "llm"
+    runs = []
+    for name, size in saved:
+        rec = ingest_run_drain.enqueue_run(
+            workspace, f"vault/raw/{name}", size=size, mode=mode,
+            note="queued by the vault upload dialog",
+        )
+        runs.append({
+            "file": name,
+            "run_id": rec["run_id"],
+            "vault_path": rec["vault_path"],
+        })
+    return {"requested": True, "backend": backend, "queued": True, "runs": runs}
+
+
 async def handle_upload_vault(request: web.Request) -> web.Response:
-    """Save uploaded files as-is into ``<workspace>/vault/raw/``.
+    """Save uploaded files into ``<workspace>/vault/raw/``, optionally
+    queueing ingest.
 
     Switchbay's copy of CE's ``POST /api/upload-vault`` (viewer_server.py),
-    used by the graph sidebar's upload control in edit.js. Multipart form;
-    every part that carries a filename is saved, so several ``file``
-    fields can arrive in one request. Names are sanitised with CE's rules
-    and an existing file of the same name is replaced, as in CE. Nothing
-    is ingested here: vault/raw/ is the drop folder the ingest verb
-    drains later. Returns ``{ok, saved: [names]}``."""
+    used by the graph sidebar's upload dialog and by CE's own edit.js.
+    Multipart form; every part that carries a filename is saved, so
+    several ``file`` fields can arrive in one request. Names are
+    sanitised with CE's rules and an existing file of the same name is
+    replaced, as in CE.
+
+    An ``ingest`` form field (true/false, default false) asks for the
+    saved files to be ingested; see ``_upload_ingest_backend``. Returns
+    CE's ``{ok, saved: [names]}``, plus ``ingest: {...}`` when ingest
+    was requested."""
     if "multipart/form-data" not in (request.headers.get("Content-Type") or ""):
         return web.json_response(
             {"error": "multipart/form-data required"}, status=400,
@@ -5066,12 +5127,18 @@ async def handle_upload_vault(request: web.Request) -> web.Response:
     except (ValueError, AssertionError):
         return web.json_response({"error": "not multipart"}, status=400)
     saved: list[str] = []
+    sizes: list[tuple[str, int]] = []
+    want_ingest = False
     while True:
         part = await reader.next()
         if part is None:
             break
         if not getattr(part, "filename", None):
-            # Plain form fields (and nested multiparts) carry no file.
+            if getattr(part, "name", None) == "ingest":
+                # Small flag; never buffer an oversized field.
+                flag = await part.read_chunk(1024)
+                want_ingest = _form_truthy(flag.decode("utf-8", "ignore"))
+            # Other plain fields (and nested multiparts) carry no file.
             continue
         try:
             safe = _safe_vault_filename(part.filename)
@@ -5099,15 +5166,32 @@ async def handle_upload_vault(request: web.Request) -> web.Response:
             tmp.write_bytes(payload)
             os.replace(tmp, target)
 
-        await asyncio.to_thread(_write)
-        saved.append(safe)
+        try:
+            await asyncio.to_thread(_write)
+        except OSError as e:
+            log.warning("vault upload: writing %s failed: %s", safe, e)
+            return web.json_response(
+                {"error": f"could not save {safe}: {e.strerror or e}", "saved": saved},
+                status=500,
+            )
+        if safe in saved:
+            sizes = [(n, sz) for n, sz in sizes if n != safe]
+        else:
+            saved.append(safe)
+        sizes.append((safe, total))
         log.info("vault upload: %s (%d bytes) -> vault/raw/%s",
                  part.filename, total, safe)
     if not saved:
         return web.json_response(
             {"error": "no file part with filename"}, status=400,
         )
-    return web.json_response({"ok": True, "saved": saved})
+    body: dict[str, Any] = {"ok": True, "saved": saved}
+    if want_ingest:
+        info = await asyncio.to_thread(_queue_upload_ingest, workspace, sizes)
+        if info.get("queued"):
+            ingest_run_drain.kick_drain(request.app)
+        body["ingest"] = info
+    return web.json_response(body)
 
 
 async def handle_ingest_from_upload(request: web.Request) -> web.Response:

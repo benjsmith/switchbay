@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { openUploadVaultDialog } from "../lib/uploadVault.ts";
 import { useSelection } from "../selection/SelectionContext";
 import { useTabs } from "../center/TabsContext";
 import { notifyHtmlDeckOpen } from "../widgets/htmldeck/htmlDeckOpen";
@@ -1054,6 +1055,16 @@ export default function FileBrowser({
               : "plain text (substring) · *.pdf (filetype) · /pat/flags (regex)"
           }
         />
+        <button
+          type="button"
+          className="sy-fb-ctrl"
+          onClick={openUploadVaultDialog}
+          title="Add files to the vault (vault/raw/), optionally ingesting them"
+          aria-label="Add files to the vault"
+          data-testid="fb-upload-vault"
+        >
+          +
+        </button>
         <button
           type="button"
           className="sy-fb-ctrl"

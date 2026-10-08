@@ -3,9 +3,11 @@ import { ingestFile } from "../lib/ingest";
 
 /**
  * Drop-to-ingest, shared by every browse surface (D5). The Power
- * sidebar column and the Zen Browser surface are the same pipeline as
- * the `+` upload: dropped files or folders are staged into the vault
- * and each dispatches a background ingest agent.
+ * sidebar column and the Zen Browser surface share one pipeline:
+ * dropped files or folders are staged into the vault and each
+ * dispatches a background ingest agent. (The `+` button opens
+ * UploadVaultDialog instead, which saves to vault/raw/ and only
+ * ingests when asked.)
  *
  * Lives apart from Sidebar.tsx so the two surfaces can't drift — a
  * second copy of the traversal/confirm/concurrency rules is exactly
@@ -60,8 +62,8 @@ export async function collectDroppedFiles(items: DataTransferItemList): Promise<
 }
 
 export type IngestDrop = {
-  /** Progress label while runs are being dispatched (`"3/12"` for a
-   *  drop, the filename for a single `+` pick). null when idle. */
+  /** Progress label while a drop's runs are being dispatched
+   *  (`"3/12"`). null when idle. */
   uploading: string | null;
   /** True while a file drag hovers the surface — render the veil. */
   dragOver: boolean;
@@ -72,8 +74,6 @@ export type IngestDrop = {
     onDragOver: (ev: React.DragEvent) => void;
     onDrop: (ev: React.DragEvent) => void;
   };
-  /** The `+` upload path: one file, straight to a run. */
-  ingestOne: (file: File) => Promise<void>;
 };
 
 export function useIngestDrop(): IngestDrop {
@@ -81,27 +81,6 @@ export function useIngestDrop(): IngestDrop {
   const [dragOver, setDragOver] = useState(false);
   // Suppresses the flicker of dragleave firing on every child hop.
   const dragDepth = useRef(0);
-
-  const ingestOne = useCallback(async (file: File) => {
-    setUploading(file.name);
-    try {
-      const runId = await ingestFile(file);
-      if (!runId) {
-        window.alert("Upload failed");
-        return;
-      }
-      // Drop the user into Agent Dashboard with the run's transcript
-      // auto-expanded. The existing rail-jump bridge does the tab swap
-      // (or Zen surface swap) + expand-after-mount choreography.
-      window.dispatchEvent(new CustomEvent("sy:open-agents-run", {
-        detail: { run_id: runId },
-      }));
-    } catch (e) {
-      window.alert(`Upload failed: ${(e as Error).message}`);
-    } finally {
-      setUploading(null);
-    }
-  }, []);
 
   const onDrop = useCallback(async (ev: React.DragEvent) => {
     ev.preventDefault();
@@ -160,7 +139,6 @@ export function useIngestDrop(): IngestDrop {
   return {
     uploading,
     dragOver,
-    ingestOne,
     dropProps: {
       onDragEnter: (ev) => {
         if (!ev.dataTransfer.types.includes("Files")) return;

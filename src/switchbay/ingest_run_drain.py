@@ -101,6 +101,41 @@ def build_ingest_prompt(vault_path: str, *, size: int | None = None) -> str:
     )
 
 
+def enqueue_run(
+    workspace: Path,
+    vault_path: str,
+    *,
+    size: int | None = None,
+    mode: str = "staged",
+    note: str | None = None,
+) -> dict[str, Any]:
+    """Write a queued ``.workbench/ingest-runs/<run_id>.json`` for a file
+    already in the workspace (same record shape CE's drop-ingest writes).
+
+    ``mode="staged"`` drains through deterministic ``local_ingest``;
+    ``mode="llm"`` drains through the rail ingest agent (``wants_rail``).
+    Returns the record."""
+    import uuid
+
+    run_id = f"run-{uuid.uuid4().hex[:8]}"
+    rec: dict[str, Any] = {
+        "run_id": run_id,
+        "status": "queued",
+        "kind": "ingest-upload",
+        "vault_path": vault_path,
+        "filename": Path(vault_path).name,
+        "mode": mode,
+    }
+    if size is not None:
+        rec["size"] = int(size)
+    if note:
+        rec["note"] = note
+    path = run_path(workspace, run_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    atomicio.write_json_atomic(path, rec)
+    return rec
+
+
 def list_queued_runs(workspace: Path) -> list[dict[str, Any]]:
     """Read ``.workbench/ingest-runs/*.json`` with status queued/accepted."""
     d = runs_dir(workspace)

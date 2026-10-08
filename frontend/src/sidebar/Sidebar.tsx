@@ -62,7 +62,8 @@ function BottomSeg({
  *     provenance tree over external `extracted_from` paths.
  * The whole column is a drop target (D5): dropping files or folders
  * stages them into the vault and dispatches background ingest agents
- * — same pipeline as the `+` upload.
+ * — the `+` button instead opens the upload dialog (vault/raw/,
+ * ingest optional).
  *
  * Zen mode shows the same three browsers side by side instead — see
  * ZenBrowserTab, which composes the same parts.
@@ -75,7 +76,7 @@ export default function Sidebar({ data, error, filesVersion }: Props) {
   // between the on-disk file tree and the external-sources
   // provenance tree.
   const [view, setView] = useState<"files" | "sources">("files");
-  const { uploading, dragOver, dropProps, ingestOne } = useIngestDrop();
+  const { uploading, dragOver, dropProps } = useIngestDrop();
   useEffect(() => {
     const onReveal = () => setView("files");
     window.addEventListener("sy:reveal-file", onReveal);
@@ -121,7 +122,6 @@ export default function Sidebar({ data, error, filesVersion }: Props) {
             <WikiPane
               data={data}
               onGraphBuild={() => setRefreshKey((k) => k + 1)}
-              onUploadFile={ingestOne}
             />
           </div>
           {error && (
