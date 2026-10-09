@@ -32,7 +32,7 @@ import { SelectionProvider } from "./selection/SelectionContext";
 import "./palette.css";    // theme vars + wiki-type palette + shared markdown view
 import { useCeGraph } from "./widgets/embed/useProxiedSkillEmbeds";
 import { resetCeEmbedSession } from "./widgets/embed/ceEmbedSession";
-import type { GraphData } from "./widgets/graph/types";
+import type { GraphData } from "./lib/graphTypes";
 import Walkthrough, { maybeAutoStartWalkthrough } from "./walkthrough/Walkthrough";
 import UploadVaultDialog from "./widgets/upload/UploadVaultDialog";
 import {

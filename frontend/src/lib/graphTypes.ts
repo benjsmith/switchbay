@@ -1,4 +1,4 @@
-/** Schema of /api/graph/data — emitted by curiosity-engine's wiki_render.py. */
+/** Schema of CE's wiki-view data.json (curiosity-engine wiki_render.py). */
 export type GraphData = {
   workspace: string;
   generated_at: string;

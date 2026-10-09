@@ -12,7 +12,7 @@ in the Switch Bay repo.
 ## What you get
 
 - **Wiki**, **Files**, and **Projects** in the activity bar (Wiki is the same WikiPage set as Graph, from `.curator/graph.kuzu`; Files is the wiki folder on disk; both show the wiki name at the top. Refresh rebuilds the graph)
-- **Graph / Atlas** webview (edges from `.curator/graph.kuzu`)
+- **Graph / Atlas**: Curiosity Engine's own viewer in a webview, the same one as Switch Bay's Graph tab (needs a curiosity-engine install)
 - Wiki markdown preview with `[[wikilinks]]`, `![[figures/_assets/…]]`, and clickable sources
 - **Ingest file / folder** from the Wiki view and Explorer (CE `local_ingest.py`)
 - **Stop** on the Agent Dashboard (retires the DAG; tries to cancel Chat)
@@ -57,7 +57,7 @@ Local models…**.
 
 | Command | What it does |
 | --- | --- |
-| Open Graph | Classic force graph; **view:** switches to Atlas |
+| Open Graph | Curiosity Engine's viewer: classic force graph, **view:** switches to Atlas; click a page to read it, notes/todos are editable; **Open markdown** / right-click opens the file |
 | Open Wiki Preview | Rendered wiki page with sources |
 | Open Agent Dashboard | DAG / tools / rules / models |
 | Curate (Agents session) | Opens a VS Code Agents session on Auto |
@@ -83,7 +83,7 @@ Custom agents: Auto, Curator, Reviewer. Investigator is subagent-only.
 
 ```
 make vsix
-code --install-extension dist/switchbay-vs-0.3.17.vsix
+code --install-extension dist/switchbay-vs-0.3.18.vsix
 ```
 
 That same command **updates** an older sideload (same `publisher` + `name`). Then **Developer: Reload Window**. Command Palette → **Switch Bay VS: Update extension…** walks the same path if `dist/*.vsix` is already built.

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useState } from "react";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import type { Selection } from "../ws";
 import type { UiMode } from "../layout/ModeToggle";
 import { UI_MODE_KEY } from "../layout/ModeToggle";

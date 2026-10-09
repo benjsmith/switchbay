@@ -1,4 +1,4 @@
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import FileBrowser from "../sidebar/FileBrowser";
 import SourceBrowser from "../sidebar/SourceBrowser";
 import CeSidebarSlot from "../widgets/embed/CeSidebarSlot";

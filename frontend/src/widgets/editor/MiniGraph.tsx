@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import * as d3 from "d3";
-import type { GraphData } from "../graph/types";
+import type { GraphData } from "../../lib/graphTypes";
 import { useSelection } from "../../selection/SelectionContext";
 
 type Props = {

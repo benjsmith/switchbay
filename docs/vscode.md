@@ -67,7 +67,7 @@ Explorer context **Ingest into wiki vault** runs CE `local_ingest.py` (pypdf/tex
 | Surface | How |
 | --- | --- |
 | Wiki / Files / Projects | Activity bar (Switch Bay icon). Wiki is the same WikiPage set as Graph (`graph.kuzu`). Files is the wiki folder on disk (`wiki/`, `vault/`, …) — not the code-repo Explorer. Both show the wiki folder name (`curiosity-test`) at the top. **Refresh** runs `graph.py rebuild`. |
-| Graph / Atlas | Wiki view title **Open Graph**; **view:** switches Atlas. Center-top search highlights canvas nodes, Wiki-tree pages, and Files-tree rows (vault sources included); **×** clears. |
+| Graph / Atlas | Wiki view title **Open Graph**. Curiosity Engine's own viewer, the same as the app's Graph tab: **view:** switches Atlas, clicking a page opens its page window (notes/todos editable via the padlock), **Open markdown** / **Open preview** / **Reveal in Explorer** in the page window and on right-click. Center-top search highlights canvas nodes, Wiki-tree pages, and Files-tree rows (vault sources included); Escape or **×** clears. Repaints when wiki pages change. Without a curiosity-engine install the view says so instead. |
 | Wiki preview | Editor title on a `wiki/**/*.md` tab |
 | Agent Dashboard | Wiki view title, or **Open Agent Dashboard** |
 | Chat | `@switchbay` (`/curate`, `/thrusters`, `/plot`, `/deck`, `/sketch`) |

@@ -138,7 +138,7 @@ function loadScript(src: string): Promise<void> {
   });
 }
 
-function loadCss(href: string): HTMLLinkElement {
+export function loadCss(href: string): HTMLLinkElement {
   let link = document.querySelector<HTMLLinkElement>(
     `link[data-sy-ce-embed-css="${href}"]`,
   );
@@ -198,7 +198,7 @@ async function installFetchShim(publicBase: string): Promise<() => void> {
   };
 }
 
-async function loadCeModules(publicBase: string): Promise<void> {
+export async function loadCeModules(publicBase: string): Promise<void> {
   const base = publicBase.replace(/\/$/, "") || "";
   loadCss(`${base}/static/main.css`);
   try {
