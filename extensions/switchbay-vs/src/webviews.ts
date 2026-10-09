@@ -2,9 +2,12 @@ import * as fs from "fs";
 import * as path from "path";
 import * as vscode from "vscode";
 import {
-  kuzuDbExists, loadCurationHistory, readCachedGraph,
-  rebuildKuzuGraph, wikiPageUri, type GraphData, type GraphNode,
+  ceRoot, dataJsonPath, kuzuDbExists, loadCurationHistory,
+  rebuildKuzuGraph, rebuildViewer, wikiPageUri, type GraphNode,
 } from "./ce";
+import {
+  answerCeApi, bundleFresh, ceViewerAvailable, type ApiHost, type ApiReply,
+} from "./graphBundle";
 import { startNamedAgentSession } from "./agentsSession";
 import {
   agentsDashboardHtml, dashboardPayload, deleteRule,
@@ -15,7 +18,7 @@ import {
 import { offerKeepRunning } from "./keepAlive";
 import { applyOrchestrationReport, clearFinishedRuns, finishRun, listRuns, recordMcpActivity, runsRoot, stopRun } from "./orch";
 import { hopperDir, workspaceFolder } from "./paths";
-import { wikiFolderUri, wikiFsPath } from "./wikiRoot";
+import { wikiFolderUri } from "./wikiRoot";
 import { setPreference } from "./preference";
 import { openWikiPage } from "./preview";
 import { deleteSchedule, runScheduleNow, upsertSchedule } from "./schedules";
@@ -32,94 +35,214 @@ function graphMediaRoot(context: vscode.ExtensionContext): vscode.Uri {
   return vscode.Uri.joinPath(context.extensionUri, "media", "graph");
 }
 
-function graphWebviewHtml(webview: vscode.Webview, mediaRoot: vscode.Uri): string | null {
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]!));
+}
+
+function messageHtml(title: string, text: string): string {
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'" />
+<style>body{font:13px/1.5 var(--vscode-font-family,sans-serif);color:var(--vscode-foreground);padding:2rem;max-width:42rem}
+h2{font-weight:600;font-size:1.1rem;margin:0 0 .5rem}code{font-family:var(--vscode-editor-font-family,monospace)}</style>
+</head><body><h2>${escapeHtml(title)}</h2><p>${text}</p></body></html>`;
+}
+
+/**
+ * The graph view is Curiosity Engine's viewer. Its scripts, styles and
+ * figures come from CE's built wiki-view bundle (served as webview
+ * resources); its API calls come back over postMessage.
+ */
+function graphWebviewHtml(
+  webview: vscode.Webview,
+  mediaRoot: vscode.Uri,
+  bundle: vscode.Uri,
+  workspace: string,
+): string | null {
   const index = path.join(mediaRoot.fsPath, "webview-graph.html");
   if (!fs.existsSync(index)) return null;
   let html = fs.readFileSync(index, "utf8");
   const csp = [
     `default-src 'none'`,
-    `img-src ${webview.cspSource} data:`,
+    `img-src ${webview.cspSource} data: blob:`,
     `font-src ${webview.cspSource} data:`,
     `style-src ${webview.cspSource} 'unsafe-inline'`,
     `script-src ${webview.cspSource}`,
+    `worker-src ${webview.cspSource} blob:`,
   ].join("; ");
-  html = html.replace(
-    "<head>",
-    `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`,
-  );
   html = html.replace(/(src|href)="(\.\/[^"]+)"/g, (_m, attr: string, rel: string) => {
     const uri = webview.asWebviewUri(vscode.Uri.joinPath(mediaRoot, rel.replace(/^\.\//, "")));
     return `${attr}="${uri}"`;
   });
+  const bundleUri = webview.asWebviewUri(bundle).toString().replace(/\/$/, "");
+  // JSON data block, never executed; `<` escaped so page text can't close it.
+  const config = JSON.stringify({ bundle: bundleUri, workspace }).replace(/</g, "\\u003c");
+  html = html.replace(
+    "<head>",
+    `<head>\n<meta http-equiv="Content-Security-Policy" content="${csp}" />`
+    // CE's page bodies reference figures relative to the bundle root.
+    + `\n<base href="${bundleUri}/" />`
+    + `\n<script type="application/json" id="sy-graph-config">${config}</script>`,
+  );
   return html;
 }
 
-export function openGraph(
-  context: vscode.ExtensionContext,
-  opts?: { onSearch?: (paths: string[], sourcePaths?: string[]) => void },
-): void {
-  const folder = wikiFolderUri() || workspaceFolder();
-  if (!folder) {
+type GraphOpts = { onSearch?: (paths: string[], sourcePaths?: string[]) => void };
+
+let graphPanel: vscode.WebviewPanel | undefined;
+let graphRender: (() => Promise<void>) | undefined;
+let graphRefreshTimer: ReturnType<typeof setTimeout> | undefined;
+/** Wiki or graph db changed at this time; older bundles get rebuilt. */
+let graphStaleSince = 0;
+
+/** Our own bundle builds read graph.kuzu; ignore db events they cause. */
+let graphBuilding = false;
+let graphQuietUntil = 0;
+
+/**
+ * Wiki pages or the graph db changed on disk: rebuild CE's bundle on
+ * next fetch and repaint an open graph.
+ */
+export function refreshGraph(source: "wiki" | "db" = "wiki"): void {
+  if (source === "db" && (graphBuilding || Date.now() < graphQuietUntil)) return;
+  graphStaleSince = Date.now();
+  if (!graphPanel) return;
+  if (graphRefreshTimer) clearTimeout(graphRefreshTimer);
+  graphRefreshTimer = setTimeout(() => {
+    graphRefreshTimer = undefined;
+    void graphPanel?.webview.postMessage({ type: "refresh" });
+  }, 600);
+}
+
+/** The wiki root setting changed: reload an open graph for the new workspace. */
+export function graphWorkspaceChanged(): void {
+  void graphRender?.();
+}
+
+export function openGraph(context: vscode.ExtensionContext, opts?: GraphOpts): void {
+  if (graphPanel) {
+    graphPanel.reveal(graphPanel.viewColumn ?? vscode.ViewColumn.One);
+    return;
+  }
+  if (!(wikiFolderUri() || workspaceFolder())) {
     void vscode.window.showWarningMessage("Open a curiosity-engine folder first.");
     return;
   }
   const mediaRoot = graphMediaRoot(context);
-  const wikiRoot = vscode.Uri.file(wikiFsPath() || folder.fsPath);
-  const figures = vscode.Uri.joinPath(wikiRoot, "wiki", "figures");
   const panel = vscode.window.createWebviewPanel(
     "switchbay.graph",
     "Graph",
     vscode.ViewColumn.One,
-    {
-      enableScripts: true,
-      retainContextWhenHidden: true,
-      localResourceRoots: [mediaRoot, wikiRoot, figures],
-    },
+    { enableScripts: true, retainContextWhenHidden: true, localResourceRoots: [mediaRoot] },
   );
-  const html = graphWebviewHtml(panel.webview, mediaRoot);
-  if (!html) {
-    panel.webview.html = `<p style="padding:1.5rem;font-family:sans-serif">Graph viewer is not built yet.
-      From the Switch Bay repo run <code>pnpm --dir frontend run build:webview</code> then F5 again.</p>`;
-    return;
-  }
-  const sendGraph = async () => {
-    const ws = folder.fsPath;
-    if (!kuzuDbExists(ws)) {
-      await vscode.window.withProgress(
-        {
-          location: vscode.ProgressLocation.Notification,
-          title: "Building knowledge graph (graph.kuzu missing)…",
-          cancellable: false,
-        },
-        async () => {
-          const r = await rebuildKuzuGraph(ws);
-          if (!r.ok) {
-            void vscode.window.showWarningMessage(
-              `Could not build graph.kuzu: ${r.text.slice(0, 300)}`,
-            );
-          }
-        },
-      );
+  graphPanel = panel;
+  let workspace = "";
+
+  const rebuild = async (): Promise<void> => {
+    graphBuilding = true;
+    let r: { ok: boolean; text: string };
+    try {
+      if (!kuzuDbExists(workspace)) await rebuildKuzuGraph(workspace);
+      r = await rebuildViewer(context, workspace);
+    } finally {
+      graphBuilding = false;
+      graphQuietUntil = Date.now() + 3000;
     }
-    const graph: GraphData = readCachedGraph(ws) ?? { nodes: [], edges: [] };
-    if (graph.pages) {
-      for (const page of Object.values(graph.pages)) delete page.body_html;
+    if (!r.ok) {
+      void vscode.window.showWarningMessage(`Could not build the graph: ${r.text.slice(-300)}`);
     }
-    void panel.webview.postMessage({ graph });
   };
+  let building: Promise<void> | null = null;
+  const ensureBundle = async (progress: boolean): Promise<void> => {
+    const bundleDir = path.dirname(dataJsonPath(workspace));
+    if (bundleFresh(bundleDir, path.join(workspace, "wiki"), [], graphStaleSince)) return;
+    if (!building) {
+      const run = progress
+        ? () => Promise.resolve(vscode.window.withProgress(
+          { location: vscode.ProgressLocation.Notification, title: "Building knowledge graph…" },
+          rebuild,
+        ))
+        : rebuild;
+      building = run().finally(() => { building = null; });
+    }
+    await building;
+  };
+
+  const host = (): ApiHost => ({
+    wikiDir: path.join(workspace, "wiki"),
+    data: async () => {
+      await ensureBundle(false);
+      try { return fs.readFileSync(dataJsonPath(workspace), "utf8"); } catch { return null; }
+    },
+    rebuild: async () => {
+      graphStaleSince = Date.now();
+      await ensureBundle(false);
+    },
+    history: () => loadCurationHistory(context, workspace),
+  });
+
+  const render = async (): Promise<void> => {
+    const folder = wikiFolderUri() || workspaceFolder();
+    if (!folder) {
+      panel.webview.html = messageHtml("No workspace", "Open a curiosity-engine folder to see its graph.");
+      return;
+    }
+    workspace = folder.fsPath;
+    panel.title = `Graph — ${path.basename(workspace)}`;
+    const ce = ceRoot();
+    if (!ceViewerAvailable(ce)) {
+      // Same rule as the PWA, which hides its Graph tab without CE.
+      panel.webview.html = messageHtml(
+        "Graph needs Curiosity Engine",
+        "The graph is Curiosity Engine's viewer, and no Curiosity Engine install was found "
+        + "(looked in <code>~/.claude/skills/curiosity-engine</code>, <code>~/.agents/skills/curiosity-engine</code> "
+        + "and <code>$SWITCHBAY_CE_ROOT</code>). Install or update Curiosity Engine, then reopen the graph.",
+      );
+      return;
+    }
+    if (!fs.existsSync(path.join(mediaRoot.fsPath, "webview-graph.html"))) {
+      panel.webview.html = messageHtml(
+        "Graph viewer is not built yet",
+        "From the Switch Bay repo run <code>pnpm --dir frontend run build:webview</code>, then reload.",
+      );
+      return;
+    }
+    panel.webview.html = messageHtml("Graph", "Building knowledge graph…");
+    await ensureBundle(true);
+    const bundle = vscode.Uri.file(path.dirname(dataJsonPath(workspace)));
+    if (!fs.existsSync(path.join(bundle.fsPath, "static", "embed.js"))) {
+      panel.webview.html = messageHtml(
+        "Graph could not be built",
+        "Curiosity Engine did not produce a viewer bundle for this workspace. See the warning for details.",
+      );
+      return;
+    }
+    panel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [mediaRoot, bundle],
+    };
+    panel.webview.html = graphWebviewHtml(panel.webview, mediaRoot, bundle, path.basename(workspace))
+      ?? messageHtml("Graph", "Graph viewer is missing.");
+  };
+  graphRender = render;
+
   panel.webview.onDidReceiveMessage(async (msg: {
     type?: string;
+    id?: number;
+    method?: string;
+    path?: string;
+    body?: string;
     node?: GraphNode;
     paths?: string[];
     sourcePaths?: string[];
   }) => {
-    if (msg.type === "ready") {
-      await sendGraph();
-      return;
-    }
-    if (msg.type === "history") {
-      const history = await loadCurationHistory(context, folder.fsPath);
-      void panel.webview.postMessage({ type: "curation-history", history });
+    if (msg.type === "api" && typeof msg.id === "number") {
+      let reply: ApiReply;
+      try {
+        reply = await answerCeApi(host(), (msg.method || "GET").toUpperCase(), msg.path || "/", msg.body);
+      } catch (e) {
+        reply = { status: 500, body: JSON.stringify({ error: String(e) }) };
+      }
+      void panel.webview.postMessage({ type: "api-result", id: msg.id, ...reply });
       return;
     }
     if (msg.type === "search") {
@@ -127,8 +250,8 @@ export function openGraph(
       return;
     }
     const node = msg.node;
-    if (!node) return;
-    const uri = wikiPageUri(folder, node.path);
+    if (!node || !workspace) return;
+    const uri = wikiPageUri(vscode.Uri.file(workspace), node.path);
     if (msg.type === "open") {
       await openWikiPage(uri);
       return;
@@ -149,9 +272,13 @@ export function openGraph(
       });
     }
   });
-  panel.webview.html = html;
-  panel.onDidDispose(() => opts?.onSearch?.([]));
+  panel.onDidDispose(() => {
+    graphPanel = undefined;
+    graphRender = undefined;
+    opts?.onSearch?.([]);
+  });
   context.subscriptions.push(panel);
+  void render();
 }
 
 export function openHopper(context: vscode.ExtensionContext): void {

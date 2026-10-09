@@ -3,8 +3,8 @@
 Spawns `bash <ce_root>/scripts/viewer.sh build` with cwd=workspace, which
 invokes wiki_render.py and produces a bundle at
 `~/.cache/curiosity-engine/wiki-view/<basename(workspace)>/`. We only
-care about `data.json` from that bundle — the static assets are forked
-into `frontend/src/widgets/graph/`.
+care about `data.json` from that bundle here; the Graph tab and the VS Code
+graph view load CE's own viewer scripts from the same bundle / install.
 
 If the workspace lacks a `wiki/` subdir, viewer.sh exits non-zero and we
 return None so the graph tab can show an empty state.
@@ -993,8 +993,8 @@ async def build(
 #     terracotta, too close to entity bright-orange)
 #
 # Singular and plural forms because frontmatter uses singular while
-# subdir / data.json keys can be either. CSS variables in
-# `widgets/graph/ce-graph.css` mirror these values.
+# subdir / data.json keys can be either. The `--type-*` CSS variables in
+# `frontend/src/palette.css` mirror these values.
 _PALETTE_OVERRIDE: dict[str, str] = {
     # Mirrors CE's wiki_render.PALETTE so the data.json palette
     # the d3 graph reads matches the --type-* CSS tokens the

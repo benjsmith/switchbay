@@ -22,7 +22,9 @@ import { ProjectsTreeProvider } from "./projectsTree";
 import { startScheduleTicker, upsertSchedule } from "./schedules";
 import { configurePython, maybeOfferSetup, probeSwitchbay } from "./setup";
 import { checkAndOfferUpdate } from "./update";
-import { openAgents, openGraph, openHopper, openHtml } from "./webviews";
+import {
+  graphWorkspaceChanged, openAgents, openGraph, openHopper, openHtml, refreshGraph,
+} from "./webviews";
 import { WikiSearchDecorations, WikiTreeProvider } from "./wikiTree";
 import { registerLocalModels } from "./localModels";
 
@@ -215,6 +217,7 @@ export function activate(context: vscode.ExtensionContext): void {
   }
   const onWiki = (uri: vscode.Uri) => {
     ping();
+    if (uri.fsPath.endsWith(".md") && uri.fsPath.includes(`${path.sep}wiki${path.sep}`)) refreshGraph();
     const open = folder?.fsPath || wikiRoot;
     if (!open) return;
     const rel = wikiRoot
@@ -225,6 +228,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const onGraphDb = () => {
     invalidateKuzuCache();
     ping();
+    refreshGraph("db");
   };
   for (const base of watchBases) {
     for (const glob of ["wiki/**/*.md", ".workbench/proposals/**"]) {
@@ -405,6 +409,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ) {
         invalidateWikiRootCache();
         ping();
+        graphWorkspaceChanged();
         writeWorkspaceMcpJson(context);
         notifyMcpDefinitionsChanged();
         void refreshPythonStatus();
@@ -412,6 +417,7 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       ping();
+      graphWorkspaceChanged();
       void refreshPythonStatus();
     }),
   );

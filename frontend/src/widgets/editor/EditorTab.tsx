@@ -10,7 +10,7 @@ import { useTabs } from "../../center/TabsContext";
 import { expandWikilinks, parseFrontmatter } from "./mdview";
 import MiniGraph from "./MiniGraph";
 import { PropertyValue } from "./SourceCite";
-import type { GraphData } from "../graph/types";
+import type { GraphData } from "../../lib/graphTypes";
 import {
   getBreadcrumb, subscribe as subscribeBreadcrumb,
   type ProjectBreadcrumb,

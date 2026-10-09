@@ -4,10 +4,12 @@ import { defineConfig } from "vite";
 
 const dir = path.dirname(fileURLToPath(import.meta.url));
 
-/** Standalone Graph/Atlas bundle for the VS Code webview. */
+/** VS Code graph webview: a thin host that loads Curiosity Engine's viewer. */
 export default defineConfig({
   root: dir,
   base: "./",
+  // PWA icons / service worker belong to the app, not the webview.
+  publicDir: false,
   build: {
     outDir: path.resolve(dir, "../extensions/switchbay-vs/media/graph"),
     emptyOutDir: true,

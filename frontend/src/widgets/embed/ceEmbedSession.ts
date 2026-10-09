@@ -17,6 +17,7 @@ import {
   type CeEmbedHandle,
   type CeEmbedOptions,
 } from "./ceEmbedBootstrap.ts";
+import { bindCeReplay } from "./ceHostBridge.ts";
 import { renderSidebarShell, workspaceLabel } from "./ceSidebarHeader.ts";
 
 export type CeMountPoints = {
@@ -423,6 +424,7 @@ class CeEmbedSession {
         try {
           // First mount OR soft reattach from park — CEEmbed decides.
           handle.mountCanvas(this.canvasEl);
+          bindCeReplay(this.canvasEl, handle.getData?.() ?? data);
           if (!this.canvasHandle) {
             this.canvasHandle = {
               destroy: () => {

@@ -35,7 +35,7 @@ function fmtRel(epoch_s: number): string {
 }
 
 function typeColor(type: string): string {
-  // Map matches CE's type palette in ce-graph.css.
+  // Map matches CE's type palette (palette.css --type-*).
   const m: Record<string, string> = {
     analysis: "var(--type-analysis)",
     concept: "var(--type-concept)",

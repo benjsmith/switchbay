@@ -202,7 +202,7 @@ function loadMath(): Promise<MathRenderer | null> {
 
 const MATH_HINT = /\$|\\\(|\\\[/;
 
-function renderMath(body: HTMLElement): void {
+export function renderMath(body: HTMLElement): void {
   if (!MATH_HINT.test(body.textContent || "")) return;
   void loadMath().then((render) => {
     if (!render || !body.isConnected) return;
@@ -307,6 +307,39 @@ function attachTableLinkouts(body: HTMLElement, originHint: string): void {
     }));
     table.parentNode?.insertBefore(row, table);
   });
+}
+
+/**
+ * CE's Edit module forgets its "Saved" toast when it is re-initialised
+ * (every canvas remount), so a remount while the toast shows leaves it
+ * stuck on screen and its hide timer throws. Remount after it hides.
+ */
+export async function waitForCeToast(maxMs = 3000): Promise<void> {
+  const t0 = Date.now();
+  while (Date.now() - t0 < maxMs) {
+    const el = document.getElementById("edit-toast");
+    if (!el || !el.classList.contains("visible")) return;
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/**
+ * CE's embed mounts the canvas but leaves the "replay" control unwired
+ * (only CE's standalone main.js calls CurationReplay.init). Wire it once
+ * per rendered toggle.
+ */
+export function bindCeReplay(root: ParentNode, data: unknown): boolean {
+  const btn = root.querySelector<HTMLElement>("#replay-toggle");
+  const replay = (window as { CurationReplay?: { init?: (d: unknown) => void } }).CurationReplay;
+  if (!btn || btn.dataset.syReplay === "1" || typeof replay?.init !== "function") return false;
+  btn.dataset.syReplay = "1";
+  try {
+    replay.init(data);
+  } catch (e) {
+    console.warn("[ce-replay] init failed", e);
+    return false;
+  }
+  return true;
 }
 
 /** Page id currently shown in CE's modal (from the URL hash CE keeps). */

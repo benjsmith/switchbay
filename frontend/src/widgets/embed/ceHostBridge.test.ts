@@ -5,7 +5,7 @@ import { test } from "node:test";
 (globalThis as unknown as { window: unknown }).window = globalThis;
 
 const {
-  guardCeModal, guardCeSidebar, isCeSplitUrl, toSwitchbaySplitBody,
+  bindCeReplay, guardCeModal, guardCeSidebar, isCeSplitUrl, toSwitchbaySplitBody,
 } = await import("./ceHostBridge.ts");
 
 test("CE modal bodies are sanitized on open (init, refresh and re-open)", () => {
@@ -69,4 +69,23 @@ test("CE Sidebar.setActive is a no-op when the page list isn't mounted", () => {
   assert.doesNotThrow(() => sidebar.setActive("boom"));
   sidebar.setActive("ok");
   assert.deepEqual(calls, ["ok"]);
+});
+
+test("CE's replay control is wired once per rendered toggle", () => {
+  const inits: unknown[] = [];
+  (globalThis as unknown as { CurationReplay: unknown }).CurationReplay = {
+    init(d: unknown) { inits.push(d); },
+  };
+  const btn = { dataset: {} as Record<string, string> };
+  const root = { querySelector: (sel: string) => (sel === "#replay-toggle" ? btn : null) };
+  const data = { nodes: [] };
+  assert.equal(bindCeReplay(root as unknown as ParentNode, data), true);
+  assert.equal(bindCeReplay(root as unknown as ParentNode, data), false);
+  assert.deepEqual(inits, [data]);
+  // A fresh shell (remount) gets wired again.
+  const fresh = { dataset: {} as Record<string, string> };
+  assert.equal(bindCeReplay({ querySelector: () => fresh } as unknown as ParentNode, data), true);
+  assert.equal(inits.length, 2);
+  // No toggle in the shell → nothing to do.
+  assert.equal(bindCeReplay({ querySelector: () => null } as unknown as ParentNode, data), false);
 });

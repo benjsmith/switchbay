@@ -4,38 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Graph</title>
-  <!-- classic SVG needs a real height; VS Code webviews start at 0 without this. -->
   <style>
-    html, body, #root, #mount, .ce-graph-root {
-      height: 100%; width: 100%; margin: 0; padding: 0;
-      overflow: hidden; box-sizing: border-box; min-width: 0;
-      min-height: 100%; min-height: 100vh;
+    html, body { height: 100%; width: 100%; margin: 0; overflow: hidden; }
+    /* VS Code injects body padding; it clips the right-hand chrome. */
+    body { padding: 0 !important; background: var(--bg, #0f1115); color: var(--text, #e6e8eb); }
+    #mount { position: absolute; inset: 0; display: flex; flex-direction: column; min-width: 0; }
+    #mount > #graph-pane { flex: 1; min-height: 0; min-width: 0; position: relative; display: flex; flex-direction: column; }
+    #mount #graph { flex: 1; min-height: 120px; min-width: 0; }
+    .sy-status {
+      position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+      padding: 2rem; text-align: center; font: 13px/1.5 var(--vscode-font-family, sans-serif);
+      color: var(--vscode-descriptionForeground, #9aa0a6); z-index: 60;
     }
-    /* VS Code injects body padding; width:100% + padding clips right chrome. */
-    body { padding: 0 !important; scrollbar-width: none; }
-    html::-webkit-scrollbar, body::-webkit-scrollbar { display: none; }
-    #root, .sy-graph-host, .sy-graph-mount, .ce-graph-root {
-      display: flex; flex-direction: column;
-    }
-    #graph-pane {
-      flex: 1; min-height: 0; min-width: 0;
-      display: flex; flex-direction: column;
-      position: relative;
-    }
-    #graph { flex: 1; min-height: 120px; min-width: 0; }
-    /* Labels/view stay bottom-left (PWA default). Search is center-top.
-       z-index above the canvas; waitForSize in the host avoids a 0-height
-       first layout clipping the HUD. */
-    .graph-controls { z-index: 40; }
-    .label-types-panel { z-index: 41; }
-    .graph-search { z-index: 42; }
-    /* Keep gear + minimap inside the webview; overflow:hidden eats their
-       right edge at the PWA's 12–14px inset. */
-    .settings-trigger, .settings-panel { right: 22px; z-index: 40; }
-    .atlas-minimap, .classic-minimap { right: 20px !important; }
-    body { background: var(--bg, #0f1115); color: var(--text, #e6e8eb); }
+    .sy-status[hidden] { display: none; }
+    .sy-vscode-page-actions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+    .sy-vscode-page-actions .ctrl-btn { position: static; }
     .ctx-menu {
-      position: fixed; z-index: 40; min-width: 12rem;
+      position: fixed; z-index: 2000; min-width: 12rem;
       background: var(--vscode-menu-background, #1c1c1c);
       color: var(--vscode-menu-foreground, #ccc);
       border: 1px solid var(--vscode-widget-border, #444);
@@ -48,14 +33,8 @@
   </style>
 </head>
 <body>
-  <div id="root" class="sy-graph-host">
-    <div class="graph-search" id="graph-search">
-      <input id="graph-search-input" type="search" placeholder="Search wiki…" autocomplete="off" spellcheck="false" aria-label="Search wiki graph">
-      <button id="graph-search-clear" type="button" hidden title="Clear search" aria-label="Clear search">×</button>
-      <span id="graph-search-count" class="graph-search-count" hidden aria-live="polite"></span>
-    </div>
-    <div id="mount" class="sy-graph-mount"></div>
-  </div>
+  <div id="mount"></div>
+  <div id="status" class="sy-status" hidden></div>
   <div id="ctx" class="ctx-menu" hidden></div>
   <script type="module" src="./src/webview-graph.ts"></script>
 </body>

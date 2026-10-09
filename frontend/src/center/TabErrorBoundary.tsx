@@ -3,7 +3,7 @@ import { Component, type ReactNode } from "react";
 /**
  * Generic error boundary around whichever tab widget is mounted in the
  * center strip. A render throw in ANY tab (a malformed Vega spec, a
- * DuckDB-wasm state error, the forked CE graph code, …) used to blank
+ * DuckDB-wasm state error, an embedded viewer, …) used to blank
  * the entire app to white — taking the tab strip, rail, and sidebar
  * down with it, recoverable only by a full reload. This keeps the
  * chrome alive: the crashed tab shows a recovery panel, everything

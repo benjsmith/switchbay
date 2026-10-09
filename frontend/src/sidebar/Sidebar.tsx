@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import FileBrowser from "./FileBrowser";
 import SourceBrowser from "./SourceBrowser";
 import { useIngestDrop } from "./ingestDrop";

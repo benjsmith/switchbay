@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { TabSpec, Workspaces } from "../ws";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 import type { ActiveRun } from "../center/activeRun";
 import CeGraphSurface from "../widgets/embed/CeGraphSurface";

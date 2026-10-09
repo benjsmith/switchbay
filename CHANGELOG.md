@@ -3,6 +3,40 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-10-09 — v0.14.1 — Switch Bay VS 0.3.18
+
+**Migration:** none.
+
+Works with curiosity-engine 1.9.2, curiosity-merge 0.8.4, and okstratr 0.2.0.
+
+### Changed
+
+- **VS Code graph is Curiosity Engine's viewer** — Open Graph in Switch Bay VS
+  now shows Curiosity Engine's own viewer, the same one as the app's Graph
+  tab. Clicking a page opens its page window with properties, the page text
+  and its neighbourhood; notes and todos can be edited there. Open markdown,
+  Open preview and Reveal in Explorer sit in the page window, and right-click
+  on a node still offers them along with To plot, To sketch and To slideshow.
+  Search still marks hits in the Wiki and Files trees, Escape clears it, and
+  the view follows VS Code's light or dark theme.
+- **VS Code graph keeps up with the wiki** — adding, editing or deleting a wiki
+  page repaints the open graph, and changing the wiki folder setting reloads
+  it for the new workspace.
+- **Without Curiosity Engine** — the VS Code graph shows a short message
+  saying Curiosity Engine is needed, instead of a broken view.
+
+### Fixed
+
+- The replay button on the graph plays the curation history again, in the app
+  and in VS Code.
+- A "Saved" note no longer sticks on screen when the graph repaints right after
+  saving a page.
+
+### Removed
+
+- Switch Bay's own copy of Curiosity Engine's graph viewer, which only the VS
+  Code extension still used.
+
 ## 2026-10-08 — v0.14.0
 
 **Migration:** none. Your settings carry over. **Breaking:** the Graph tab is

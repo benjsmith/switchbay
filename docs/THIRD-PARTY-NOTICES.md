@@ -25,13 +25,12 @@ obligation arises as we do not modify their files.
 
 ## First-party code derived from open source
 
-- **Graph / wiki-view** (`frontend/src/widgets/graph/static/*.js`) is a
-  fork of **curiosity-engine**'s wiki-view, used under the **MIT License**
-  (Copyright (c) 2026, curiosity-engine authors), and now ships only in the
-  VS Code extension's graph webview. Full MIT text below.
-- **Knowledge Atlas** (`frontend/src/widgets/graph/static/vendor/knowledge-atlas.js`)
-  is the first-party IIFE from curiosity-engine's `packages/knowledge-atlas`,
-  same MIT license.
+- **Graph canvas / sidebar shells** (`frontend/src/widgets/embed/ceEmbedShell.html`,
+  `ceSidebarShell.html`) are adapted from **curiosity-engine**'s wiki-view
+  embed markup, used under the **MIT License** (Copyright (c) 2026,
+  curiosity-engine authors). Full MIT text below. The viewer scripts
+  themselves (wiki-view, Knowledge Atlas) are loaded from the user's
+  curiosity-engine install and are not shipped by Switch Bay.
 - **`createUniver`** in `frontend/src/widgets/sheet/SheetTab.tsx` is a
   ~15-line reimplementation of the same function from **@univerjs/presets**
   (**Apache-2.0**, Copyright (c) DreamNum Inc.), inlined so Switch Bay

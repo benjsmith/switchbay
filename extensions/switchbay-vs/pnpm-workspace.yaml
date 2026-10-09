@@ -1,0 +1,6 @@
+# pnpm 11 is deny-by-default for dependency install scripts; decide each
+# one explicitly. Neither is needed to compile, test or package the
+# extension (keytar is for `vsce login`, vsce-sign for signed publishing).
+allowBuilds:
+  '@vscode/vsce-sign': false
+  keytar: false

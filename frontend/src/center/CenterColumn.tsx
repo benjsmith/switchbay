@@ -1,6 +1,6 @@
 import TabStrip from "./TabStrip";
 import type { TabSpec } from "../ws";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 
 type Props = {

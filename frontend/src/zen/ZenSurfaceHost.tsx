@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import type { Selection, TabSpec } from "../ws";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 import PtyThreadSurface from "../rail/PtyThreadSurface";
 import PlaceholderTab from "../center/PlaceholderTab";

@@ -5,6 +5,7 @@ import {
   bindSlideshowButton,
   currentModalPageId,
   enhanceCeModalBody,
+  waitForCeToast,
 } from "./ceHostBridge.ts";
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
@@ -142,7 +143,7 @@ export default function CeAtlasEmbed({ showAddFile, suppressDocModal }: Props = 
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         // Wiki changed: wait for fresh data, then hard remount on it.
-        void session.refresh().then(() => {
+        void waitForCeToast().then(() => session.refresh()).then(() => {
           if (!el.isConnected) return;
           session.invalidateAtlasLayoutCache();
           session.detachCanvas(el, { destroy: true });

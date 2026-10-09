@@ -1,6 +1,6 @@
 import type { ComponentType } from "react";
 import type { TabSpec } from "../ws";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 
 /**

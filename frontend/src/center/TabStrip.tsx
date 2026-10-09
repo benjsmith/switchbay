@@ -1,6 +1,6 @@
 import { Suspense, useEffect, useState } from "react";
 import type { TabSpec } from "../ws";
-import type { GraphData } from "../widgets/graph/types";
+import type { GraphData } from "../lib/graphTypes";
 import type { TerminalWsApi } from "../rail/PtyThreadSurface";
 import PlaceholderTab from "./PlaceholderTab";
 import TabErrorBoundary from "./TabErrorBoundary";

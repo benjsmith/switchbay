@@ -66,9 +66,14 @@ Graph / Agents skill surfaces.
   to `/api/workspaces/split`; Procedure / Execution label-type rows; the
   sidebar `+` opens Switchbay's upload dialog (`/api/upload-vault`); the
   sidebar header's `{{WORKSPACE}}` placeholder is filled from `data.json`.
-- The forked viewer under `frontend/src/widgets/graph/` is kept **only**
-  for the VS Code extension's graph webview (`src/webview-graph.ts`); the
-  PWA never imports it.
+- The VS Code extension's graph view mounts the same CE viewer
+  (`src/webview-graph.ts`, built by `vite.webview.config.ts` into
+  `extensions/switchbay-vs/media/graph/`). The extension builds CE's
+  wiki-view bundle with `wiki_render.py`, serves its `static/` scripts and
+  figures as webview resources, and answers CE's API calls (`data.json`,
+  `/api/page` for notes/todos, curation history) over `postMessage`
+  (`vscodeGraphBridge.ts`, `extensions/switchbay-vs/src/graphBundle.ts`).
+  Without a CE install the view shows a message instead of a graph.
 
 ## Core-skills auto-start
 

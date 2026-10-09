@@ -8,7 +8,7 @@
  *      text — the parsed key/value pairs go into a Properties table
  *      rendered by EditorTab.
  *   2. Expand `[[wikilink]]` / `[[id|display]]` into anchors with the
- *      `wikilink` class (CE styles this in ce-graph.css).
+ *      `wikilink` class (CE's viewer stylesheet styles it).
  *   3. Tokenize the body so each rendered block carries the source
  *      line it came from — lets the editor click→cursor sync land on
  *      the exact paragraph the user clicked on.
