@@ -90,6 +90,52 @@ jobs:
               )
           print("htmlExtraction: 6/6 (no skips)")
           PY
+      - name: CE embed + VS Code graph bridge Node tests (29)
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types --test --test-reporter tap \
+            src/widgets/embed/ceSidebarHeader.test.ts \
+            src/widgets/embed/ceHostBridge.test.ts \
+            src/widgets/embed/embedMount.test.ts \
+            src/widgets/embed/vscodeGraphBridge.test.ts > "${RUNNER_TEMP}/ce-embed.tap"
+          cat "${RUNNER_TEMP}/ce-embed.tap"
+          python3 - "${RUNNER_TEMP}/ce-embed.tap" <<'PY'
+          from pathlib import Path
+          import sys
+          lines = [ln.strip() for ln in Path(sys.argv[1]).read_text(errors="replace").splitlines()]
+          meta = {}
+          for ln in lines:
+              for key in ("pass", "fail", "skipped", "todo", "cancelled"):
+                  if ln.startswith(f"# {key} "):
+                      meta[key] = int(ln.split()[-1])
+          bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
+          if bad or meta.get("pass") != 29 or "1..29" not in lines:
+              raise SystemExit(f"expected 29 passing CE embed tests, no skips: {meta}")
+          print("ce embed: 29/29 (no skips)")
+          PY
+      - name: Frontend Node tests (10)
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types --test --test-reporter tap \
+            src/lib/uploadVault.test.ts \
+            src/widgets/agents/agentSpace.test.ts > "${RUNNER_TEMP}/frontend-node.tap"
+          cat "${RUNNER_TEMP}/frontend-node.tap"
+          python3 - "${RUNNER_TEMP}/frontend-node.tap" <<'PY'
+          from pathlib import Path
+          import sys
+          lines = [ln.strip() for ln in Path(sys.argv[1]).read_text(errors="replace").splitlines()]
+          meta = {}
+          for ln in lines:
+              for key in ("pass", "fail", "skipped", "todo", "cancelled"):
+                  if ln.startswith(f"# {key} "):
+                      meta[key] = int(ln.split()[-1])
+          bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
+          if bad or meta.get("pass") != 10 or "1..10" not in lines:
+              raise SystemExit(f"expected 10 passing frontend Node tests, no skips: {meta}")
+          print("frontend node: 10/10 (no skips)")
+          PY
       - name: Web-policy race Node test
         working-directory: frontend
         run: |
@@ -106,6 +152,41 @@ jobs:
         run: pnpm --dir frontend run build
       - name: Webview graph build
         run: pnpm --dir frontend run build:webview
+      - name: Switch Bay VS install
+        run: pnpm --dir extensions/switchbay-vs install --frozen-lockfile
+      - name: Switch Bay VS compile + Node tests (20)
+        working-directory: extensions/switchbay-vs
+        run: |
+          set -euo pipefail
+          pnpm exec tsc -p ./
+          node --test --test-reporter tap out/*.test.js > "${RUNNER_TEMP}/switchbay-vs.tap"
+          cat "${RUNNER_TEMP}/switchbay-vs.tap"
+          python3 - "${RUNNER_TEMP}/switchbay-vs.tap" <<'PY'
+          from pathlib import Path
+          import sys
+          lines = [ln.strip() for ln in Path(sys.argv[1]).read_text(errors="replace").splitlines()]
+          meta = {}
+          for ln in lines:
+              for key in ("pass", "fail", "skipped", "todo", "cancelled"):
+                  if ln.startswith(f"# {key} "):
+                      meta[key] = int(ln.split()[-1])
+          bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
+          if bad or meta.get("pass") != 20 or "1..20" not in lines:
+              raise SystemExit(f"expected 20 passing Switch Bay VS tests, no skips: {meta}")
+          print("switchbay-vs: 20/20 (no skips)")
+          PY
+      - name: Graph webview has no fork left
+        run: |
+          set -euo pipefail
+          test -f extensions/switchbay-vs/media/graph/webview-graph.html
+          if [ -e frontend/src/widgets/graph ]; then
+            echo "frontend/src/widgets/graph was removed; the graph views mount Curiosity Engine's viewer"
+            exit 1
+          fi
+          if grep -rl 'widgets/graph' frontend/src frontend/*.html frontend/vite*.config.ts extensions/switchbay-vs/src; then
+            echo "references to the removed graph fork"
+            exit 1
+          fi
 
   browser-e2e:
     name: Browser e2e (mocked backend)
@@ -140,6 +221,7 @@ jobs:
           test -f frontend/tests/e2e/mock_backend.py
           test -f frontend/tests/e2e/zen-web-policy.spec.ts
           test -f frontend/tests/e2e/comms-desks.spec.ts
+          test -f frontend/tests/e2e/graph-ce-embed.spec.ts
           grep -F 'e2e_mock' frontend/tests/e2e/zen-web-policy.spec.ts
           grep -F 'e2e_mock' frontend/tests/e2e/comms-desks.spec.ts
           grep -F 'e2e_mock' frontend/tests/e2e/mock_backend.py
@@ -148,7 +230,8 @@ jobs:
           grep -F '/tmp/switchbay-e2e-mock-ws' frontend/tests/e2e/mock_backend.py
           if grep -nE 'test\.(skip|fixme)\(' \
               frontend/tests/e2e/zen-web-policy.spec.ts \
-              frontend/tests/e2e/comms-desks.spec.ts; then
+              frontend/tests/e2e/comms-desks.spec.ts \
+              frontend/tests/e2e/graph-ce-embed.spec.ts; then
             echo "e2e specs must not skip"
             exit 1
           fi
@@ -214,6 +297,44 @@ jobs:
           plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", Path(sys.argv[1]).read_text(errors="replace"))
           want, label = int(sys.argv[2]), sys.argv[3]
           if "comms-desks.spec.ts" not in plain:
+              raise SystemExit(f"{label}: spec file did not run")
+          if re.search(r"\b[1-9]\d*\s+skipped\b", plain, re.I):
+              raise SystemExit(f"{label}: skips are not allowed")
+          if re.search(r"\b[1-9]\d*\s+flaky\b", plain, re.I):
+              raise SystemExit(f"{label}: flaky results are not allowed")
+          failed = re.search(r"\b(\d+)\s+failed\b", plain, re.I)
+          if failed and int(failed.group(1)) != 0:
+              raise SystemExit(f"{label}: failed tests")
+          passed = re.findall(r"(?m)^\s*(\d+)\s+passed\b", plain)
+          if not passed:
+              raise SystemExit(f"{label}: no 'N passed' summary")
+          got = int(passed[-1])
+          if got != want:
+              raise SystemExit(f"{label}: expected {want} passed, got {got}")
+          print(f"{label}: {got}/{want} passed, no skips")
+          PY
+      - name: Playwright graph-ce-embed (mock port 41767)
+        working-directory: frontend
+        env:
+          E2E_MOCK: "1"
+          E2E_CE_PORT: "41767"
+          CI: "true"
+        run: |
+          set -euo pipefail
+          unset E2E_BASE_URL || true
+          if [ -n "${E2E_BASE_URL:-}" ]; then
+            echo "E2E_BASE_URL must stay unset so specs use their own ports"
+            exit 1
+          fi
+          pnpm exec playwright test tests/e2e/graph-ce-embed.spec.ts \
+            --reporter=list --forbid-only --workers=1 \
+            | tee "${RUNNER_TEMP}/pw-graph-ce-embed.txt"
+          python3 - "${RUNNER_TEMP}/pw-graph-ce-embed.txt" 3 graph-ce-embed <<'PY'
+          from pathlib import Path
+          import re, sys
+          plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", Path(sys.argv[1]).read_text(errors="replace"))
+          want, label = int(sys.argv[2]), sys.argv[3]
+          if "graph-ce-embed.spec.ts" not in plain:
               raise SystemExit(f"{label}: spec file did not run")
           if re.search(r"\b[1-9]\d*\s+skipped\b", plain, re.I):
               raise SystemExit(f"{label}: skips are not allowed")
