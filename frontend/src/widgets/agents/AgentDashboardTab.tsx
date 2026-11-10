@@ -294,7 +294,23 @@ export default function AgentDashboardTab() {
     };
     void tick();
     const id = window.setInterval(() => { void tick(); }, RUNS_POLL_MS);
-    return () => { cancelled = true; window.clearInterval(id); };
+    let soon: number | undefined;
+    const onActivity = () => {
+      if (soon !== undefined) return;
+      soon = window.setTimeout(() => {
+        soon = undefined;
+        void tick();
+      }, 150);
+    };
+    window.addEventListener("sy:agent-activity", onActivity);
+    window.addEventListener("sy:orch-handoff", onActivity);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+      if (soon !== undefined) window.clearTimeout(soon);
+      window.removeEventListener("sy:agent-activity", onActivity);
+      window.removeEventListener("sy:orch-handoff", onActivity);
+    };
   }, []);
 
   const reloadAll = useCallback(async () => {

@@ -333,7 +333,10 @@ export const SWITCHBAY_API_RESERVED_PREFIXES = [
   "/api/copilot",
   "/api/micro-edits",
   "/api/micro",
-  // Surfaces Switchbay owns (not CE /api/page)
+  // Surfaces Switchbay owns. /api/page is the Editor: CE's viewer
+  // only accepts notes/ and todos/, so this route stays on the daemon,
+  // which opens every wiki markdown page.
+  "/api/page",
   "/api/library",
   "/api/report-packages",
   "/api/report",
@@ -368,6 +371,15 @@ export const SWITCHBAY_API_RESERVED_PREFIXES = [
   "/api/events",
   "/api/notify",
 ] as const;
+
+/**
+ * Wiki writes refresh CE's graph bundle. okstratr's observer polls its
+ * own DAG; remounting it on every wiki write tears the live animation
+ * down and drops the running jobs.
+ */
+export function embedRefreshesOnWikiChange(kind: string): boolean {
+  return kind === "ce";
+}
 
 /** True when a path is a Switchbay daemon route (do not remap onto /embed/*). */
 export function isSwitchbayReservedApi(path: string): boolean {

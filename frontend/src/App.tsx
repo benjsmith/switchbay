@@ -694,6 +694,13 @@ export default function App() {
     socketRef.current = s;
     setSocketReady(true);
     const off = s.on((msg: ServerMessage) => {
+      if (
+        msg.type === "RUN_STARTED" || msg.type === "RUN_FINISHED" || msg.type === "RUN_ERROR"
+        || msg.type === "TOOL_CALL_START" || msg.type === "TOOL_CALL_RESULT"
+        || msg.type === "orchestration_handoff"
+      ) {
+        window.dispatchEvent(new CustomEvent("sy:agent-activity"));
+      }
       if (msg.type === "hello") {
         bindWebPolicy(msg.workspace, msg.web_policy);
         // Just set the workspace; the [workspace] reset effect below

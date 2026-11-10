@@ -4,6 +4,7 @@ import {
   documentDir,
   embedFetchShimScript,
   embedHostShimScript,
+  embedRefreshesOnWikiChange,
   extractScripts,
   isSwitchbayReservedApi,
   mapStatusBanner,
@@ -182,8 +183,11 @@ test("isSwitchbayReservedApi protects control-plane paths", () => {
   assert.equal(isSwitchbayReservedApi("/api/walkthrough/status"), true);
   assert.equal(isSwitchbayReservedApi("/api/share/status"), true);
   assert.equal(isSwitchbayReservedApi("/api/web-policy"), true);
+  // The Editor reads /api/page. CE's server only opens notes/ and todos/,
+  // so this stays on the Switchbay daemon for every wiki page.
+  assert.equal(isSwitchbayReservedApi("/api/page?path=concepts/foo.md"), true);
+  assert.equal(isSwitchbayReservedApi("/api/page"), true);
   // Skill-owned paths stay remappable onto /embed/*
-  assert.equal(isSwitchbayReservedApi("/api/page?path=x"), false);
   assert.equal(isSwitchbayReservedApi("/api/vault/foo"), false);
   assert.equal(isSwitchbayReservedApi("/api/desk/status"), false);
   assert.equal(isSwitchbayReservedApi("/api/workspace/select"), false);
@@ -210,7 +214,7 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   eval(shim.content!);
   void g.fetch("data.json");
   void g.fetch("data.json?t=1");
-  void g.fetch("/api/page?path=notes/x.md");
+  void g.fetch("/api/page?path=concepts/foo.md");
   void g.fetch("/embed/ce/already");
   void g.fetch("/api/settings");
   void g.fetch("/api/core-skills/status");
@@ -225,7 +229,7 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   void g.fetch("/api/okstratr/harness");
   assert.equal(calls[0], "/embed/ce/data.json");
   assert.equal(calls[1], "/embed/ce/data.json?t=1");
-  assert.equal(calls[2], "/embed/ce/api/page?path=notes/x.md");
+  assert.equal(calls[2], "/api/page?path=concepts/foo.md");
   assert.equal(calls[3], "/embed/ce/already");
   assert.equal(calls[4], "/api/settings");
   assert.equal(calls[5], "/api/core-skills/status");
@@ -242,6 +246,11 @@ test("embedFetchShimScript rewrites data.json onto public base", () => {
   assert.equal(typeof g.window.__syEmbedReleaseFetch, "function");
   g.window.__syEmbedReleaseFetch();
   assert.equal(g.window.__syEmbedFetchBase, null);
+});
+
+test("okstratr observer stays mounted across wiki writes", () => {
+  assert.equal(embedRefreshesOnWikiChange("ce"), true);
+  assert.equal(embedRefreshesOnWikiChange("okstratr"), false);
 });
 
 test("embedHostShimScript marks syHost and guards body.innerHTML", () => {
