@@ -212,10 +212,9 @@ jobs:
 
   browser-e2e:
     name: Browser e2e (mocked backend)
-    # ubuntu-latest is Ubuntu 26.04. Playwright 1.60 has no Chromium
-    # build for that image, so `playwright install` stops before any
-    # test runs. 24.04 is the image this Playwright supports.
-    runs-on: ubuntu-24.04
+    # Playwright 1.64.1 publishes a Chromium build for Ubuntu 26.04,
+    # which is the current ubuntu-latest image.
+    runs-on: ubuntu-latest
     # Isolated Chromium + mock HTTP/WS. Never starts switchbay.daemon,
     # never binds or curls the live :8765 PWA, never sets E2E_BASE_URL
     # (that would collide the two specs and point at vite :5173).
