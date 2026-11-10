@@ -81,7 +81,7 @@ export default function HelpModal({ open, onClose }: Props) {
           <p>The prefix on the first character decides where your input goes:</p>
           <dl className="sy-help-dl">
             <dt>(no prefix)</dt>
-            <dd>Chat with the agent (the model picked in the Rail header).</dd>
+            <dd>Chat with the agent (the model picked in the Rail header). Paste a screenshot or copied image into the box to attach it; a thumbnail appears on the unsent message, and you can remove it before sending.</dd>
             <dt><code>!</code> <span className="sy-help-dim">command</span></dt>
             <dd>Run a shell command in the workspace — opens a new shell <em>thread</em> (the rail becomes an interactive terminal; switch back via the thread bar).</dd>
             <dt><code>!py</code></dt>

@@ -136,6 +136,27 @@ jobs:
               raise SystemExit(f"expected 10 passing frontend Node tests, no skips: {meta}")
           print("frontend node: 10/10 (no skips)")
           PY
+      - name: Image paste Node tests (20)
+        working-directory: frontend
+        run: |
+          set -euo pipefail
+          node --experimental-strip-types --test --test-reporter tap \
+            src/lib/imagePaste.test.ts > "${RUNNER_TEMP}/image-paste.tap"
+          cat "${RUNNER_TEMP}/image-paste.tap"
+          python3 - "${RUNNER_TEMP}/image-paste.tap" <<'PY'
+          from pathlib import Path
+          import sys
+          lines = [ln.strip() for ln in Path(sys.argv[1]).read_text(errors="replace").splitlines()]
+          meta = {}
+          for ln in lines:
+              for key in ("pass", "fail", "skipped", "todo", "cancelled"):
+                  if ln.startswith(f"# {key} "):
+                      meta[key] = int(ln.split()[-1])
+          bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
+          if bad or meta.get("pass") != 20 or "1..20" not in lines:
+              raise SystemExit(f"expected 20 passing image paste tests, no skips: {meta}")
+          print("image paste: 20/20 (no skips)")
+          PY
       - name: Web-policy race Node test
         working-directory: frontend
         run: |
