@@ -89,11 +89,13 @@ test("a bundle without the embeddable viewer is never fresh", () => {
   assert.equal(bundleFresh(bundle, wiki), false);
 });
 
-test("only notes/ and todos/ markdown inside wiki/ is editable", () => {
+test("wiki markdown besides notes and todos is editable", () => {
   const { wiki } = setup();
   assert.equal(safeEditablePage(wiki, "notes/n.md"), path.join(wiki, "notes", "n.md"));
   assert.equal(safeEditablePage(wiki, "todos/new.md"), path.join(wiki, "todos", "new.md"));
-  for (const bad of ["concepts/a.md", "notes/../concepts/a.md", "../x.md", "notes/x.txt", "notes/", "/etc/passwd", "notes\\x.md", ""]) {
+  assert.equal(safeEditablePage(wiki, "concepts/a.md"), path.join(wiki, "concepts", "a.md"));
+  assert.equal(safeEditablePage(wiki, "sources/paper.md"), path.join(wiki, "sources", "paper.md"));
+  for (const bad of ["notes/../concepts/a.md", "../x.md", "notes/x.txt", "notes/", "/etc/passwd", "notes\\x.md", ""]) {
     assert.throws(() => safeEditablePage(wiki, bad), bad);
   }
 });
@@ -119,10 +121,10 @@ test("CE API calls are answered from disk", async () => {
   assert.equal(fs.readFileSync(path.join(wiki, "notes", "n.md"), "utf8"), "# N2\n");
   assert.equal(rebuilt, 1);
 
-  const denied = await answerCeApi(host, "POST", "/api/page", JSON.stringify({ path: "concepts/a.md", content: "x" }));
-  assert.equal(denied.status, 400);
-  assert.equal(fs.readFileSync(path.join(wiki, "concepts", "a.md"), "utf8"), "# A\n");
-  assert.equal(rebuilt, 1);
+  const concept = await answerCeApi(host, "POST", "/api/page", JSON.stringify({ path: "concepts/a.md", content: "x" }));
+  assert.equal(concept.status, 200);
+  assert.equal(fs.readFileSync(path.join(wiki, "concepts", "a.md"), "utf8"), "x\n");
+  assert.equal(rebuilt, 2);
 
   assert.equal((await answerCeApi(host, "GET", "/api/page?path=notes%2Fmissing.md")).status, 404);
   assert.deepEqual(JSON.parse((await answerCeApi(host, "GET", "/api/curation/history")).body), { events: [1] });

@@ -5,6 +5,7 @@ import {
   type StatusBanner,
   embedFetchShimScript,
   embedHostShimScript,
+  embedRefreshesOnWikiChange,
   mapStatusBanner,
   prepareEmbedHtml,
 } from "./embedMount.ts";
@@ -321,12 +322,14 @@ export default function ProxiedSkillPanel({
     void load(path);
   }, [load, path, banner.allowMount, teardown]);
 
-  // Live view: wiki / curator / rescan → daemon files_changed → soft remount.
+  // CE's graph reads data.json, so a wiki write remounts that panel.
+  // The okstratr observer polls its DAG and must stay mounted.
   // Guard: never soft-remount before first ok-html, during load(), or inside
   // the post-mount grace window (CE main.js fetch('data.json') is in flight).
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const onFiles = () => {
+      if (!embedRefreshesOnWikiChange(kind)) return;
       if (okHtmlAtRef.current === 0) return;
       if (loadInFlightRef.current) return;
       if (Date.now() - okHtmlAtRef.current < SOFT_REMOUNT_GRACE_MS) return;
@@ -343,7 +346,7 @@ export default function ProxiedSkillPanel({
       if (timer) clearTimeout(timer);
       window.removeEventListener("sy:files-changed", onFiles);
     };
-  }, [load]);
+  }, [load, kind]);
 
   useEffect(() => () => teardown(), [teardown]);
 

@@ -71,7 +71,7 @@ Graph / Agents skill surfaces.
   `extensions/switchbay-vs/media/graph/`). The extension builds CE's
   wiki-view bundle with `wiki_render.py`, serves its `static/` scripts and
   figures as webview resources, and answers CE's API calls (`data.json`,
-  `/api/page` for notes/todos, curation history) over `postMessage`
+  `/api/page` for any wiki markdown page, curation history) over `postMessage`
   (`vscodeGraphBridge.ts`, `extensions/switchbay-vs/src/graphBundle.ts`).
   Without a CE install the view shows a message instead of a graph.
 

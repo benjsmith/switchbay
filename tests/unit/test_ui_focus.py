@@ -35,3 +35,11 @@ def test_combined_prompt_includes_fresh_surfaces(tmp_path: Path):
 
 def test_empty_workspace_no_prompt(tmp_path: Path):
     assert ui_focus.combined_prompt_lines(tmp_path) is None
+
+
+def test_plot_zone_dimensions_reach_the_rail_prompt(tmp_path: Path):
+    ui_focus.save(tmp_path, "plot", {"width": 612, "height": 304})
+    text = ui_focus.combined_prompt_lines(tmp_path)
+    assert text is not None
+    assert "612" in text and "304" in text
+    assert "Plot zone" in text

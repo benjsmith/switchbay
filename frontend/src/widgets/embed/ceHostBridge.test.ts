@@ -5,8 +5,40 @@ import { test } from "node:test";
 (globalThis as unknown as { window: unknown }).window = globalThis;
 
 const {
-  bindCeReplay, guardCeModal, guardCeSidebar, isCeSplitUrl, toSwitchbaySplitBody,
+  bindCeReplay, guardCeModal, guardCeSidebar, isCeSplitUrl, isSwitchbayWikiEditable,
+  toSwitchbaySplitBody, widenCePageEditor,
 } = await import("./ceHostBridge.ts");
+
+test("the editor opens wiki pages other than notes and todos", () => {
+  assert.equal(isSwitchbayWikiEditable("concepts/a.md"), true);
+  assert.equal(isSwitchbayWikiEditable("wiki/sources/paper.md"), true);
+  assert.equal(isSwitchbayWikiEditable("entities/acme.md"), true);
+  assert.equal(isSwitchbayWikiEditable("notes/n.md"), true);
+  assert.equal(isSwitchbayWikiEditable("todos/new.md"), true);
+  assert.equal(isSwitchbayWikiEditable("notes/x.txt"), false);
+  assert.equal(isSwitchbayWikiEditable("notes/../concepts/a.md"), false);
+  assert.equal(isSwitchbayWikiEditable(""), false);
+
+  const btn = { style: { display: "none" } };
+  (globalThis as unknown as { document: unknown }).document = {
+    querySelector: (sel: string) => (sel === "#modal-padlock" ? btn : null),
+  };
+  const edit = {
+    updateForPage(page: { path?: string } | null) {
+      btn.style.display = page?.path?.startsWith("notes/") || page?.path?.startsWith("todos/")
+        ? ""
+        : "none";
+    },
+  };
+  (globalThis as unknown as { Edit: typeof edit }).Edit = edit;
+  assert.equal(widenCePageEditor(), true);
+  edit.updateForPage({ path: "concepts/a.md" });
+  assert.equal(btn.style.display, "");
+  edit.updateForPage({ path: "notes/n.md" });
+  assert.equal(btn.style.display, "");
+  edit.updateForPage({ path: "figures/plot.png" });
+  assert.equal(btn.style.display, "none");
+});
 
 test("CE modal bodies are sanitized on open (init, refresh and re-open)", () => {
   const rendered: string[] = [];

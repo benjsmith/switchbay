@@ -31,6 +31,44 @@ type CeModalApi = {
 };
 
 /**
+ * CE's viewer only opens notes/ and todos/. Switchbay's editor opens
+ * every wiki markdown page; the daemon still refuses escapes.
+ */
+export function isSwitchbayWikiEditable(path: string): boolean {
+  if (!path || path.includes("\\") || path.includes("\0")) return false;
+  const rel = path.startsWith("wiki/") ? path.slice("wiki/".length) : path;
+  if (!rel || rel.startsWith("/") || rel.endsWith("/") || !rel.endsWith(".md")) return false;
+  if (rel.split("/").includes("..")) return false;
+  return true;
+}
+
+type CeEditApi = {
+  updateForPage?: (page: { path?: string } | null) => unknown;
+  __syWide?: boolean;
+};
+
+/**
+ * After CE hides the padlock, show it again for any wiki `.md` page.
+ * CE's check is closed over inside edit.js, so the host wraps
+ * `updateForPage` rather than editing the upstream file.
+ */
+export function widenCePageEditor(): boolean {
+  const edit = (window as unknown as { Edit?: CeEditApi }).Edit;
+  if (!edit || typeof edit.updateForPage !== "function") return false;
+  if (edit.__syWide) return true;
+  const orig = edit.updateForPage.bind(edit);
+  edit.updateForPage = (page) => {
+    const result = orig(page);
+    if (!isSwitchbayWikiEditable(page?.path || "")) return result;
+    const btn = document.querySelector<HTMLElement>("#modal-padlock");
+    if (btn) btn.style.display = "";
+    return result;
+  };
+  edit.__syWide = true;
+  return true;
+}
+
+/**
  * Sanitize page HTML right before CE's modal renders it. CE keeps the
  * `pages` object it was given by init/refresh and reads
  * `pages[id].body_html` on open, so wrapping those three calls covers

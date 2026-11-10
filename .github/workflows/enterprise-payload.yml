@@ -19,7 +19,7 @@ jobs:
           - os: windows-latest
             artifact: switchbay-enterprise-win11-x64
             archive: zip
-          - os: macos-14
+          - os: macos-15
             artifact: switchbay-enterprise-darwin-arm64
             archive: tar
     runs-on: ${{ matrix.os }}

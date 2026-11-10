@@ -2828,7 +2828,8 @@ a.sy-source-cite { color: var(--accent); }
   /* Sized rows so multi-row spans (set via spec.usermeta.tile)
    * stack cleanly without one tall card dragging neighbouring
    * single-row cards into matching height. */
-  grid-auto-rows: minmax(368px, auto);
+  /* Fixed row so a large spec cannot grow the card past the zone. */
+  grid-auto-rows: 368px;
   gap: 16px;
   align-content: start;
 }
@@ -2841,6 +2842,8 @@ a.sy-source-cite { color: var(--accent); }
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
   transition: border-color 0.15s, box-shadow 0.15s;
   cursor: default;
 }

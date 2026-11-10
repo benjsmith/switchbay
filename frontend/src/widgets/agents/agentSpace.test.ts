@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { BLACKBOARD_ID, CHIEF_ID, spaceEdges } from "./spaceGraph.ts";
+import {
+  BLACKBOARD_ID, CHIEF_ID, dagNodePulses, runningJobsMissingFromPlan, spaceEdges,
+} from "./spaceGraph.ts";
 
 type Node = { id: string; kind: string };
 
@@ -68,6 +70,24 @@ test("board edges point the way each kind uses the board", () => {
 test("no board node → no board edges, and the chief still owns everyone", () => {
   const edges = edgesOf([{ id: "curate", kind: "synthesize" }], {}, { board: false });
   assert.deepEqual(edges, ["chief->curate"]);
+});
+
+test("a running job stays on the DAG and keeps pulsing after its last token", () => {
+  const now = 1_700_000_000;
+  assert.equal(dagNodePulses("running", now - 30, now), true);
+  assert.equal(dagNodePulses("planning", 0, now), true);
+  assert.equal(dagNodePulses("idle", now, now), false);
+  assert.equal(dagNodePulses("done", now, now), false);
+  const extra = runningJobsMissingFromPlan(
+    ["inv-0"],
+    [
+      { id: "inv-0", status: "running" },
+      { id: "job-live", status: "running" },
+      { id: "job-done", status: "done" },
+      { id: "job-live", status: "running" },
+    ],
+  );
+  assert.deepEqual(extra.map((j) => j.id), ["job-live"]);
 });
 
 test("edges are unique, never self-directed, and drop unknown deps", () => {

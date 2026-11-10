@@ -128,6 +128,19 @@ def combined_prompt_lines(workspace: Path) -> str | None:
         )
 
     plot = fresh.get("plot")
+    if plot:
+        width = plot.get("width")
+        height = plot.get("height")
+        if (
+            isinstance(width, (int, float)) and isinstance(height, (int, float))
+            and width > 0 and height > 0 and not isinstance(width, bool)
+            and not isinstance(height, bool)
+        ):
+            lines.append(
+                f"UI focus · Plot zone {int(width)}×{int(height)} px. "
+                "Size the Vega-Lite spec to fit inside it "
+                "(omit width/height, or keep them at most that size)."
+            )
     if plot and plot.get("id"):
         lines.append(
             f"UI focus · Plot `{plot.get('name') or plot['id']}` "

@@ -190,3 +190,50 @@ export function prepareSpecForEmbed(spec: Spec): Spec {
   }
   return prepared;
 }
+
+/** One gallery cell. Matches the Plot tab grid (420px columns, 368px rows). */
+export const PLOT_ROW_PX = 368;
+export const PLOT_GRID_PAD = 16;
+export const PLOT_GRID_GAP = 16;
+export const PLOT_MIN_COL = 420;
+
+export type PlotZone = { width: number; height: number };
+
+/**
+ * Drawable size of one plot card inside the plotting zone.
+ * The rail agent sizes specs from this; the renderer refuses anything larger.
+ */
+export function plotCellSize(zone: PlotZone): PlotZone {
+  const innerW = Math.max(0, zone.width - PLOT_GRID_PAD * 2);
+  const cols = Math.max(
+    1,
+    Math.floor((innerW + PLOT_GRID_GAP) / (PLOT_MIN_COL + PLOT_GRID_GAP)),
+  );
+  const colW = (innerW - PLOT_GRID_GAP * (cols - 1)) / cols;
+  return {
+    width: Math.max(160, Math.round(colW - 28)),
+    height: Math.max(160, PLOT_ROW_PX - 64),
+  };
+}
+
+/**
+ * Fit a spec to the plot zone. A numeric width/height larger than the
+ * zone (or any pixel size when the zone is unknown) is replaced so
+ * vega-embed measures the card instead of drawing past it.
+ */
+export function fitSpecToPlotZone(spec: Spec, zone?: PlotZone | null): Spec {
+  const prepared = prepareSpecForEmbed(spec);
+  const composed = isComposedLayout(prepared);
+  const width = prepared.width;
+  const height = prepared.height;
+  const overW = typeof width === "number" && (zone == null || width > zone.width);
+  const overH = typeof height === "number" && (zone == null || height > zone.height);
+  if (width === undefined || overW) prepared.width = "container";
+  if (!composed) {
+    if (height === undefined || overH) prepared.height = "container";
+  } else if (overH) {
+    if (zone) prepared.height = zone.height;
+    else delete prepared.height;
+  }
+  return prepared;
+}

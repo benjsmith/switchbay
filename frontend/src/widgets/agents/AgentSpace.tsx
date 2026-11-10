@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
-import { BLACKBOARD_ID, CHIEF_ID, spaceEdges } from "./spaceGraph";
+import {
+  BLACKBOARD_ID, CHIEF_ID, dagNodePulses, runningJobsMissingFromPlan, spaceEdges,
+} from "./spaceGraph";
 
 /**
  * Live 2-d agent-space for a multi-agent DAG.
@@ -360,6 +362,35 @@ export default function AgentSpace({
         depsById.set(n.node_id, (n.dependencies ?? []).map(String));
         byId.add(n.node_id);
       }
+      for (const job of runningJobsMissingFromPlan(
+        visiblePlan.map((n) => n.node_id),
+        workers.map((w) => ({
+          id: w.node_id || w.run_id,
+          status: w.status,
+          kind: w.node_kind || "investigate",
+        })),
+      )) {
+        const w = workers.find((x) => (x.node_id || x.run_id) === job.id);
+        const kind = job.kind || w?.node_kind || "investigate";
+        liveKinds.add(kind);
+        nodes.push(baseNode({
+          id: job.id,
+          runId: w?.run_id ?? null,
+          label: w?.node_id || job.id.slice(-6),
+          kind,
+          status: w?.status || job.status || "running",
+          activity: w?.activity || w?.input_excerpt || "",
+          model: w?.model || "",
+          provider: w?.provider || "",
+          toolCount: w?.tool_count ?? 0,
+          currentTool: w?.current_tool || "",
+          tokensOut: w?.tokens_out ?? w?.tokens ?? 0,
+          ioMode: ioOf(w),
+          lastChunkAt: w?.last_chunk_at ?? 0,
+          depth: kindDepth(kind),
+        }));
+        byId.add(job.id);
+      }
     } else {
       for (const w of workers) {
         if (w.status === "error") continue;
@@ -630,10 +661,11 @@ export default function AgentSpace({
     });
 
     const loop = (now: number) => {
-      if (document.hidden) {
-        raf = 0;
-        return;
-      }
+      // Keep the frame scheduled. Stopping it while the document is
+      // hidden, and not asking for another, left the DAG frozen after
+      // the tab came back.
+      raf = requestAnimationFrame(loop);
+      if (document.hidden) return;
       const dt = Math.min(0.05, (now - last) / 1000);
       last = now;
       const w = wrap.clientWidth;
@@ -698,11 +730,7 @@ export default function AgentSpace({
       ctx.textBaseline = "top";
       for (const n of map.values()) {
         const p = toXY(n.x, n.y, w, h);
-        const live = n.status === "running" || n.status === "planning"
-          || n.status === "verifying" || n.status === "expanding"
-          || n.status === "synthesizing" || n.status === "merging"
-          || n.status === "waiting_limits";
-        const fresh = live && n.lastChunkAt > 0 && (Date.now() / 1000 - n.lastChunkAt) < 3;
+        const live = dagNodePulses(n.status, n.lastChunkAt, Date.now() / 1000);
         const breath = live ? 1 + 0.07 * Math.sin(now / 280 + n.depth) : 1;
         const isChief = n.kind === "chief";
         const isBb = n.kind === "blackboard";
@@ -722,7 +750,7 @@ export default function AgentSpace({
           ctx.strokeStyle = isBb ? col.muted : col.text;
           ctx.stroke();
         }
-        if (live && !isChief && !isBb && fresh) {
+        if (live && !isChief && !isBb) {
           const reading = n.ioMode === "read";
           const halo = reading ? READ_HALO : WRITE_HALO;
           const amp = 0.22 + Math.min(0.45, (n.tokenRate || 0) / 80);
@@ -785,8 +813,6 @@ export default function AgentSpace({
           ctx.fillText(clipped, p.x, p.y + r + (bits.length ? 28 : 16));
         }
       }
-
-      raf = requestAnimationFrame(loop);
     };
     const onVis = () => {
       if (document.hidden) {

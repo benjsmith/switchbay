@@ -59,7 +59,10 @@ export function bundleFresh(
   return built >= wikiMtime(wikiDir);
 }
 
-/** Same rule as CE's viewer server: only notes/ and todos/ .md pages are editable. */
+/**
+ * Wiki markdown the graph editor may open. CE's viewer server only
+ * allows notes/ and todos/; Switchbay opens every `.md` page under wiki/.
+ */
 export function safeEditablePage(wikiDir: string, rel: string): string {
   if (!rel || rel.endsWith("/") || rel.includes("\\")) throw new Error("invalid path");
   if (rel.split("/").includes("..")) throw new Error("path may not contain ..");
@@ -67,8 +70,6 @@ export function safeEditablePage(wikiDir: string, rel: string): string {
   const candidate = path.resolve(root, rel);
   const inside = path.relative(root, candidate);
   if (!inside || inside.startsWith("..") || path.isAbsolute(inside)) throw new Error("path escapes wiki/");
-  const top = inside.split(path.sep)[0];
-  if (top !== "notes" && top !== "todos") throw new Error("only notes/ and todos/ pages are editable");
   if (path.extname(candidate) !== ".md") throw new Error("only .md files are editable");
   return candidate;
 }

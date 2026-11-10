@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-14]
+        os: [ubuntu-latest, windows-latest, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -90,7 +90,7 @@ jobs:
               )
           print("htmlExtraction: 6/6 (no skips)")
           PY
-      - name: CE embed + VS Code graph bridge Node tests (29)
+      - name: CE embed + VS Code graph bridge Node tests (31)
         working-directory: frontend
         run: |
           set -euo pipefail
@@ -110,17 +110,18 @@ jobs:
                   if ln.startswith(f"# {key} "):
                       meta[key] = int(ln.split()[-1])
           bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
-          if bad or meta.get("pass") != 29 or "1..29" not in lines:
-              raise SystemExit(f"expected 29 passing CE embed tests, no skips: {meta}")
-          print("ce embed: 29/29 (no skips)")
+          if bad or meta.get("pass") != 31 or "1..31" not in lines:
+              raise SystemExit(f"expected 31 passing CE embed tests, no skips: {meta}")
+          print("ce embed: 31/31 (no skips)")
           PY
-      - name: Frontend Node tests (10)
+      - name: Frontend Node tests (13)
         working-directory: frontend
         run: |
           set -euo pipefail
           node --experimental-strip-types --test --test-reporter tap \
             src/lib/uploadVault.test.ts \
-            src/widgets/agents/agentSpace.test.ts > "${RUNNER_TEMP}/frontend-node.tap"
+            src/widgets/agents/agentSpace.test.ts \
+            src/widgets/vega/prepareSpec.test.ts > "${RUNNER_TEMP}/frontend-node.tap"
           cat "${RUNNER_TEMP}/frontend-node.tap"
           python3 - "${RUNNER_TEMP}/frontend-node.tap" <<'PY'
           from pathlib import Path
@@ -132,9 +133,9 @@ jobs:
                   if ln.startswith(f"# {key} "):
                       meta[key] = int(ln.split()[-1])
           bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
-          if bad or meta.get("pass") != 10 or "1..10" not in lines:
-              raise SystemExit(f"expected 10 passing frontend Node tests, no skips: {meta}")
-          print("frontend node: 10/10 (no skips)")
+          if bad or meta.get("pass") != 13 or "1..13" not in lines:
+              raise SystemExit(f"expected 13 passing frontend Node tests, no skips: {meta}")
+          print("frontend node: 13/13 (no skips)")
           PY
       - name: Web-policy race Node test
         working-directory: frontend
@@ -190,7 +191,10 @@ jobs:
 
   browser-e2e:
     name: Browser e2e (mocked backend)
-    runs-on: ubuntu-latest
+    # ubuntu-latest is Ubuntu 26.04. Playwright 1.60 has no Chromium
+    # build for that image, so `playwright install` stops before any
+    # test runs. 24.04 is the image this Playwright supports.
+    runs-on: ubuntu-24.04
     # Isolated Chromium + mock HTTP/WS. Never starts switchbay.daemon,
     # never binds or curls the live :8765 PWA, never sets E2E_BASE_URL
     # (that would collide the two specs and point at vite :5173).

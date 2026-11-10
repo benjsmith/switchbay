@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState, type CSSProperties } from "re
 import { useSelection } from "../../selection/SelectionContext";
 import PlotAdjustDialog from "./PlotAdjustDialog";
 import { ackUiCommand, takePlotShow } from "../../lib/pendingUiCommands";
-import { prepareSpecForEmbed, tileSizeFor } from "./prepareSpec";
+import { fitSpecToPlotZone, plotCellSize, tileSizeFor, type PlotZone } from "./prepareSpec";
 
 /**
  * Vega-Lite plot tab — tiled gallery.
@@ -217,11 +217,12 @@ type PlotCardProps = {
   onClone: () => void;
   onDelete: () => void;
   onRegenerate: () => void;
+  zone: PlotZone | null;
 };
 function PlotCard(props: PlotCardProps) {
   const {
     plot, selected, themeGen, onSelect, onEdit, onAdjust, onSaveFigure,
-    onCopyPng, onClear, onClone, onDelete, onRegenerate,
+    onCopyPng, onClear, onClone, onDelete, onRegenerate, zone,
   } = props;
   const hostRef = useRef<HTMLDivElement>(null);
   const embedRef = useRef<EmbedResult | null>(null);
@@ -255,7 +256,7 @@ function PlotCard(props: PlotCardProps) {
         if (embedRef.current?.finalize) {
           try { embedRef.current.finalize(); } catch { /* ignore */ }
         }
-        const specWithSize = prepareSpecForEmbed(plot.spec);
+        const specWithSize = fitSpecToPlotZone(plot.spec, zone);
         const result = await embed(hostRef.current, specWithSize, {
           actions: false,
           config: buildSwitchbayVegaConfig(),
@@ -299,7 +300,7 @@ function PlotCard(props: PlotCardProps) {
       }
     })();
     return () => { cancelled = true; };
-  }, [plot.spec, themeGen]);
+  }, [plot.spec, themeGen, zone]);
 
   useEffect(() => () => {
     if (embedRef.current?.finalize) {
@@ -478,6 +479,8 @@ export default function VegaTab() {
   // before, propagated to every card so axis colours track the
   // active theme.
   const [themeGen, setThemeGen] = useState(0);
+  const [zone, setZone] = useState<PlotZone | null>(null);
+  const zoneElRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     if (typeof MutationObserver === "undefined") return;
     const obs = new MutationObserver(() => setThemeGen((g) => g + 1));
@@ -545,26 +548,61 @@ export default function VegaTab() {
   const scrolledFor = useRef<string | null>(null);
   const selectedId = selection?.kind === "plot" ? selection.id : null;
 
+  // The plotting zone's size goes to the rail with the focused plot.
+  // Without it, an agent-authored spec is sized in the dark and draws
+  // past the card.
+  useEffect(() => {
+    const el = zoneElRef.current;
+    if (!el) return;
+    const measure = () => {
+      const canvas = el.querySelector(".sy-plot-card-canvas");
+      let next: PlotZone;
+      if (
+        canvas instanceof HTMLElement
+        && canvas.clientWidth > 40
+        && canvas.clientHeight > 40
+      ) {
+        next = {
+          width: Math.round(canvas.clientWidth),
+          height: Math.round(canvas.clientHeight),
+        };
+      } else {
+        next = plotCellSize({ width: el.clientWidth, height: el.clientHeight });
+      }
+      setZone((cur) => (
+        cur && cur.width === next.width && cur.height === next.height ? cur : next
+      ));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [plots]);
+
   // Publish focused plot for plot_context / plot_update.
   const lastPlotFocusRef = useRef("");
   useEffect(() => {
     const id = selectedId
       || (plots && plots.length === 1 ? plots[0]!.id : null);
-    if (!id) return;
-    const meta = plots?.find((p) => p.id === id);
-    const full = specs[id];
-    const payload = {
-      surface: "plot",
-      id,
-      name: meta?.name || full?.name || id,
-      origin: meta?.origin ?? full?.origin ?? null,
+    if (!id && !zone) return;
+    const meta = id ? plots?.find((p) => p.id === id) : undefined;
+    const full = id ? specs[id] : undefined;
+    const payload: Record<string, unknown> = { surface: "plot" };
+    if (id) {
+      payload.id = id;
+      payload.name = meta?.name || full?.name || id;
+      payload.origin = meta?.origin ?? full?.origin ?? null;
       // Spec can be large — only include mark/encoding keys for the
       // focus blob; plot_context loads the full file from disk.
-      mark: full?.spec && typeof full.spec === "object"
+      payload.mark = full?.spec && typeof full.spec === "object"
         ? (full.spec as { mark?: unknown }).mark
-        : undefined,
-      updated_at: meta?.updated_at ?? full?.updated_at,
-    };
+        : undefined;
+      payload.updated_at = meta?.updated_at ?? full?.updated_at;
+    }
+    if (zone) {
+      payload.width = zone.width;
+      payload.height = zone.height;
+    }
     const serialised = JSON.stringify(payload);
     if (serialised === lastPlotFocusRef.current) return;
     lastPlotFocusRef.current = serialised;
@@ -573,7 +611,7 @@ export default function VegaTab() {
       headers: { "Content-Type": "application/json" },
       body: serialised,
     }).catch(() => { /* ignore */ });
-  }, [selectedId, plots, specs]);
+  }, [selectedId, plots, specs, zone]);
 
   // Agent plot_show — reload list; drain cold-mount stash; ACK wait_ack.
   useEffect(() => {
@@ -635,7 +673,7 @@ export default function VegaTab() {
       "position:absolute; left:-10000px; top:0; width:800px; height:500px;";
     document.body.appendChild(host);
     try {
-      const specWithSize = prepareSpecForEmbed(spec);
+      const specWithSize = fitSpecToPlotZone(spec, { width: 800, height: 500 });
       const result = await embed(host, specWithSize, {
         actions: false,
         config: buildSwitchbayVegaConfig(),
@@ -915,7 +953,7 @@ export default function VegaTab() {
   }
   if (plots.length === 0) {
     return (
-      <div className="sy-vega">
+      <div className="sy-vega" ref={zoneElRef}>
         <div className="sy-vega-toolbar">
           <span
             className="sy-tab-engine"
@@ -948,7 +986,7 @@ export default function VegaTab() {
   }
 
   return (
-    <div className="sy-vega">
+    <div className="sy-vega" ref={zoneElRef}>
       <div className="sy-vega-toolbar">
         <span
           className="sy-tab-engine"
@@ -1026,6 +1064,7 @@ export default function VegaTab() {
                 onRegenerate={() => onRegenerateOne(full)}
                 onClone={() => { void onCloneOne(full); }}
                 onDelete={() => { void onDeleteOne(full); }}
+                zone={zone}
               />
             </div>
           );

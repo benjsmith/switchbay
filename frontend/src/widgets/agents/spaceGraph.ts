@@ -10,6 +10,51 @@
 export const CHIEF_ID = "chief";
 export const BLACKBOARD_ID = "blackboard";
 
+/** Statuses that mean a job is in flight on the DAG. */
+export const LIVE_DAG_STATUSES = new Set([
+  "running", "planning", "merging", "verifying", "expanding", "synthesizing",
+  "waiting_limits",
+]);
+
+export function isLiveDagStatus(status: string | null | undefined): boolean {
+  return LIVE_DAG_STATUSES.has(String(status || "").toLowerCase());
+}
+
+/**
+ * A live job keeps moving for the whole run. Gating the halo on a few
+ * seconds since the last token made a long tool call look idle.
+ */
+export function dagNodePulses(
+  status: string | null | undefined,
+  _lastChunkAt = 0,
+  _nowSec = 0,
+): boolean {
+  return isLiveDagStatus(status);
+}
+
+export type RunningJob = {
+  id: string;
+  status?: string | null;
+  kind?: string | null;
+};
+
+/** Running jobs the plan didn't list still belong on the live DAG. */
+export function runningJobsMissingFromPlan(
+  planIds: Iterable<string>,
+  jobs: RunningJob[],
+): RunningJob[] {
+  const have = new Set(planIds);
+  const seen = new Set<string>();
+  const out: RunningJob[] = [];
+  for (const job of jobs) {
+    if (!job.id || have.has(job.id) || seen.has(job.id)) continue;
+    if (!isLiveDagStatus(job.status)) continue;
+    seen.add(job.id);
+    out.push(job);
+  }
+  return out;
+}
+
 export type SpaceEdge = { from: string; to: string };
 
 /** Consumes the board rather than posting to it — mirrors the daemon,

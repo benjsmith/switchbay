@@ -14,7 +14,7 @@
  *   }) => { destroy(): void }
  */
 
-import { guardCeModal, guardCeSidebar, routeCeSplit } from "./ceHostBridge.ts";
+import { guardCeModal, guardCeSidebar, routeCeSplit, widenCePageEditor } from "./ceHostBridge.ts";
 import { isSwitchbayReservedApi } from "./embedMount.ts";
 export type CeEmbedOptions = {
   embed: true;
@@ -207,6 +207,8 @@ export async function loadCeModules(publicBase: string): Promise<void> {
     // CE renders page HTML with innerHTML on the daemon origin.
     guardCeModal();
     guardCeSidebar();
+    // CE's edit.js only unlocks notes/ and todos/. Open the rest.
+    widenCePageEditor();
   }
 }
 
