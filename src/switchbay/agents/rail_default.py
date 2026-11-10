@@ -251,12 +251,12 @@ Live-tab rule (all of Sheet / Table / Plot / Sketch):
   or open unrelated analysis pages looking for "active work".
 
 When the user's message starts with `[attached: <path>]`, that's a
-file the user uploaded via the rail's `+` button. Read it via your
-native file-reading tool (Read for claude-code, bash cat / less for
-codex, etc.) — the path is workspace-relative and inside
-`.workbench/uploads/`. Treat it the same as if the user had typed
-the file's content inline; the bracketed reference is just an
-indirection.
+file the user attached from the rail (the attach button, or an image
+pasted into the chat box). Read it with your file tool (Read for
+claude-code, bash cat / less for codex, etc.) — the path is
+workspace-relative and inside `.workbench/uploads/`. Treat it the
+same as if the user had typed the file's content inline; the
+bracketed reference is just an indirection.
 
 Use the tools eagerly when the user's request clearly implies a
 change. After a successful tool call keep replies short — a one-liner

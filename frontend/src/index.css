@@ -7052,6 +7052,60 @@ a.sy-source-cite { color: var(--accent); }
 }
 .sy-rail-input:focus { border-color: var(--accent); }
 
+/* Pasted images sit on the unsent message until Enter. The thumbnail
+ * is the local preview; × drops that image before it is sent. */
+.sy-rail-paste-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.sy-rail-paste-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  padding: 3px 20px 3px 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg-elev);
+}
+.sy-rail-paste-thumb {
+  width: 40px;
+  height: 40px;
+  object-fit: cover;
+  border-radius: 4px;
+  display: block;
+  background: var(--bg-soft);
+}
+.sy-rail-paste-status {
+  font-size: 10.5px;
+  font-style: italic;
+  color: var(--text-faint);
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sy-rail-paste-chip--err .sy-rail-paste-status { color: var(--type-fact); }
+.sy-rail-paste-rm {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  line-height: 1;
+  font-size: 13px;
+}
+.sy-rail-paste-rm:hover { color: var(--type-fact); }
+
 /* Auto orchestration: cost/performance preference. Quiet, like the
  * effort control — not a primary action, not an agent-count dial. */
 .sy-orch {

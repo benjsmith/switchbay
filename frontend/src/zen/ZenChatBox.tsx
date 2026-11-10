@@ -14,7 +14,15 @@ import VoiceButton from "../rail/VoiceButton";
 import ReasoningPicker from "../rail/ReasoningPicker";
 import { useOrchestrationControl } from "../rail/OrchestrationSlider";
 import { useComposerDraft } from "../lib/composerDraft";
+import { attachmentsPending, planComposerSubmit } from "../lib/imagePaste";
 import WebPolicyToggle from "../widgets/WebPolicyToggle";
+import {
+  PendingImageChips,
+  clearPendingImages,
+  onComposerPaste,
+  removePendingImage,
+  usePendingImages,
+} from "../rail/pendingImages";
 
 // One persisted, drag-resizable height for BOTH the chat and the pty
 // view — so the box no longer jumps between a content-sized chat and a
@@ -101,6 +109,8 @@ export default function ZenChatBox({
   // as the Power rail (the agent reads the file via its own tools).
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [attachStatus, setAttachStatus] = useState<string | null>(null);
+  const pendingImages = usePendingImages();
+  const imagesAttached = attachmentsPending(pendingImages);
 
   // ── Box height (shared by chat + pty, persisted, drag-resizable) ──
   const [boxH, setBoxH] = useState(readBoxH);
@@ -333,7 +343,9 @@ export default function ZenChatBox({
   useEffect(() => {
     const t = input.trim();
     setChatForced(false);
-    if (!t || t.startsWith("/") || t.startsWith("!") || t.includes("\n")) {
+    if (
+      !t || imagesAttached || t.startsWith("/") || t.startsWith("!") || t.includes("\n")
+    ) {
       setShellHint(false);
       return;
     }
@@ -344,14 +356,21 @@ export default function ZenChatBox({
         .catch(() => setShellHint(false));
     }, 200);
     return () => window.clearTimeout(h);
-  }, [input]);
+  }, [input, imagesAttached]);
 
   const submit = () => {
     const text = input.trim();
-    if (!text) return;
     const asShell =
       shellHint && !chatForced && !text.startsWith("!") && !text.startsWith("/");
-    onSubmit(asShell ? `!${text}` : text, orch.opts);
+    const plan = planComposerSubmit(text, pendingImages, asShell);
+    if (plan.blocked) {
+      setAttachStatus("uploading image…");
+      window.setTimeout(() => setAttachStatus(null), 2500);
+      return;
+    }
+    if (!plan.message) return;
+    onSubmit(plan.message, orch.opts);
+    clearPendingImages();
     setInput("");
     setShellHint(false);
     setChatForced(false);
@@ -577,6 +596,7 @@ export default function ZenChatBox({
             {attachStatus && (
               <div className="sy-zen-interp">{attachStatus}</div>
             )}
+            <PendingImageChips items={pendingImages} onRemove={removePendingImage} />
             <div className="sy-zen-composer-row">
               <button
                 type="button"
@@ -617,6 +637,7 @@ export default function ZenChatBox({
                 rows={2}
                 value={input}
                 onChange={(ev) => setInput(ev.target.value)}
+                onPaste={(ev) => onComposerPaste(ev, setInput)}
                 onKeyDown={(ev) => {
                   if (acOpen) {
                     if (ev.key === "ArrowDown") {

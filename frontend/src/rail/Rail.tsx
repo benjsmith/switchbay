@@ -10,7 +10,15 @@ import ReasoningPicker from "./ReasoningPicker";
 import { useOrchestrationControl } from "./OrchestrationSlider";
 import { registerChord } from "../keys";
 import { useComposerDraft } from "../lib/composerDraft";
+import { attachmentsPending, planComposerSubmit, uploadChatAttachment } from "../lib/imagePaste";
 import WebPolicyToggle from "../widgets/WebPolicyToggle";
+import {
+  PendingImageChips,
+  clearPendingImages,
+  onComposerPaste,
+  removePendingImage,
+  usePendingImages,
+} from "./pendingImages";
 
 type VerbInfo = { name: string; aliases: string[]; description: string };
 
@@ -504,10 +512,12 @@ export default function Rail({
     if (focusedRun && !liveRuns.includes(focusedRun)) setFocusedRun(null);
   }, [liveRuns, focusedRun]);
   // Tiny status banner shown next to the action buttons after a
-  // file upload (cleared after a few seconds). The actual
-  // attachment reference lands prepended in the input itself —
-  // user can edit / remove it before sending.
+  // file upload (cleared after a few seconds). The attach button
+  // prepends `[attached: …]` in the input. A pasted image stays a
+  // thumbnail until send, then uses that same prefix.
   const [attachStatus, setAttachStatus] = useState<string | null>(null);
+  const pendingImages = usePendingImages();
+  const imagesAttached = attachmentsPending(pendingImages);
   const fileInputRef = useRef<HTMLInputElement>(null);
   // User-global custom action buttons. Persists across workspaces
   // via ~/.config/switchbay/action-buttons.json. List fetched on
@@ -584,7 +594,9 @@ export default function Rail({
   useEffect(() => {
     const t = input.trim();
     setChatForced(false);
-    if (!t || t.startsWith("/") || t.startsWith("!") || t.includes("\n")) {
+    if (
+      !t || imagesAttached || t.startsWith("/") || t.startsWith("!") || t.includes("\n")
+    ) {
       setShellHint(false);
       return;
     }
@@ -595,7 +607,7 @@ export default function Rail({
         .catch(() => setShellHint(false));
     }, 200);
     return () => window.clearTimeout(h);
-  }, [input]);
+  }, [input, imagesAttached]);
 
   // Global focus-the-rail signal. TabStrip's "New…" affordance fires
   // this when the user clicks the trailing `+` so the cursor lands in
@@ -765,13 +777,22 @@ export default function Rail({
 
   const submit = () => {
     const text = input.trim();
-    if (!text) return;
     // Router: detected-shell input goes through the `!` path (new
     // shell thread) unless the user Tab-flipped it back to chat.
+    // A pasted image is part of the chat message, so it is not
+    // wrapped as a shell command.
     const asShell =
       shellHintRef.current && !chatForcedRef.current &&
       !text.startsWith("!") && !text.startsWith("/");
-    onSubmit(asShell ? `!${text}` : text, orch.opts);
+    const plan = planComposerSubmit(text, pendingImages, asShell);
+    if (plan.blocked) {
+      setAttachStatus("uploading image…");
+      window.setTimeout(() => setAttachStatus(null), 2500);
+      return;
+    }
+    if (!plan.message) return;
+    onSubmit(plan.message, orch.opts);
+    clearPendingImages();
     setInput("");
     setShellHint(false);
     setChatForced(false);
@@ -1357,12 +1378,14 @@ export default function Rail({
             )}
           </div>
         )}
+        <PendingImageChips items={pendingImages} onRemove={removePendingImage} />
         <textarea
           ref={inputRef}
           className="sy-rail-input"
           rows={3}
           value={input}
           onChange={(ev) => setInput(ev.target.value)}
+          onPaste={(ev) => onComposerPaste(ev, setInput)}
           onKeyDown={(ev) => {
             if (acOpen) {
               if (ev.key === "ArrowDown") {
@@ -1451,15 +1474,7 @@ export async function uploadFile(
 ) {
   setStatus(`uploading ${file.name}…`);
   try {
-    const fd = new FormData();
-    fd.append("file", file);
-    const r = await fetch("/api/chat/upload", { method: "POST", body: fd });
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      setStatus(`upload failed: ${body.error ?? r.status}`);
-      return;
-    }
-    const body = (await r.json()) as { path: string; size: number };
+    const body = await uploadChatAttachment(file);
     // Prepend the attachment reference to whatever the user has
     // already typed. The agent sees `[attached: <path>]` and reads
     // the file via its native file-reading tool (claude_code's
