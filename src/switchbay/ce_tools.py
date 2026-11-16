@@ -114,6 +114,13 @@ def _ce_run(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         script, args, cwd=workspace, timeout=timeout,
         require_json=bool(require_json),
     )
+    if (
+        script == "okf_export.py"
+        and isinstance(out, dict)
+        and not out.get("error")
+    ):
+        from . import okf_export
+        okf_export.finalize_after_ce(workspace, args, out)
     return out
 
 

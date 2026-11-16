@@ -313,6 +313,26 @@ def filter_response_headers(headers: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
+def _is_viewer_data(rest: str) -> bool:
+    path = (rest or "").split("?", 1)[0].rstrip("/")
+    return path == "/data.json" or path.endswith("/data.json")
+
+
+def _overlay_meta_ontology(payload: bytes, request: web.Request) -> bytes:
+    """Patch viewer JSON only when the workspace opted into a meta-ontology.
+
+    No file: the upstream bytes are returned as-is, including whitespace.
+    """
+    from pathlib import Path
+
+    from . import meta_ontology
+
+    workspace = request.app.get("workspace")
+    if not isinstance(workspace, Path):
+        return payload
+    return meta_ontology.patch_graph_json(payload, workspace)
+
+
 async def _proxy_http(request: web.Request) -> web.StreamResponse:
     matched = match_embed_prefix(request.path)
     if not matched:
@@ -358,6 +378,13 @@ async def _proxy_http(request: web.Request) -> web.StreamResponse:
         ) as upstream:
             resp_headers = filter_response_headers(upstream.headers)
             payload = await upstream.read()
+            if (
+                request.method.upper() != "HEAD"
+                and upstream.status == 200
+                and prefix == PREFIX_CE
+                and _is_viewer_data(rest)
+            ):
+                payload = _overlay_meta_ontology(payload, request)
             # Compress large JSON/static for browsers even when CE serves plain.
             if request.method.upper() != "HEAD":
                 payload, resp_headers = maybe_gzip_body(

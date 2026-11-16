@@ -6,6 +6,7 @@
  * see widgets/embed/vscodeGraphBridge.ts. No daemon involved.
  */
 import embedShellHtml from "./widgets/embed/ceEmbedShell.html?raw";
+import { applyMetaOntologyChrome } from "./widgets/embed/metaOntologyChrome.ts";
 import { loadCeModules, type CeCreateHandle } from "./widgets/embed/ceEmbedBootstrap.ts";
 import { bindCeReplay, currentModalPageId, renderMath, waitForCeToast } from "./widgets/embed/ceHostBridge.ts";
 import {
@@ -164,6 +165,7 @@ function paint(): void {
   // Splitting a workspace needs Switch Bay's daemon (registry, both graphs).
   mount.querySelector("#split-toggle")?.remove();
   handle.mountCanvas(mount);
+  applyMetaOntologyChrome(mount, handle.getData?.() ?? null);
   bindCeReplay(mount, handle.getData?.());
   watchModal();
   const ping = () => window.dispatchEvent(new Event("resize"));

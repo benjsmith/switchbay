@@ -502,6 +502,28 @@ all. Two interop layers sit on top:
   CE-only structure that OKF has no home for round-trips through `x_ce_*`
   extension keys, so nothing is lost on the way out or back.
 
+### Meta-ontology
+
+A workspace may carry `.curator/meta-ontology.yaml`. The file lists
+node types, edge types, and frontmatter keys. Each entry has the
+instruction the curator should follow. `examples/meta-ontology.yaml`
+is the vocabulary the graph already shows, plus hypothesis and
+assumption. Copy it into a workspace to opt in. Switch Bay does not
+read the copy in the repo.
+
+With no file, curate prompts, the graph legend, and OKF export are
+unchanged.
+
+With a file:
+
+- Curate prompts include each term and its instruction.
+- The graph legend uses each node's label. A colour in the file
+  replaces the default for that type. Page titles are not rewritten.
+- After `okf_export.py`, the concept `type` stays as Curiosity Engine
+  wrote it. The export adds `x_ce_type_label` and
+  `x_ce_type_description`, and writes the same terms to
+  `x_ce_ontology.yaml` in the export directory.
+
 ---
 
 ## See also

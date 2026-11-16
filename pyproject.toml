@@ -20,6 +20,9 @@ dependencies = [
     # OS trust store for HTTPS (corp TLS proxies). Injected at daemon boot.
     "truststore>=0.10.0",
     "idna>=3.15",
+    # Workspace meta-ontology file. 6.0.3 (2025-09-25) is the locked
+    # release already pulled in by the dev tools; safe_load only.
+    "pyyaml>=6.0.3,<7",
 ]
 # NOTE: `sentence-transformers` (which pulls PyTorch + the ~450 MB ML
 # stack) is NOT a base dependency — it lives in the `semantic`
