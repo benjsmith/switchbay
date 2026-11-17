@@ -502,6 +502,47 @@ all. Two interop layers sit on top:
   CE-only structure that OKF has no home for round-trips through `x_ce_*`
   extension keys, so nothing is lost on the way out or back.
 
+### Meta-ontology
+
+A workspace may carry `.curator/meta-ontology.yaml`. The file lists
+node types, edge types, and frontmatter keys. Each entry has the
+instruction the curator should follow. `examples/meta-ontology.yaml`
+is the vocabulary the graph already shows, plus hypothesis and
+assumption. Copy it into a workspace to opt in. Switch Bay does not
+read the copy in the repo.
+
+With no file, curate prompts, the graph legend, and OKF export are
+unchanged.
+
+With a file:
+
+- Curate prompts include each term and its instruction.
+- The graph legend uses each node's label. A colour in the file
+  replaces the default for that type. Page titles are not rewritten.
+- After `okf_export.py`, the concept `type` stays as Curiosity Engine
+  wrote it. The export adds `x_ce_type_label` and
+  `x_ce_type_description`, and writes the same terms to
+  `x_ce_ontology.yaml` in the export directory.
+
+### Case pages and claim lint
+
+`python -m switchbay.claim_lint <workspace>` checks the wiki. It does
+not run on its own during curate.
+
+- On a fact, evidence, hypothesis, or assumption page, every claim
+  paragraph contains a `(vault:...)` citation, a `(table:...)`
+  citation, or a `[[wikilink]]`. Notes and todos are skipped. A
+  meta-ontology file can mark more types with `claims: true`, or
+  exempt one with `claims: false`.
+- A figure page needs a non-empty `sources` list.
+- A page with `role: case` or `type: case` needs Objectives,
+  Constraints, Evaluation methods, Success criteria, and System
+  context. `switchbay.case_page.render` fills
+  `src/switchbay/templates/case_page.md` with those sections.
+- `confidence` (0 to 1), `uncertainty` (`attested`, `inferred`, or
+  `unattested`), and `role` are checked when a page sets them. Keys
+  declared in the meta-ontology file are checked the same way.
+
 ---
 
 ## See also

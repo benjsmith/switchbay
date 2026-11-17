@@ -10,6 +10,7 @@ import {
 import { useSelection } from "../../selection/SelectionContext";
 import { useTabs } from "../../center/TabsContext";
 import { openUploadVaultDialog } from "../../lib/uploadVault.ts";
+import { applyMetaOntologyChrome } from "./metaOntologyChrome.ts";
 
 /**
  * Graph = Curiosity Engine's own viewer (atlas/classic canvas, search,
@@ -115,6 +116,7 @@ export default function CeAtlasEmbed({ showAddFile, suppressDocModal }: Props = 
         setState({ status: "ready" });
         const d = st.data as CeDataLite | null;
         setCounts({ nodes: d?.nodes?.length ?? 0, edges: d?.edges?.length ?? 0 });
+        applyMetaOntologyChrome(el, st.data);
       } else if (st.status === "error") {
         setState({ status: "error", message: st.message });
       } else if (st.status === "loading" || st.status === "idle") {

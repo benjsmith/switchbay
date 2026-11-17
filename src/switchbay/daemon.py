@@ -6532,6 +6532,14 @@ async def _curate_extra_system(
     )
     if prime:
         extra = (extra + "\n\n" + prime).strip()
+    from . import meta_ontology
+    ont = await asyncio.to_thread(
+        meta_ontology.curation_system,
+        workspace,
+        cap_chars=cap * _CHARS_PER_TOKEN_EST,
+    )
+    if ont:
+        extra = (extra + "\n\n" + ont).strip()
     return extra
 
 

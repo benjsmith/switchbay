@@ -1,0 +1,191 @@
+# Copy to <workspace>/.curator/meta-ontology.yaml to opt in.
+# Switch Bay does not read this copy. With no file in .curator/,
+# curate prompts, the graph legend, and OKF export stay as they are.
+#
+# nodes: graph / wiki types. label is the legend text. description is
+# how the curator should write that type.
+# edges: relationship types the curator should draw.
+# schema_keys: frontmatter the curator may set. Claim lint checks
+# them when they are present on a page.
+version: 1
+nodes:
+  - type: project
+    label: Projects
+    folder: projects
+    prefix: proj
+    color: "#4d1ae8"
+    description: |
+      A project or case home page. A case (role: case) states the
+      objectives, constraints, evaluation methods, success criteria,
+      and system context. Do not put a sealed answer on this page.
+  - type: analysis
+    label: Analyses
+    folder: analyses
+    prefix: ana
+    color: "#1d6996"
+    description: |
+      A multi-source synthesis. Separate what the sources say from
+      the conclusion, and cite each claim in the same paragraph.
+  - type: concept
+    label: Concepts
+    folder: concepts
+    prefix: con
+    color: "#38a6a5"
+    description: |
+      A mechanism or other stable idea: how a part of the system
+      works, or how it fails. One mechanism per page. Cite the
+      source that defines it.
+  - type: entity
+    label: Entities
+    folder: entities
+    prefix: ent
+    color: "#0f8554"
+    description: |
+      A thing in the system, such as a service, component, person,
+      or organisation. Stick to what the sources say it is and how
+      it connects.
+  - type: procedure
+    label: Procedures
+    folder: procedures
+    prefix: proc
+    color: "#5e4fa2"
+    description: |
+      A reusable how-to. Steps must match a source. Do not invent steps.
+  - type: execution
+    label: Executions
+    folder: executions
+    prefix: exec
+    color: "#c51b8a"
+    description: |
+      One dated run of a procedure. Record what was actually done
+      and the result, and cite the result.
+  - type: evidence
+    label: Evidence
+    folder: evidence
+    prefix: evi
+    color: "#73af48"
+    claims: true
+    description: |
+      An observation. Record the method, the result, and the
+      interpretation, and tie the page to one source.
+  - type: fact
+    label: Facts
+    folder: facts
+    prefix: fac
+    color: "#edad08"
+    claims: true
+    description: |
+      One atomic claim. The claim and its citation sit in the same
+      paragraph. Do not bundle several claims on one page.
+  - type: figure
+    label: Figures
+    folder: figures
+    prefix: fig
+    color: "#e17c05"
+    description: |
+      A plot or diagram. Name the data file in sources. The caption
+      states what the figure shows and cites that data.
+  - type: table
+    label: Tables
+    folder: tables
+    prefix: tab
+    color: "#cc503e"
+    description: |
+      An extracted or authored table. Keep the numbers as they are
+      in the source, and cite the source.
+  - type: source
+    label: Sources
+    folder: sources
+    prefix: src
+    color: "#94346e"
+    description: |
+      A vault document or external work. Summarise it. Do not treat
+      the summary as a new finding.
+  - type: note
+    label: Notes
+    folder: notes
+    prefix: note
+    color: "#6f4070"
+    claims: false
+    description: |
+      Staging. Notes are not conclusions. Claim lint skips them.
+  - type: todo
+    label: Todos
+    folder: todos
+    prefix: todo
+    color: "#9656a2"
+    claims: false
+    description: |
+      An open action. Todos are not conclusions. Claim lint skips them.
+  - type: unclassified
+    label: Unclassified
+    color: "#ffffff"
+    description: |
+      A page whose type is not set. Do not leave a conclusion here.
+      Give it a type, or move the text.
+  - type: hypothesis
+    label: Hypothesis
+    folder: hypotheses
+    prefix: hyp
+    color: "#7570b3"
+    claims: true
+    description: |
+      An alternative that is open, supported, or refuted. Say which,
+      in status. It predicts something a sourced observation could
+      confirm or contradict.
+  - type: assumption
+    label: Assumption
+    folder: assumptions
+    prefix: asm
+    color: "#1b9e77"
+    claims: true
+    description: |
+      A premise the reasoning needs. If a source attests it, cite
+      that source. If not, set uncertainty to unattested, and do not
+      use the page as the only support for a claim.
+edges:
+  - type: wikilink
+    label: links to
+    description: |
+      A body [[wikilink]] to another wiki page. Use it when this
+      page depends on that page.
+  - type: cites
+    label: cites
+    description: |
+      A (vault:path) or (table:name) citation. Put it in the same
+      paragraph as the claim it supports.
+  - type: sources
+    label: sourced from
+    description: |
+      The frontmatter sources list. Evidence and figure pages name
+      the vault file or page they come from.
+  - type: relates_to
+    label: relates to
+    description: |
+      The frontmatter relates_to list. Use it for an association
+      that is not itself a citation.
+schema_keys:
+  - key: confidence
+    applies_to: [fact, evidence, hypothesis, assumption]
+    minimum: 0
+    maximum: 1
+    description: |
+      A number from 0 to 1 for how firmly the page is held. Omit it
+      when you have not judged.
+  - key: uncertainty
+    applies_to: [fact, evidence, hypothesis, assumption]
+    values: [attested, inferred, unattested]
+    description: |
+      attested when a source states it, inferred when it is concluded
+      from sources, unattested when nothing in the vault supports it.
+  - key: role
+    applies_to: [fact, analysis, project]
+    values: [case, assumption, hypothesis, claim]
+    description: |
+      What the page is doing beyond its type. Use case on a project
+      home, assumption on a premise, hypothesis on an alternative.
+  - key: status
+    applies_to: [hypothesis]
+    values: [open, supported, refuted]
+    description: |
+      For a hypothesis, whether it is still open, supported, or refuted.

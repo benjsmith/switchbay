@@ -482,6 +482,7 @@ def read_cached(
         return None
     _backfill_unclassified_types(data)
     _override_palette(data)
+    _apply_meta_ontology(workspace, data)
     if enrich:
         enrich_from_disk(workspace, data)
     return data
@@ -508,6 +509,7 @@ def enrich_from_disk(workspace: Path, data: dict[str, Any]) -> dict[str, int]:
     decks_n = int(inject_deck_nodes(workspace, data) or 0)
     pages_n = int(wiki_sync.inject_on_disk_pages(workspace, data) or 0)
     _override_palette(data)
+    _apply_meta_ontology(workspace, data)
     return {"types": types_n, "decks": decks_n, "pages": pages_n}
 
 
@@ -1036,6 +1038,18 @@ def _override_palette(data: dict) -> None:
         return
     for k, v in _PALETTE_OVERRIDE.items():
         palette[k] = v
+
+
+def _apply_meta_ontology(workspace: Path, data: dict) -> None:
+    """Overlay ``.curator/meta-ontology.yaml`` when that file exists.
+
+    Absent file: no new keys, palette left as ``_override_palette`` set it.
+    """
+    try:
+        from . import meta_ontology
+        meta_ontology.apply_to_graph_if_configured(workspace, data)
+    except Exception:
+        log.exception("meta-ontology overlay failed for %s", workspace)
 
 
 # Title prefix → CE page-type mapping. Mirrors CE's user-visible
