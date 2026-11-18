@@ -231,6 +231,86 @@ edges:
     assert result["meta_ontology"]["concepts"] == 1
 
 
+def test_export_labels_figure_and_table_when_the_file_omits_them(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: evidence
+    label: Observation
+    description: Record the method, the result, and the interpretation.
+""")
+    bundle = tmp_path / "okf"
+    figure = bundle / "figures" / "latency.md"
+    table = bundle / "tables" / "scores.md"
+    extracted = bundle / "tables" / "lifted.md"
+    other = bundle / "concepts" / "shop.md"
+    for path, text in (
+        (figure, "---\ntype: figure\ntitle: Latency\n---\n\nA plot.\n"),
+        (table, "---\ntype: table\ntitle: Scores\n---\n\nA table.\n"),
+        (extracted, "---\ntype: extracted-table\ntitle: Lifted\n---\n\nNumbers.\n"),
+        (other, "---\ntype: concept\ntitle: Shop\n---\n\nA concept.\n"),
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    ont = meta_ontology.load(tmp_path)
+    assert ont is not None
+    count = okf_export.apply_to_export_tree(bundle, ont)
+    assert count == 3
+    fig = figure.read_text(encoding="utf-8")
+    assert "type: figure" in fig
+    assert "x_ce_type_label: Figures" in fig
+    assert "Name the data file in sources" in fig
+    tab = table.read_text(encoding="utf-8")
+    assert "type: table" in tab
+    assert "x_ce_type_label: Tables" in tab
+    assert "Keep the numbers as they are" in tab
+    lifted = extracted.read_text(encoding="utf-8")
+    assert "type: extracted-table" in lifted
+    assert "x_ce_type_label: Tables" in lifted
+    assert other.read_text(encoding="utf-8").startswith("---\ntype: concept\n")
+    sidecar = yaml_load(bundle / "x_ce_ontology.yaml")
+    labels = {node["type"]: node["label"] for node in sidecar["nodes"]}
+    assert labels["evidence"] == "Observation"
+    assert labels["figure"] == "Figures"
+    assert labels["table"] == "Tables"
+
+
+def test_export_keeps_a_figure_description_from_the_file(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: figure
+    label: Plot
+    description: Name the data file in the caption.
+""")
+    bundle = tmp_path / "okf"
+    figure = bundle / "figures" / "latency.md"
+    figure.parent.mkdir(parents=True)
+    figure.write_text("---\ntype: figure\ntitle: Latency\n---\n\nA plot.\n", encoding="utf-8")
+    ont = meta_ontology.load(tmp_path)
+    assert ont is not None
+    okf_export.apply_to_export_tree(bundle, ont)
+    text = figure.read_text(encoding="utf-8")
+    assert "x_ce_type_label: Plot" in text
+    assert "Name the data file in the caption" in text
+    sidecar = yaml_load(bundle / "x_ce_ontology.yaml")
+    types = [node["type"] for node in sidecar["nodes"]]
+    assert types[0] == "figure"
+    assert "table" in types
+
+
+def test_shipped_example_figure_and_table_match_export_defaults():
+    root = Path(__file__).resolve().parents[2]
+    ont = meta_ontology.load_file(root / "examples" / "meta-ontology.yaml")
+    for default in meta_ontology.EXPORT_DEFAULT_NODES:
+        node = ont.node(default.type)
+        assert node is not None
+        assert node.label == default.label
+        assert node.folder == default.folder
+        assert node.color == default.color
+        assert " ".join(node.description.split()) == default.description
+
+
 def test_export_dir_reads_flags_and_does_not_guess(tmp_path: Path):
     assert okf_export.export_dir(["--out", str(tmp_path)], {}) == tmp_path
     assert okf_export.export_dir(["--output=okf"], {}) == Path("okf")

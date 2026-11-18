@@ -483,6 +483,47 @@ def _one_line(text: str) -> str:
     return " ".join(text.split())
 
 
+EXPORT_DEFAULT_NODES: tuple[NodeTerm, ...] = (
+    NodeTerm(
+        type="figure",
+        label="Figures",
+        description=(
+            "A plot or diagram. Name the data file in sources. "
+            "The caption states what the figure shows and cites that data."
+        ),
+        folder="figures",
+        prefix="fig",
+        color="#e17c05",
+    ),
+    NodeTerm(
+        type="table",
+        label="Tables",
+        description=(
+            "An extracted or authored table. Keep the numbers as they "
+            "are in the source, and cite the source."
+        ),
+        folder="tables",
+        prefix="tab",
+        color="#cc503e",
+    ),
+)
+
+
+def for_export(ontology: MetaOntology) -> MetaOntology:
+    """Ontology plus figure and table, when the file left them out."""
+    missing = tuple(
+        node for node in EXPORT_DEFAULT_NODES if ontology.node(node.type) is None
+    )
+    if not missing:
+        return ontology
+    return MetaOntology(
+        nodes=ontology.nodes + missing,
+        edges=ontology.edges,
+        schema_keys=ontology.schema_keys,
+        path=ontology.path,
+    )
+
+
 def _node_public(n: NodeTerm) -> dict[str, Any]:
     out: dict[str, Any] = {
         "type": n.type,

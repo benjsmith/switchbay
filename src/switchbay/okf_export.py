@@ -9,6 +9,10 @@ and ``x_ce_type_description``. The same terms are written to
 
 With no config file, ``finalize_after_ce`` returns without reading
 or writing the export.
+
+Figure and table pages are labelled even when the workspace file
+does not list those types. A type the file does define keeps the
+file's text. ``extracted-table`` uses the table term.
 """
 
 from __future__ import annotations
@@ -27,6 +31,10 @@ _OUT_FLAGS = frozenset({"--out", "--output", "-o", "--dest", "--dir"})
 _RESULT_KEYS = ("out", "output", "path", "dest", "directory")
 _SKIP_NAMES = frozenset({"index.md", "log.md"})
 _FM_KEY_RE = re.compile(r"^([A-Za-z0-9_]+)\s*:(.*)$")
+_TYPE_ALIAS = {
+    "extracted-table": "table",
+    "extracted_table": "table",
+}
 
 
 def finalize_after_ce(
@@ -74,6 +82,7 @@ def apply_to_export_tree(root: Path, ontology: MetaOntology) -> int:
 
     Returns how many concept files gained a type label.
     """
+    ontology = meta_ontology.for_export(ontology)
     count = 0
     for path in sorted(root.rglob("*.md")):
         if path.name in _SKIP_NAMES:
@@ -109,6 +118,8 @@ def annotate_concept(text: str, ontology: MetaOntology) -> str:
     if not type_name:
         return text
     node = ontology.node(type_name)
+    if node is None:
+        node = ontology.node(_TYPE_ALIAS.get(type_name, ""))
     if node is None:
         return text
     lines = head.splitlines()

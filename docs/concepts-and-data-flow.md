@@ -523,6 +523,11 @@ With a file:
   wrote it. The export adds `x_ce_type_label` and
   `x_ce_type_description`, and writes the same terms to
   `x_ce_ontology.yaml` in the export directory.
+- Figure and table pages are labelled even when the workspace file
+  does not list those types. The labels are the default figure and
+  table descriptions: a figure names its data, and a table keeps the
+  source numbers. A type the file does define keeps the file's text.
+  An `extracted-table` page uses the table term.
 
 ### Case pages and claim lint
 
@@ -531,16 +536,26 @@ not run on its own during curate.
 
 - On a fact, evidence, hypothesis, or assumption page, every claim
   paragraph contains a `(vault:...)` citation, a `(table:...)`
-  citation, or a `[[wikilink]]`. Notes and todos are skipped. A
-  meta-ontology file can mark more types with `claims: true`, or
-  exempt one with `claims: false`.
+  citation, a `(figure:...)` citation, or a `[[wikilink]]`. Notes
+  and todos are skipped. A meta-ontology file can mark more types
+  with `claims: true`, or exempt one with `claims: false`.
+- Each of those citations has to resolve. A vault citation needs
+  that file. A table citation needs that table page, or a CSV or
+  parquet file when the citation names one. A figure citation needs
+  that figure page or image. A wikilink needs that page. `#anchor`
+  needs that heading. `#row=` or `#id=` needs that row, and
+  `#column=` needs that column. Row checks read markdown tables and
+  CSV files. A parquet citation checks column names in the file.
+  The message names the claim, the citation, and the file, page,
+  table, figure, row, column, or anchor that is missing.
 - A figure page needs a non-empty `sources` list.
 - A page with `role: case` or `type: case` needs Objectives,
   Constraints, Evaluation methods, Success criteria, and System
   context. `switchbay.case_page.render` fills
   `src/switchbay/templates/case_page.md` with those sections.
 - `confidence` (0 to 1), `uncertainty` (`attested`, `inferred`, or
-  `unattested`), and `role` are checked when a page sets them. Keys
+  `unattested`), and `role` are checked when a page sets them. A
+  blank value, such as `confidence:`, is reported as blank. Keys
   declared in the meta-ontology file are checked the same way.
 
 ---
