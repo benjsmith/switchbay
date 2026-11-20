@@ -4,7 +4,10 @@
 
 Every claim paragraph on a fact, evidence, hypothesis, or assumption
 page must contain a ``(vault:...)``, ``(table:...)``, ``(figure:...)``,
-or ``[[wikilink]]`` citation, and that citation has to resolve. A vault
+``(graph:<mount>/<path>@<rev>)``,
+or ``[[wikilink]]`` citation, and that citation has to resolve. A graph
+citation has to match a snapshot or a cached live page at that
+revision. A vault
 citation needs the file. A table citation needs the table page, or a
 CSV or parquet file when the citation names one. A figure citation
 needs the figure page or image. A wikilink needs the page. ``#anchor``
@@ -65,7 +68,7 @@ BUILTIN_SCHEMA: tuple[SchemaKey, ...] = (
 )
 
 _CITE_RE = re.compile(
-    r"\(\s*(?P<kind>vault|table|figure)\s*:\s*(?P<body>[^)\n]*?)\)"
+    r"\(\s*(?P<kind>vault|table|figure|graph)\s*:\s*(?P<body>[^)\n]*?)\)"
     r"|\[\[(?P<link>[^\]\n]+)\]\]"
 )
 _LIST_RE = re.compile(r"^(?:[-*+]|\d+\.)\s+")
@@ -619,6 +622,9 @@ class _Index:
         elif cite.kind == "figure":
             found = self.find_figure(cite.target)
             noun = "figure"
+        elif cite.kind == "graph":
+            from .federation.citations import graph_problem
+            return graph_problem(self.workspace, cite.target)
         else:
             found = self.find_page(cite.target)
             noun = "page"

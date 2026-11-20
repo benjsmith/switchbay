@@ -503,7 +503,7 @@ def build_mcp_config(
         _MCP_SERVER_NAME: mcp_server_spec(workspace, allowed_tools=allowed_tools),
     }
     try:
-        for name, spec in mcpstore.as_claude_mcp_servers().items():
+        for name, spec in mcpstore.as_claude_mcp_servers(workspace).items():
             if name != _MCP_SERVER_NAME:
                 servers[name] = spec
     except Exception:  # noqa: BLE001 — a bad user entry never breaks a spawn

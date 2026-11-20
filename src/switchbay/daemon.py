@@ -3942,6 +3942,9 @@ async def handle_mcp_servers_add(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         return web.json_response({"error": "invalid json"}, status=400)
     try:
+        ws = request.app.get("workspace")
+        if ws and not body.get("allowed_workspaces"):
+            body["allowed_workspaces"] = [str(Path(ws).resolve())]
         s = await mcpstore.add(body)
     except ValueError as e:
         return web.json_response({"error": str(e)}, status=400)

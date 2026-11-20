@@ -46,6 +46,7 @@ WRITES_REVIEW = "review"
 KNOWLEDGE_READ: tuple[str, ...] = (
     "search_wiki", "read_wiki_page", "list_wiki_pages", "wiki_neighbors",
     "read_source", "ce_query", "ce_graph_retrieve", "read_workspace_plan",
+    "list_graph_mounts", "import_graph_page", "call_source", "list_sources",
 )
 
 SLIDESHOW_TOOLS: tuple[str, ...] = (

@@ -341,6 +341,31 @@ install` pinned to the release tag). Non-git payloads (MSI/pkg trees) still skip
 in-app update — they have no `frontend/dist` in git and must not run `uv` /
 `pnpm` on the endpoint.
 
+## Mounted graphs and external sources
+
+A workspace keeps its own wiki. It can also attach other graphs. A
+snapshot is a copy of a wiki taken at one revision, so an answer can
+name that revision later. A live graph is a server the workspace asks
+over the network. The same list of mounts is what an okstratr seat
+sees, because the seat uses Switchbay's tools.
+
+Each mount has a ceiling: public, internal, confidential, or
+restricted. A page keeps the highest label of anything it cites.
+Switchbay will not write a page onto a mount whose ceiling is lower,
+and publishing a workspace refuses pages above public. Lowering a
+label is a separate step, with a reason, and an administrator can
+turn that step off.
+
+Work IQ, Databricks Genie, AWS Context, and AWS Quick are sources,
+not graphs. A question can call them. The call is recorded on this
+machine. Nothing from those calls is published unless someone saves
+a snapshot into the workspace, and that snapshot carries the label.
+
+In the enterprise profile, mounts and sources have to match the
+allowlist in the admin file. Remote changes are proposals unless you
+change `graph_mounts.remote_write`. Declassification is off until
+you set `sources.declassify` to `allow`.
+
 ## Tester install (no machine admin)
 
 On a normal git checkout, without writing `/Library` or ProgramData:
