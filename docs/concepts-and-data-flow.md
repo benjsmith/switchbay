@@ -511,18 +511,37 @@ is the vocabulary the graph already shows, plus hypothesis and
 assumption. Copy it into a workspace to opt in. Switch Bay does not
 read the copy in the repo.
 
-With no file, curate prompts, the graph legend, and OKF export are
+An edge type may name the node types it runs between (`source` and
+`target`) and when the curator should draw it. The example draws
+`supports` and `contradicts` from an evidence page to a hypothesis
+page. On the evidence page, wikilink the hypothesis and list it
+under that edge's name. A hypothesis page states the claim, its
+scope, the predictions it makes, its status, confidence and
+uncertainty, the evidence on either side, and what would change
+the verdict. An analysis page does not write those hypotheses
+inline: author or update the hypothesis pages, then summarize and
+link them.
+
+Leave `source` and `target` off an edge to keep describing an edge
+the graph already draws. A file with no edges, and a workspace
+with no file, leave curate prompts, the graph, and OKF export
 unchanged.
 
 With a file:
 
-- Curate prompts include each term and its instruction.
+- Curate prompts include each term and its instruction. A typed
+  edge includes its endpoints.
 - The graph legend uses each node's label. A colour in the file
   replaces the default for that type. Page titles are not rewritten.
+  Typed edges are drawn from the frontmatter lists. `supports` and
+  `contradicts` use different colours, and the legend names each
+  edge. A node type the viewer does not know, such as hypothesis,
+  keeps the type written on the page.
 - After `okf_export.py`, the concept `type` stays as Curiosity Engine
   wrote it. The export adds `x_ce_type_label` and
   `x_ce_type_description`, and writes the same terms to
-  `x_ce_ontology.yaml` in the export directory.
+  `x_ce_ontology.yaml` in the export directory. A typed edge is
+  also written on the source concept as `x_ce_edges`.
 - Figure and table pages are labelled even when the workspace file
   does not list those types. The labels are the default figure and
   table descriptions: a figure names its data, and a table keeps the
@@ -557,6 +576,11 @@ not run on its own during curate.
   `unattested`), and `role` are checked when a page sets them. A
   blank value, such as `confidence:`, is reported as blank. Keys
   declared in the meta-ontology file are checked the same way.
+- A typed edge is checked when a page lists targets under that
+  edge's name. The target page has to exist, and the source and
+  target page types have to match the edge. Edges that do not
+  name endpoints are not checked. With no meta-ontology file,
+  this check does not run.
 
 ---
 

@@ -56,7 +56,10 @@ export default function MiniGraph({ data, centerId, centerPath }: Props) {
               x2={e.x2}
               y2={e.y2}
               data-kind={e.type}
-            />
+              stroke={e.color || undefined}
+            >
+              {e.label ? <title>{e.label}</title> : null}
+            </line>
           ))}
         </g>
         <g className="mini-circles">
@@ -121,7 +124,15 @@ type LaidOutNode = {
   x: number;
   y: number;
 };
-type LaidOutEdge = { x1: number; y1: number; x2: number; y2: number; type: string };
+type LaidOutEdge = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  type: string;
+  color?: string;
+  label?: string;
+};
 
 function buildLayout(
   data: GraphData,
@@ -230,7 +241,16 @@ function buildLayout(
     const ps = placed[s];
     const pt = placed[t];
     if (!ps || !pt) continue;
-    edges.push({ x1: ps.x, y1: ps.y, x2: pt.x, y2: pt.y, type: e.type ?? "" });
+    const label = e.typeLabel || (e.type && e.type !== "wikilink" && e.type !== "depicts" ? e.type : "");
+    edges.push({
+      x1: ps.x,
+      y1: ps.y,
+      x2: pt.x,
+      y2: pt.y,
+      type: e.type ?? "",
+      color: e.color,
+      label,
+    });
   }
 
   return { center: centreLaid, neighbours, edges, w, h, palette };

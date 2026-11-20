@@ -1070,6 +1070,7 @@ _PREFIX_TO_TYPE: dict[str, str] = {
     "proj": "project",
     "proc": "procedure",
     "exec": "execution",
+    "hyp": "hypothesis",
     # Decks scaffolded by switchbay's → Slides path. CE doesn't
     # ship a `deck` type; render them as `analysis` so the existing
     # palette / sidebar bucket picks them up. The `[deck]` title

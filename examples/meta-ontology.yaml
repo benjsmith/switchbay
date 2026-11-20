@@ -5,6 +5,9 @@
 # nodes: graph / wiki types. label is the legend text. description is
 # how the curator should write that type.
 # edges: relationship types the curator should draw.
+# source and target name the node types the edge runs between.
+# description says when to draw it and what evidence it needs.
+# Omit source and target for an edge the graph already draws.
 # schema_keys: frontmatter the curator may set. Claim lint checks
 # them when they are present on a page.
 version: 1
@@ -26,6 +29,9 @@ nodes:
     description: |
       A multi-source synthesis. Separate what the sources say from
       the conclusion, and cite each claim in the same paragraph.
+      For the hypotheses section, author or update a hypothesis
+      page for each hypothesis, then summarize those pages and
+      link them from this page. Do not write the hypotheses inline.
   - type: concept
     label: Concepts
     folder: concepts
@@ -130,9 +136,11 @@ nodes:
     color: "#7570b3"
     claims: true
     description: |
-      An alternative that is open, supported, or refuted. Say which,
-      in status. It predicts something a sourced observation could
-      confirm or contradict.
+      State the claim, the scope it applies to, and the predictions
+      it makes. Set status to open, supported, or refuted, and set
+      confidence and uncertainty when you have judged them. Link
+      the evidence that supports the claim and the evidence that
+      contradicts it. Say what observation would change the verdict.
   - type: assumption
     label: Assumption
     folder: assumptions
@@ -164,6 +172,24 @@ edges:
     description: |
       The frontmatter relates_to list. Use it for an association
       that is not itself a citation.
+  - type: supports
+    label: supports
+    color: "#0072b2"
+    source: [evidence]
+    target: [hypothesis]
+    description: |
+      Draw this when an evidence page's result matches a prediction
+      the hypothesis states. The result has to be in the evidence,
+      not only on the hypothesis page.
+  - type: contradicts
+    label: contradicts
+    color: "#d55e00"
+    source: [evidence]
+    target: [hypothesis]
+    description: |
+      Draw this when an evidence page's result conflicts with a
+      prediction the hypothesis states. A missing result is not
+      a contradiction.
 schema_keys:
   - key: confidence
     applies_to: [fact, evidence, hypothesis, assumption]

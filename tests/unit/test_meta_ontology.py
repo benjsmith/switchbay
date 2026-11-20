@@ -26,7 +26,20 @@ def test_shipped_example_is_the_default_vocabulary():
     assert by_type["hypothesis"].label == "Hypothesis"
     assert by_type["assumption"].claims is True
     assert by_type["evidence"].color == "#73af48"
-    assert {e.type for e in ont.edges} >= {"wikilink", "cites", "sources", "relates_to"}
+    assert {e.type for e in ont.edges} >= {
+        "wikilink", "cites", "sources", "relates_to", "supports", "contradicts",
+    }
+    assert ont.edge("supports").source == ("evidence",)
+    assert ont.edge("supports").target == ("hypothesis",)
+    assert ont.edge("contradicts").source == ("evidence",)
+    assert ont.edge("contradicts").target == ("hypothesis",)
+    assert ont.edge("supports").color != ont.edge("contradicts").color
+    assert ont.edge("wikilink").source == ()
+    assert "State the claim" in by_type["hypothesis"].description
+    assert "change the verdict" in by_type["hypothesis"].description
+    assert "Do not write the hypotheses inline" in by_type["analysis"].description
+    assert "evidence → hypothesis" in ont.curation_text()
+    assert "under supports" in ont.curation_text()
     keys = {k.key: k for k in ont.schema_keys}
     assert keys["uncertainty"].values == ("attested", "inferred", "unattested")
     assert keys["confidence"].minimum == 0
@@ -319,6 +332,230 @@ def test_export_dir_reads_flags_and_does_not_guess(tmp_path: Path):
     assert okf_export.export_dir([], {}) is None
 
 
+def test_yaml_without_edges_parses(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: fact
+    description: One atomic claim.
+""")
+    ont = meta_ontology.load(tmp_path)
+    assert ont is not None
+    assert ont.edges == ()
+    assert "Edge types:" not in ont.curation_text()
+    data = {"nodes": [{"id": "f", "type": "fact"}], "edges": [], "pages": {}}
+    assert meta_ontology.apply_to_graph_if_configured(tmp_path, data) is True
+    assert data["edges"] == []
+
+
+def test_edges_without_endpoints_stay_untyped(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: fact
+    description: One atomic claim.
+edges:
+  - type: cites
+    description: Same paragraph as the claim.
+""")
+    ont = meta_ontology.load(tmp_path)
+    assert ont is not None
+    assert ont.edge("cites").typed is False
+    exported = ont.to_export()["edges"][0]
+    assert exported["type"] == "cites"
+    assert "source" not in exported
+    assert "target" not in exported
+    assert "source type" not in ont.curation_text()
+
+
+def test_source_without_target_is_rejected(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+edges:
+  - type: supports
+    source: [evidence]
+    description: When the result matches.
+""")
+    with pytest.raises(MetaOntologyError, match="set together"):
+        meta_ontology.load(tmp_path)
+
+
+def test_string_endpoint_and_fallback_colour(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: evidence
+    description: An observation.
+  - type: hypothesis
+    description: State the claim.
+edges:
+  - type: supports
+    source: evidence
+    target: hypothesis
+    description: When the result matches a prediction.
+  - type: contradicts
+    source: [evidence]
+    target: [hypothesis]
+    description: When the result conflicts with a prediction.
+""")
+    ont = meta_ontology.load(tmp_path)
+    assert ont is not None
+    assert ont.edge("supports").source == ("evidence",)
+    assert ont.edge_color("supports") != ont.edge_color("contradicts")
+    viewer = {edge["type"]: edge for edge in ont.to_viewer()["edges"]}
+    assert viewer["supports"]["color"]
+    assert viewer["contradicts"]["color"]
+    assert "color" not in ont.to_export()["edges"][0]
+
+
+def test_typed_edges_are_drawn_and_hypothesis_type_is_kept(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: evidence
+    label: Evidence
+    folder: evidence
+    color: "#73af48"
+    description: An observation.
+  - type: hypothesis
+    label: Hypothesis
+    folder: hypotheses
+    color: "#7570b3"
+    description: State the claim and what would change the verdict.
+edges:
+  - type: supports
+    label: supports
+    color: "#0072b2"
+    source: [evidence]
+    target: [hypothesis]
+    description: When the result matches a prediction.
+  - type: contradicts
+    label: contradicts
+    color: "#d55e00"
+    source: [evidence]
+    target: [hypothesis]
+    description: When the result conflicts with a prediction.
+""")
+    evidence = tmp_path / "wiki" / "evidence" / "cpu.md"
+    hypothesis = tmp_path / "wiki" / "hypotheses" / "queue.md"
+    evidence.parent.mkdir(parents=True)
+    hypothesis.parent.mkdir(parents=True)
+    evidence.write_text("""---
+type: evidence
+title: CPU
+supports:
+  - hypotheses/queue
+contradicts: [hypotheses/queue.md]
+---
+
+The series moved.
+""", encoding="utf-8")
+    hypothesis.write_text("""---
+type: hypothesis
+title: "[hyp] Queue"
+---
+
+The queue grows.
+""", encoding="utf-8")
+    data = {
+        "palette": {},
+        "nodes": [
+            {"id": "evidence/cpu", "type": "evidence", "title": "CPU", "degree": 0},
+            {"id": "hypotheses/queue", "type": "unclassified", "title": "Queue", "degree": 0},
+        ],
+        "pages": {
+            "evidence/cpu": {"id": "evidence/cpu", "type": "evidence", "properties": {}},
+            "hypotheses/queue": {"id": "hypotheses/queue", "type": "unclassified", "properties": {}},
+        },
+        "edges": [{"source": "evidence/cpu", "target": "hypotheses/queue", "type": "wikilink"}],
+    }
+    assert meta_ontology.apply_to_graph_if_configured(tmp_path, data) is True
+    assert data["nodes"][1]["type"] == "hypothesis"
+    assert data["pages"]["hypotheses/queue"]["type"] == "hypothesis"
+    typed = [edge for edge in data["edges"] if edge["type"] in {"supports", "contradicts"}]
+    assert {(edge["type"], edge["color"]) for edge in typed} == {
+        ("supports", "#0072b2"),
+        ("contradicts", "#d55e00"),
+    }
+    assert all(edge["target"] == "hypotheses/queue" for edge in typed)
+    assert data["nodes"][0]["degree"] == 2
+    assert data["pages"]["evidence/cpu"]["properties"]["supports"] == ["hypotheses/queue"]
+    meta_ontology.apply_to_graph_if_configured(tmp_path, data)
+    assert len([edge for edge in data["edges"] if edge["type"] == "supports"]) == 1
+    assert data["nodes"][0]["degree"] == 2
+
+
+def test_export_carries_typed_edges(tmp_path: Path):
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: evidence
+    label: Observation
+    description: Record the method, the result, and the interpretation.
+  - type: hypothesis
+    label: Hypothesis
+    folder: hypotheses
+    description: State the claim and what would change the verdict.
+edges:
+  - type: supports
+    label: supports
+    color: "#0072b2"
+    source: [evidence]
+    target: [hypothesis]
+    description: When the result matches a prediction.
+""")
+    wiki_evidence = tmp_path / "wiki" / "evidence" / "cpu.md"
+    wiki_hypothesis = tmp_path / "wiki" / "hypotheses" / "queue.md"
+    wiki_evidence.parent.mkdir(parents=True)
+    wiki_hypothesis.parent.mkdir(parents=True)
+    wiki_evidence.write_text("""---
+type: evidence
+title: CPU
+supports:
+  - hypotheses/queue
+---
+
+The series moved.
+""", encoding="utf-8")
+    wiki_hypothesis.write_text("""---
+type: hypothesis
+title: Queue
+---
+
+The queue grows.
+""", encoding="utf-8")
+    bundle = tmp_path / "okf"
+    concept = bundle / "evidence" / "cpu.md"
+    other = bundle / "hypotheses" / "queue.md"
+    concept.parent.mkdir(parents=True)
+    other.parent.mkdir(parents=True)
+    concept.write_text("---\ntype: evidence\ntitle: CPU\n---\n\nThe series moved.\n", encoding="utf-8")
+    other.write_text("---\ntype: hypothesis\ntitle: Queue\n---\n\nThe queue grows.\n", encoding="utf-8")
+    ont = meta_ontology.load(tmp_path)
+    assert ont is not None
+    okf_export.apply_to_export_tree(bundle, ont, workspace=tmp_path)
+    text = concept.read_text(encoding="utf-8")
+    assert "x_ce_type_label: Observation" in text
+    exported = yaml_load_text(text.split("---", 2)[1])
+    assert exported["x_ce_edges"] == [
+        {"type": "supports", "target": "hypotheses/queue"},
+    ]
+    untouched = okf_export.annotate_edges(
+        "---\ntype: evidence\ntitle: CPU\n---\n\nBody.\n", None,
+    )
+    assert "x_ce_edges" not in untouched
+    sidecar = yaml_load(bundle / "x_ce_ontology.yaml")
+    supports = next(edge for edge in sidecar["edges"] if edge["type"] == "supports")
+    assert supports["source"] == ["evidence"]
+    assert supports["target"] == ["hypothesis"]
+    assert supports["color"] == "#0072b2"
+
+
 def yaml_load(path: Path):
     import yaml
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+def yaml_load_text(text: str):
+    import yaml
+    return yaml.safe_load(text)

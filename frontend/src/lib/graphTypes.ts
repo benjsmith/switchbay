@@ -4,7 +4,13 @@ export type GraphData = {
   generated_at: string;
   palette: Record<string, string>;
   nodes: Array<{ id: string; path: string; type: string; title: string; degree: number }>;
-  edges: Array<{ source: string; target: string; type: string }>;
+  edges: Array<{
+    source: string;
+    target: string;
+    type: string;
+    color?: string;
+    typeLabel?: string;
+  }>;
   pages: Record<
     string,
     {
