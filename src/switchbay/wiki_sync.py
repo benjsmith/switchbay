@@ -32,7 +32,7 @@ _FM_TITLE = re.compile(r"^title:\s*(.+)$", re.M)
 _FM_TYPE = re.compile(r"^type:\s*['\"]?([A-Za-z0-9_-]+)", re.M)
 _WIKILINK = re.compile(r"\[\[([^\]|#]+)")
 _PREFIX = re.compile(
-    r"^\[(?:ana|con|ent|evi|fac|fig|src|note|todo|proj|deck|tab|tbl)\]\s*",
+    r"^\[(?:ana|con|ent|evi|fac|fig|src|note|todo|proj|deck|tab|tbl|hyp)\]\s*",
     re.I,
 )
 _SKIP_DIR_PARTS = {"_assets", "_archive", ".git"}
@@ -52,6 +52,8 @@ _TYPE_FROM_DIR = {
     "notes": "note", "note": "note",
     "projects": "project", "project": "project",
     "todos": "todo-list",
+    "hypotheses": "hypothesis",
+    "hypothesis": "hypothesis",
 }
 
 

@@ -7,6 +7,12 @@ OKF export alone. When it is present, the same terms drive all three.
 A copy of today's graph vocabulary lives at
 ``examples/meta-ontology.yaml`` in the Switch Bay repo. It is not
 loaded on its own.
+
+An edge may name the node types it runs between. Those typed edges
+are optional. A file that omits them, and a workspace with no file,
+keep the previous behaviour. When they are set, curate prompts
+include the endpoints, the viewer draws the edges from wiki
+frontmatter, and OKF export records them.
 """
 
 from __future__ import annotations
@@ -31,7 +37,12 @@ _TOP_KEYS = frozenset({"version", "nodes", "edges", "schema_keys"})
 _NODE_KEYS = frozenset({
     "type", "label", "folder", "prefix", "color", "claims", "description",
 })
-_EDGE_KEYS = frozenset({"type", "label", "description"})
+_EDGE_KEYS = frozenset({
+    "type", "label", "description", "source", "target", "color",
+})
+# Distinct strokes for typed edges that do not set their own colour.
+_EDGE_COLORS = ("#0072b2", "#d55e00", "#cc79a7", "#009e73", "#e69f00", "#56b4e9")
+_SKIP_DIR_PARTS = frozenset({"_assets", "_archive", ".git"})
 _SCHEMA_KEYS = frozenset({
     "key", "description", "applies_to", "values", "minimum", "maximum",
 })
@@ -57,6 +68,14 @@ class EdgeTerm:
     type: str
     label: str
     description: str
+    source: tuple[str, ...] = ()
+    target: tuple[str, ...] = ()
+    color: str | None = None
+
+    @property
+    def typed(self) -> bool:
+        """True when both ends name node types. Those edges are checked."""
+        return bool(self.source and self.target)
 
 
 @dataclass(frozen=True)
@@ -90,11 +109,26 @@ class MetaOntology:
                 return e
         return None
 
+    def edge_color(self, type_name: str) -> str | None:
+        """Stroke for a typed edge. Explicit colour wins; otherwise a stable fallback."""
+        typed_i = 0
+        want = (type_name or "").strip().lower()
+        for edge in self.edges:
+            if not edge.typed:
+                continue
+            if edge.type == want:
+                if edge.color:
+                    return edge.color
+                return _EDGE_COLORS[typed_i % len(_EDGE_COLORS)]
+            typed_i += 1
+        term = self.edge(want)
+        return term.color if term is not None else None
+
     def to_viewer(self) -> dict[str, Any]:
         """Payload the graph shell reads. Omitted when no file is configured."""
         return {
             "nodes": [_node_public(n) for n in self.nodes],
-            "edges": [_edge_public(e) for e in self.edges],
+            "edges": [_edge_viewer(self, e) for e in self.edges],
             "schemaKeys": [_schema_public(k) for k in self.schema_keys],
         }
 
@@ -136,7 +170,17 @@ class MetaOntology:
             lines.append("Edge types:")
             for e in self.edges:
                 shown = e.type if e.label == e.type else f"{e.type} (label {e.label})"
-                lines.append(f"- {shown}: {_one_line(e.description)}")
+                if e.typed:
+                    ends = (
+                        f"{', '.join(e.source)} → {', '.join(e.target)}"
+                    )
+                    lines.append(
+                        f"- {shown}, {ends}: On the source page, wikilink "
+                        f"the target and list it under {e.type}. "
+                        f"{_one_line(e.description)}"
+                    )
+                else:
+                    lines.append(f"- {shown}: {_one_line(e.description)}")
         if self.schema_keys:
             lines.append("Frontmatter keys:")
             for k in self.schema_keys:
@@ -217,8 +261,20 @@ def curation_system(workspace: Path, *, cap_chars: int = 8000) -> str:
     return text
 
 
-def apply_to_graph(data: dict[str, Any], ontology: MetaOntology) -> None:
-    """Stamp labels onto a viewer bundle. Does not change ``type``."""
+def apply_to_graph(
+    data: dict[str, Any],
+    ontology: MetaOntology,
+    workspace: Path | None = None,
+) -> None:
+    """Stamp labels onto a viewer bundle.
+
+    Node ``type`` stays as the bundle has it, except a type this
+    ontology names is restored from the wiki file when the viewer
+    had bucketed the page as unclassified. Typed edges listed in
+    frontmatter are added to ``edges``.
+    """
+    if workspace is not None:
+        _apply_workspace_graph(data, ontology, Path(workspace))
     data["metaOntology"] = ontology.to_viewer()
     colors = {n.type: n.color for n in ontology.nodes if n.color}
     if colors:
@@ -265,7 +321,7 @@ def apply_to_graph_if_configured(workspace: Path, data: dict[str, Any]) -> bool:
         return False
     if ont is None:
         return False
-    apply_to_graph(data, ont)
+    apply_to_graph(data, ont, workspace)
     return True
 
 
@@ -280,7 +336,7 @@ def patch_graph_json(payload: bytes, workspace: Path) -> bytes:
         return payload
     if not isinstance(data, dict):
         return payload
-    apply_to_graph(data, ont)
+    apply_to_graph(data, ont, workspace)
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
@@ -374,10 +430,30 @@ def _parse_edges(raw: Any, name: str) -> list[EdgeTerm]:
         description = _text(
             item.get("description"), f"{name}: edges[{i}].description", required=True,
         )
+        source = _type_names(
+            item.get("source"), f"{name}: edges[{i}].source", present="source" in item,
+        )
+        target = _type_names(
+            item.get("target"), f"{name}: edges[{i}].target", present="target" in item,
+        )
+        if (source is None) != (target is None):
+            raise MetaOntologyError(
+                f"{name}: edges[{i}] source and target are set together"
+            )
+        color = item.get("color")
+        if color is not None:
+            color = str(color).strip()
+            if not _COLOR_RE.match(color):
+                raise MetaOntologyError(
+                    f"{name}: edges[{i}].color must be #rrggbb"
+                )
         out.append(EdgeTerm(
             type=type_name,
             label=label or type_name,
             description=description or "",
+            source=source or (),
+            target=target or (),
+            color=color,
         ))
     return out
 
@@ -471,6 +547,24 @@ def _str_list(raw: Any, where: str) -> list[str]:
     return [x.strip() for x in raw]
 
 
+def _type_names(raw: Any, where: str, *, present: bool) -> tuple[str, ...] | None:
+    """Node-type list. ``None`` when the key was omitted."""
+    if not present:
+        return None
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise MetaOntologyError(f"{where} must list at least one node type")
+    out: list[str] = []
+    for part in raw:
+        ident = _ident(part, where, _TYPE_RE)
+        if ident:
+            out.append(ident)
+    if not out:
+        raise MetaOntologyError(f"{where} must list at least one node type")
+    return tuple(out)
+
+
 def _number(raw: Any, where: str) -> float | None:
     if raw is None:
         return None
@@ -542,7 +636,27 @@ def _node_public(n: NodeTerm) -> dict[str, Any]:
 
 
 def _edge_public(e: EdgeTerm) -> dict[str, Any]:
-    return {"type": e.type, "label": e.label, "description": e.description}
+    out: dict[str, Any] = {
+        "type": e.type,
+        "label": e.label,
+        "description": e.description,
+    }
+    if e.source:
+        out["source"] = list(e.source)
+    if e.target:
+        out["target"] = list(e.target)
+    if e.color:
+        out["color"] = e.color
+    return out
+
+
+def _edge_viewer(ontology: MetaOntology, edge: EdgeTerm) -> dict[str, Any]:
+    out = _edge_public(edge)
+    if edge.typed and "color" not in out:
+        color = ontology.edge_color(edge.type)
+        if color:
+            out["color"] = color
+    return out
 
 
 def _schema_public(k: SchemaKey) -> dict[str, Any]:
@@ -557,3 +671,438 @@ def _schema_public(k: SchemaKey) -> dict[str, Any]:
     if k.maximum is not None:
         out["maximum"] = k.maximum
     return out
+
+
+@dataclass(frozen=True)
+class TypedEdge:
+    """One frontmatter edge whose target page resolved."""
+
+    source_id: str
+    target_id: str
+    edge_type: str
+    source_type: str
+    target_type: str
+
+
+@dataclass(frozen=True)
+class TypedEdgeIssue:
+    """A typed edge that claim lint should report."""
+
+    path: str
+    line: int
+    code: str
+    message: str
+
+
+@dataclass(frozen=True)
+class _Page:
+    id: str
+    rel: str
+    type: str
+    title: str
+    fm: dict[str, Any]
+    text: str
+
+
+def parse_frontmatter(text: str) -> dict[str, Any]:
+    """Leading frontmatter. Unknown keys are kept.
+
+    List values are either a flow list (``key: [a, b]``) or indented
+    ``- item`` lines. A blank key is an empty string.
+    """
+    if not text.startswith("---"):
+        return {}
+    rest = text[3:]
+    if rest.startswith("\r\n"):
+        rest = rest[2:]
+    elif rest.startswith("\n"):
+        rest = rest[1:]
+    else:
+        return {}
+    end = rest.find("\n---")
+    if end < 0:
+        return {}
+    fm: dict[str, Any] = {}
+    lines = rest[:end].splitlines()
+    i = 0
+    while i < len(lines):
+        raw = lines[i]
+        if not raw.strip() or raw[0] in " \t":
+            i += 1
+            continue
+        if ":" not in raw:
+            i += 1
+            continue
+        key, _, val = raw.partition(":")
+        key = key.strip()
+        val = val.strip()
+        if val == "":
+            items: list[str] = []
+            j = i + 1
+            while j < len(lines):
+                nxt = lines[j]
+                if not nxt.startswith((" ", "\t")) or not nxt.strip().startswith("-"):
+                    break
+                item = nxt.strip()[1:].strip().strip("\"'")
+                if item:
+                    items.append(item)
+                j += 1
+            if items:
+                fm[key] = items
+                i = j
+                continue
+            fm[key] = ""
+            i += 1
+            continue
+        if val.startswith("[") and val.endswith("]"):
+            parts = [
+                part.strip().strip("\"'")
+                for part in val[1:-1].split(",")
+                if part.strip().strip("\"'")
+            ]
+            fm[key] = parts
+        else:
+            fm[key] = val.strip("\"'")
+        i += 1
+    return fm
+
+
+def survey_typed_edges(
+    workspace: Path, ontology: MetaOntology,
+) -> tuple[tuple[TypedEdge, ...], tuple[TypedEdgeIssue, ...]]:
+    """Resolved typed edges, and the problems claim lint prints.
+
+    An edge whose target page exists is returned even when an endpoint
+    type does not match, so the viewer can still draw it. The issue
+    list carries the mismatch.
+    """
+    pages = _wiki_pages(Path(workspace), ontology)
+    return _typed_from_pages(pages, ontology)
+
+
+def typed_edge_map(
+    workspace: Path, ontology: MetaOntology,
+) -> dict[str, list[dict[str, str]]]:
+    """Page id → ``[{type, target}, ...]`` for the OKF post-pass."""
+    edges, _issues = survey_typed_edges(workspace, ontology)
+    out: dict[str, list[dict[str, str]]] = {}
+    seen: set[tuple[str, str, str]] = set()
+    for edge in edges:
+        key = (edge.source_id, edge.edge_type, edge.target_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.setdefault(edge.source_id, []).append({
+            "type": edge.edge_type,
+            "target": edge.target_id,
+        })
+    return out
+
+
+def _apply_workspace_graph(
+    data: dict[str, Any], ontology: MetaOntology, workspace: Path,
+) -> None:
+    wiki = workspace / "wiki"
+    if not wiki.is_dir():
+        return
+    pages = _wiki_pages(workspace, ontology)
+    _restore_declared_types(data, ontology, pages)
+    edges, _issues = _typed_from_pages(pages, ontology)
+    _merge_typed_edges(data, ontology, pages, edges)
+    _surface_edge_lists(data, ontology, pages)
+
+
+def _wiki_pages(workspace: Path, ontology: MetaOntology) -> list[_Page]:
+    wiki = workspace / "wiki"
+    if not wiki.is_dir():
+        return []
+    out: list[_Page] = []
+    for path in sorted(wiki.rglob("*.md")):
+        if any(
+            part in _SKIP_DIR_PARTS or part.startswith(".")
+            for part in path.parts
+        ):
+            continue
+        try:
+            rel = path.resolve().relative_to(wiki.resolve()).as_posix()
+        except ValueError:
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        fm = parse_frontmatter(text)
+        folder = rel.split("/", 1)[0] if "/" in rel else ""
+        title = fm.get("title")
+        title_text = title.strip() if isinstance(title, str) else ""
+        out.append(_Page(
+            id=rel[:-3] if rel.endswith(".md") else rel,
+            rel=rel,
+            type=_page_type(fm, folder, ontology),
+            title=title_text or Path(rel).stem,
+            fm=fm,
+            text=text,
+        ))
+    return out
+
+
+def _page_type(fm: dict[str, Any], folder: str, ontology: MetaOntology) -> str:
+    raw = fm.get("type")
+    if isinstance(raw, str) and raw.strip():
+        return raw.strip().lower()
+    for node in ontology.nodes:
+        if node.folder and node.folder == folder:
+            return node.type
+    return ""
+
+
+def _typed_from_pages(
+    pages: list[_Page], ontology: MetaOntology,
+) -> tuple[tuple[TypedEdge, ...], tuple[TypedEdgeIssue, ...]]:
+    terms = [edge for edge in ontology.edges if edge.typed]
+    if not terms:
+        return (), ()
+    by_id = {page.id.casefold(): page for page in pages}
+    by_stem: dict[str, list[_Page]] = {}
+    for page in pages:
+        by_stem.setdefault(Path(page.id).name.casefold(), []).append(page)
+    found: list[TypedEdge] = []
+    issues: list[TypedEdgeIssue] = []
+    for page in pages:
+        for term in terms:
+            targets = _target_list(page.fm.get(term.type))
+            if not targets:
+                continue
+            line = _key_line(page.text, term.type)
+            if page.type not in term.source:
+                shown = page.type or "unset"
+                allowed = " or ".join(term.source)
+                issues.append(TypedEdgeIssue(
+                    page.rel, line, "bad-edge-endpoint",
+                    f"{term.type} source type {shown} is not {allowed}.",
+                ))
+            for raw in targets:
+                resolved = _resolve_target(raw, by_id, by_stem)
+                if resolved == "missing":
+                    issues.append(TypedEdgeIssue(
+                        page.rel, line, "missing-edge-target",
+                        f"{term.type} target {raw} does not resolve to a page.",
+                    ))
+                    continue
+                if resolved == "ambiguous" or not isinstance(resolved, _Page):
+                    issues.append(TypedEdgeIssue(
+                        page.rel, line, "ambiguous-edge-target",
+                        f"{term.type} target {raw} matches more than one page.",
+                    ))
+                    continue
+                if resolved.type not in term.target:
+                    shown = resolved.type or "unset"
+                    allowed = " or ".join(term.target)
+                    issues.append(TypedEdgeIssue(
+                        page.rel, line, "bad-edge-endpoint",
+                        f"{term.type} target type {shown} is not {allowed}.",
+                    ))
+                found.append(TypedEdge(
+                    source_id=page.id,
+                    target_id=resolved.id,
+                    edge_type=term.type,
+                    source_type=page.type,
+                    target_type=resolved.type,
+                ))
+    return tuple(found), tuple(issues)
+
+
+def _target_list(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        text = raw.strip()
+        return [text] if text else []
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
+def _normalize_target(raw: str) -> str:
+    text = raw.strip().strip("\"'")
+    if text.startswith("[[") and text.endswith("]]"):
+        text = text[2:-2]
+    text = text.split("|", 1)[0].strip()
+    text = text.replace("\\", "/")
+    if text.lower().startswith("wiki/"):
+        text = text[5:]
+    if text.lower().endswith(".md"):
+        text = text[:-3]
+    return text.strip("/")
+
+
+def _resolve_target(
+    raw: str,
+    by_id: dict[str, _Page],
+    by_stem: dict[str, list[_Page]],
+) -> _Page | str:
+    key = _normalize_target(raw)
+    if not key:
+        return "missing"
+    hit = by_id.get(key.casefold())
+    if hit is not None:
+        return hit
+    if "/" not in key:
+        hits = by_stem.get(key.casefold(), [])
+        if len(hits) == 1:
+            return hits[0]
+        if len(hits) > 1:
+            return "ambiguous"
+    return "missing"
+
+
+def _key_line(text: str, key: str) -> int:
+    if not text.startswith("---"):
+        return 1
+    end = text.find("\n---", 3)
+    head = text[:end] if end >= 0 else text
+    prefix = key + ":"
+    for i, line in enumerate(head.splitlines(), start=1):
+        if line.startswith(prefix):
+            return i
+    return 1
+
+
+def _restore_declared_types(
+    data: dict[str, Any], ontology: MetaOntology, pages: list[_Page],
+) -> None:
+    """Use the wiki type when this ontology names it.
+
+    Curiosity Engine's viewer buckets types it does not know, such as
+    ``hypothesis``, as ``unclassified``. The file on disk still has the
+    declared type.
+    """
+    want = {
+        page.id: page.type
+        for page in pages
+        if page.type and ontology.node(page.type) is not None
+    }
+    if not want:
+        return
+
+    def take(current: Any, declared: str) -> bool:
+        shown = str(current or "").strip().lower()
+        return shown in {"", "unclassified", "default"} or shown == declared
+
+    for node in data.get("nodes") or []:
+        if not isinstance(node, dict):
+            continue
+        declared = want.get(str(node.get("id") or ""))
+        if declared and take(node.get("type"), declared):
+            node["type"] = declared
+    page_map = data.get("pages")
+    if isinstance(page_map, dict):
+        for pid, declared in want.items():
+            page = page_map.get(pid)
+            if isinstance(page, dict) and take(page.get("type"), declared):
+                page["type"] = declared
+
+
+def _surface_edge_lists(
+    data: dict[str, Any], ontology: MetaOntology, pages: list[_Page],
+) -> None:
+    page_map = data.get("pages")
+    if not isinstance(page_map, dict):
+        return
+    by_id = {page.id: page for page in pages}
+    for pid, page in page_map.items():
+        src = by_id.get(str(pid))
+        if src is None or not isinstance(page, dict):
+            continue
+        props = page.get("properties")
+        if not isinstance(props, dict):
+            props = {}
+            page["properties"] = props
+        for term in ontology.edges:
+            if not term.typed or term.type in props:
+                continue
+            values = _target_list(src.fm.get(term.type))
+            if values:
+                props[term.type] = values
+
+
+def _merge_typed_edges(
+    data: dict[str, Any],
+    ontology: MetaOntology,
+    pages: list[_Page],
+    edges: tuple[TypedEdge, ...],
+) -> None:
+    current = data.get("edges")
+    if not isinstance(current, list):
+        current = []
+        data["edges"] = current
+    have: set[tuple[str, str, str]] = set()
+    for edge in current:
+        if not isinstance(edge, dict):
+            continue
+        kind = str(edge.get("type") or "").strip().lower()
+        have.add((_endpoint(edge.get("source")), _endpoint(edge.get("target")), kind))
+        term = ontology.edge(kind)
+        if term is None:
+            continue
+        edge["typeLabel"] = term.label
+        color = ontology.edge_color(term.type)
+        if color and term.typed:
+            edge["color"] = color
+    nodes = data.get("nodes")
+    if not isinstance(nodes, list):
+        nodes = []
+        data["nodes"] = nodes
+    by_node = {
+        str(node.get("id")): node
+        for node in nodes
+        if isinstance(node, dict) and node.get("id")
+    }
+    by_page = {page.id: page for page in pages}
+    for item in edges:
+        _ensure_endpoint(nodes, by_node, by_page, item.source_id)
+        _ensure_endpoint(nodes, by_node, by_page, item.target_id)
+        key = (item.source_id, item.target_id, item.edge_type)
+        if key in have:
+            continue
+        row: dict[str, Any] = {
+            "source": item.source_id,
+            "target": item.target_id,
+            "type": item.edge_type,
+        }
+        term = ontology.edge(item.edge_type)
+        if term is not None:
+            row["typeLabel"] = term.label
+        color = ontology.edge_color(item.edge_type)
+        if color:
+            row["color"] = color
+        current.append(row)
+        have.add(key)
+        for pid in (item.source_id, item.target_id):
+            node = by_node.get(pid)
+            if isinstance(node, dict):
+                node["degree"] = int(node.get("degree") or 0) + 1
+
+
+def _ensure_endpoint(
+    nodes: list[Any],
+    by_node: dict[str, dict[str, Any]],
+    by_page: dict[str, _Page],
+    pid: str,
+) -> None:
+    if pid in by_node:
+        return
+    page = by_page.get(pid)
+    node = {
+        "id": pid,
+        "path": f"{pid}.md",
+        "type": page.type if page and page.type else "unclassified",
+        "title": page.title if page else pid,
+        "degree": 0,
+    }
+    nodes.append(node)
+    by_node[pid] = node
+
+
+def _endpoint(value: Any) -> str:
+    if isinstance(value, dict):
+        return str(value.get("id") or "")
+    return str(value or "")

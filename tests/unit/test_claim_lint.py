@@ -166,6 +166,111 @@ schema_keys:
     assert "status" in configured[0].message
 
 
+def _typed_ontology(tmp_path: Path, *, endpoints: bool = True) -> None:
+    ends = (
+        "    source: [evidence]\n    target: [hypothesis]\n"
+        if endpoints else ""
+    )
+    path = tmp_path / ".curator" / "meta-ontology.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "version: 1\n"
+        "nodes:\n"
+        "  - type: evidence\n"
+        "    folder: evidence\n"
+        "    description: An observation.\n"
+        "  - type: hypothesis\n"
+        "    folder: hypotheses\n"
+        "    description: State the claim.\n"
+        "edges:\n"
+        "  - type: supports\n"
+        f"{ends}"
+        "    description: When the result matches a prediction.\n"
+        "  - type: cites\n"
+        "    description: Same paragraph as the claim.\n",
+        encoding="utf-8",
+    )
+
+
+def _vault(tmp_path: Path) -> None:
+    vault = tmp_path / "vault"
+    vault.mkdir(exist_ok=True)
+    (vault / "metrics.md").write_text("n", encoding="utf-8")
+
+
+def test_typed_edge_passes_when_the_ends_match(tmp_path: Path):
+    _vault(tmp_path)
+    _typed_ontology(tmp_path)
+    _page(tmp_path, "evidence/cpu.md", """---
+type: evidence
+title: CPU
+supports:
+  - hypotheses/queue
+---
+
+The series moved (vault:metrics.md).
+""")
+    _page(tmp_path, "hypotheses/queue.md", """---
+type: hypothesis
+title: Queue
+---
+
+The queue grows (vault:metrics.md).
+""")
+    assert claim_lint.lint_path(tmp_path) == []
+
+
+def test_typed_edge_checks_the_target_and_the_endpoint_types(tmp_path: Path):
+    _vault(tmp_path)
+    _typed_ontology(tmp_path)
+    _page(tmp_path, "facts/note.md", """---
+type: fact
+title: Note
+supports:
+  - hypotheses/missing
+---
+
+A claim (vault:metrics.md).
+""")
+    _page(tmp_path, "evidence/cpu.md", """---
+type: evidence
+title: CPU
+supports: [facts/note]
+---
+
+The series moved (vault:metrics.md).
+""")
+    _page(tmp_path, "hypotheses/queue.md", """---
+type: hypothesis
+title: Queue
+---
+
+The queue grows (vault:metrics.md).
+""")
+    violations = claim_lint.lint_path(tmp_path)
+    by_code = {}
+    for item in violations:
+        by_code.setdefault(item.code, []).append(item.message)
+    assert any("does not resolve" in msg for msg in by_code["missing-edge-target"])
+    assert any("source type fact" in msg for msg in by_code["bad-edge-endpoint"])
+    assert any("target type fact" in msg for msg in by_code["bad-edge-endpoint"])
+
+
+def test_edge_lint_is_quiet_without_declared_endpoints(tmp_path: Path):
+    _vault(tmp_path)
+    _page(tmp_path, "evidence/cpu.md", """---
+type: evidence
+supports:
+  - hypotheses/missing
+---
+
+The series moved (vault:metrics.md).
+""")
+    assert claim_lint.lint_path(tmp_path) == []
+    _typed_ontology(tmp_path, endpoints=False)
+    assert claim_lint.lint_path(tmp_path) == []
+
+
 def test_cli_exit_status(tmp_path: Path):
     _page(tmp_path, "facts/bare.md", """---
 type: fact

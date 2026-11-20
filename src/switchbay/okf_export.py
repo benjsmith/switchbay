@@ -13,6 +13,11 @@ or writing the export.
 Figure and table pages are labelled even when the workspace file
 does not list those types. A type the file does define keeps the
 file's text. ``extracted-table`` uses the table term.
+
+Typed edges (an edge that names source and target node types) are
+written onto the source concept as ``x_ce_edges``. The sidecar
+lists those endpoints with the rest of the terms. Edges that omit
+endpoints are left as vocabulary only.
 """
 
 from __future__ import annotations
@@ -49,7 +54,7 @@ def finalize_after_ce(
     dest = export_dir(args, result)
     if dest is None or not dest.is_dir():
         return
-    count = apply_to_export_tree(dest, ont)
+    count = apply_to_export_tree(dest, ont, workspace=workspace)
     if isinstance(result, dict):
         result["meta_ontology"] = {
             "concepts": count,
@@ -77,12 +82,22 @@ def export_dir(args: list[str] | None, result: Any) -> Path | None:
     return None
 
 
-def apply_to_export_tree(root: Path, ontology: MetaOntology) -> int:
+def apply_to_export_tree(
+    root: Path,
+    ontology: MetaOntology,
+    *,
+    workspace: Path | None = None,
+) -> int:
     """Rewrite concept frontmatter in ``root`` and write the sidecar.
 
-    Returns how many concept files gained a type label.
+    Returns how many concept files gained a type label or typed edges.
+    ``workspace`` is the wiki's parent. Without it, edge instances are
+    not copied (the export tree no longer has the frontmatter lists).
     """
     ontology = meta_ontology.for_export(ontology)
+    edge_map: dict[str, list[dict[str, str]]] = {}
+    if workspace is not None:
+        edge_map = meta_ontology.typed_edge_map(Path(workspace), ontology)
     count = 0
     for path in sorted(root.rglob("*.md")):
         if path.name in _SKIP_NAMES:
@@ -91,7 +106,13 @@ def apply_to_export_tree(root: Path, ontology: MetaOntology) -> int:
             original = path.read_text(encoding="utf-8")
         except OSError:
             continue
+        try:
+            rel = path.resolve().relative_to(root.resolve()).as_posix()
+        except ValueError:
+            rel = path.name
+        page_id = rel[:-3] if rel.endswith(".md") else rel
         updated = annotate_concept(original, ontology)
+        updated = annotate_edges(updated, edge_map.get(page_id))
         if updated != original:
             path.write_text(updated, encoding="utf-8")
             count += 1
@@ -103,6 +124,21 @@ def apply_to_export_tree(root: Path, ontology: MetaOntology) -> int:
         encoding="utf-8",
     )
     return count
+
+
+def annotate_edges(text: str, records: list[dict[str, str]] | None) -> str:
+    """Add ``x_ce_edges`` when this concept is the source of typed edges."""
+    if not records or not text.startswith("---\n"):
+        return text
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return text
+    head = text[4:end]
+    body = text[end + 5:]
+    lines = _strip_key_block(head.splitlines(), "x_ce_edges")
+    lines.extend(_render_edges(records))
+    new_head = "\n".join(lines)
+    return f"---\n{new_head}\n---\n{body}"
 
 
 def annotate_concept(text: str, ontology: MetaOntology) -> str:
@@ -146,6 +182,32 @@ def _set_key(lines: list[str], key: str, value: str) -> list[str]:
             lines[i] = rendered
             return lines
     lines.append(rendered)
+    return lines
+
+
+def _strip_key_block(lines: list[str], key: str) -> list[str]:
+    """Drop ``key:`` and the indented lines that belong to it."""
+    out: list[str] = []
+    skipping = False
+    prefix = key + ":"
+    for raw in lines:
+        if raw.startswith(prefix):
+            skipping = True
+            continue
+        if skipping:
+            if raw.startswith((" ", "\t")):
+                continue
+            skipping = False
+        out.append(raw)
+    return out
+
+
+def _render_edges(records: list[dict[str, str]]) -> list[str]:
+    ordered = sorted(records, key=lambda row: (row.get("type", ""), row.get("target", "")))
+    lines = ["x_ce_edges:"]
+    for row in ordered:
+        lines.append(f"  - type: {_yaml_scalar(row.get('type', ''))}")
+        lines.append(f"    target: {_yaml_scalar(row.get('target', ''))}")
     return lines
 
 

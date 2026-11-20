@@ -19,6 +19,12 @@ can add keys and can mark further types with ``claims: true`` or
 ``false``. With no file, those three keys and the four page types
 above are the whole check.
 
+A typed edge (an edge that names source and target node types) is
+checked when a page lists targets under that edge's frontmatter key.
+The target page has to exist, and the source and target page types
+have to match the edge. Edges that omit endpoints, and workspaces
+with no meta-ontology file, are not checked this way.
+
 Exit status is 1 when any violation is printed, 0 otherwise.
 """
 
@@ -91,9 +97,15 @@ def lint_path(path: Path) -> list[Violation]:
     target = Path(path)
     if target.is_file():
         workspace = _workspace_for(target)
-        return _lint_file(
+        violations = _lint_file(
             target, target, workspace, index=_Index(workspace),
         )
+        try:
+            only = target.resolve().relative_to((workspace / "wiki").resolve()).as_posix()
+        except ValueError:
+            only = target.name
+        violations.extend(_typed_edge_violations(workspace, only_path=only))
+        return violations
     workspace = target
     wiki = target / "wiki" if (target / "wiki").is_dir() else target
     violations: list[Violation] = []
@@ -108,6 +120,7 @@ def lint_path(path: Path) -> list[Violation]:
     index = _Index(workspace)
     for md in sorted(wiki.rglob("*.md")):
         violations.extend(_lint_file(md, wiki, workspace, ont=ont, index=index))
+    violations.extend(_typed_edge_violations(workspace, ont))
     return violations
 
 
@@ -184,6 +197,28 @@ def _lint_file(
                 rel, line, "missing-citation",
                 f"Claim paragraph has no citation: {_snippet(paragraph)}",
             ))
+    return out
+
+
+def _typed_edge_violations(
+    workspace: Path,
+    ont: meta_ontology.MetaOntology | None = None,
+    *,
+    only_path: str | None = None,
+) -> list[Violation]:
+    """Validate edges that declare source and target node types."""
+    if ont is None:
+        ont, err = meta_ontology.load_result(workspace)
+        if err or ont is None:
+            return []
+    if not any(edge.typed for edge in ont.edges):
+        return []
+    _edges, issues = meta_ontology.survey_typed_edges(workspace, ont)
+    out: list[Violation] = []
+    for issue in issues:
+        if only_path is not None and issue.path != only_path:
+            continue
+        out.append(Violation(issue.path, issue.line, issue.code, issue.message))
     return out
 
 

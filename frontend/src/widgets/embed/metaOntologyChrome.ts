@@ -12,7 +12,14 @@ export type LegendRow = { type: string; label: string };
 export type LegendPlan = {
   relabel: Array<{ type: string; label: string; color?: string; description?: string }>;
   add: Array<{ type: string; label: string; color?: string; description?: string }>;
-  edges: Array<{ type: string; label: string; description?: string }>;
+  edges: Array<{
+    type: string;
+    label: string;
+    description?: string;
+    color?: string;
+    source?: string[];
+    target?: string[];
+  }>;
 };
 
 type OntologyNode = {
@@ -26,6 +33,9 @@ type OntologyEdge = {
   type?: string;
   label?: string;
   description?: string;
+  color?: string;
+  source?: string[];
+  target?: string[];
 };
 
 type MetaOntology = {
@@ -64,9 +74,34 @@ export function planLegend(existing: LegendRow[], data: unknown): LegendPlan | n
     const type = (edge.type || "").trim();
     const label = (edge.label || "").trim();
     if (!type || !label) continue;
-    edges.push({ type, label, description: edge.description });
+    const source = stringList(edge.source);
+    const target = stringList(edge.target);
+    edges.push({
+      type,
+      label,
+      description: edge.description,
+      color: edge.color,
+      source,
+      target,
+    });
   }
   return { relabel, add, edges };
+}
+
+/** CSS so classic graph and modal subgraph strokes follow edge type. */
+export function edgeStyleCss(edges: LegendPlan["edges"]): string {
+  const rules: string[] = [];
+  for (const edge of edges) {
+    const color = (edge.color || "").trim();
+    if (!color) continue;
+    const kind = cssAttr(edge.type);
+    const sel = `.edge[data-kind="${kind}"], .sub-edge[data-kind="${kind}"]`;
+    rules.push(`${sel} { stroke: ${color}; stroke-opacity: 0.9; }`);
+    rules.push(
+      `.edge[data-kind="${kind}"][data-vis="focus"], .sub-edge[data-kind="${kind}"][data-vis="focus"] { stroke: var(--accent); }`,
+    );
+  }
+  return rules.join("\n");
 }
 
 export function applyMetaOntologyChrome(root: ParentNode, data: unknown): void {
@@ -75,7 +110,10 @@ export function applyMetaOntologyChrome(root: ParentNode, data: unknown): void {
   clearOverlay(panel);
   const existing = currentRows(panel);
   const plan = planLegend(existing, data);
-  if (!plan) return;
+  if (!plan) {
+    installEdgeStyle(root, "");
+    return;
+  }
   for (const change of plan.relabel) {
     const row = panel.querySelector(`.label-types-row[data-type="${cssAttr(change.type)}"]`);
     if (!row) continue;
@@ -120,11 +158,23 @@ export function applyMetaOntologyChrome(root: ParentNode, data: unknown): void {
       row.dataset.metaAdded = "1";
       row.dataset.edge = edge.type;
       if (edge.description) row.title = edge.description;
-      row.textContent = `${edge.label} (${edge.type})`;
+      if (edge.color) {
+        const dot = document.createElement("span");
+        dot.className = "dot";
+        dot.style.background = edge.color;
+        row.append(dot);
+      }
+      const text = document.createElement("span");
+      const ends = edge.source?.length && edge.target?.length
+        ? ` ${edge.source.join(", ")} → ${edge.target.join(", ")}`
+        : "";
+      text.textContent = `${edge.label} (${edge.type})${ends}`;
+      row.append(text);
       if (anchor) panel.insertBefore(row, anchor);
       else panel.append(row);
     }
   }
+  installEdgeStyle(root, edgeStyleCss(plan.edges));
 }
 
 function clearOverlay(panel: Element): void {
@@ -169,4 +219,25 @@ function paintDot(row: Element, color: string | undefined): void {
 
 function cssAttr(value: string): string {
   return value.replace(/["\\]/g, "");
+}
+
+function stringList(raw: unknown): string[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const items = raw.map((item) => String(item || "").trim()).filter(Boolean);
+  return items.length ? items : undefined;
+}
+
+function installEdgeStyle(root: ParentNode, css: string): void {
+  const doc = root instanceof Document ? root : (root as Node).ownerDocument;
+  if (!doc) return;
+  const id = "meta-ontology-edge-style";
+  const existing = doc.getElementById(id);
+  if (!css) {
+    existing?.remove();
+    return;
+  }
+  const style = existing ?? doc.createElement("style");
+  style.id = id;
+  style.textContent = css;
+  if (!existing) doc.head?.append(style);
 }

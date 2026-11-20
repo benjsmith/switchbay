@@ -131,9 +131,9 @@ jobs:
                   if ln.startswith(f"# {key} "):
                       meta[key] = int(ln.split()[-1])
           bad = any(meta.get(k, 0) for k in ("fail", "skipped", "todo", "cancelled"))
-          if bad or meta.get("pass") != 2 or "1..2" not in lines:
-              raise SystemExit(f"expected 2 passing meta-ontology legend tests, no skips: {meta}")
-          print("meta-ontology legend: 2/2 (no skips)")
+          if bad or meta.get("pass") != 3 or "1..3" not in lines:
+              raise SystemExit(f"expected 3 passing meta-ontology legend tests, no skips: {meta}")
+          print("meta-ontology legend: 3/3 (no skips)")
           PY
       - name: Frontend Node tests (13)
         working-directory: frontend
