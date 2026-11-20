@@ -409,7 +409,11 @@ def describe_all(workspace: Path, rung: LocalRung) -> dict[str, Any]:
         })
 
     catalog = []
+    from . import playwright_cli
+    browser_on = playwright_cli.browser_use_enabled()
     for name in sorted(tools.REGISTRY):
+        if name == playwright_cli.TOOL_NAME and not browser_on:
+            continue
         t = tools.REGISTRY[name]
         catalog.append({
             "name": name,

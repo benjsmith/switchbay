@@ -64,6 +64,16 @@ type PiHarnessView = {
   permitted: boolean;
 };
 
+type BrowserUseView = {
+  admin_allowed: boolean;
+  user_enabled: boolean;
+  enabled: boolean;
+  installed: boolean;
+  binary: string | null;
+  version: string;
+  playwright?: string;
+};
+
 type ProvidersBody = {
   providers: ProviderInfo[];
   keychain_available: boolean;
@@ -71,6 +81,7 @@ type ProvidersBody = {
   default_provider: string;
   default_model?: string;
   policy?: PolicyView;
+  browser?: BrowserUseView;
   harness?: { pi?: PiHarnessView };
 };
 
@@ -427,6 +438,13 @@ export default function SettingsModal({ open, onClose, onQuit, onRestart, onUpda
             );
           })}
           <PiHarnessPanel
+            open={open}
+            info={info}
+            busy={busy}
+            setBusy={setBusy}
+            onRefresh={refresh}
+          />
+          <BrowserUsePanel
             open={open}
             info={info}
             busy={busy}
@@ -1458,6 +1476,89 @@ function UserTabsPanel({ open }: { open: boolean }) {
           ))}
         </ul>
       )}
+    </section>
+  );
+}
+
+
+// ── Local browser (Playwright CLI) ─────────────────────────────────
+
+
+function BrowserUsePanel({
+  open,
+  info,
+  busy,
+  setBusy,
+  onRefresh,
+}: {
+  open: boolean;
+  info: ProvidersBody | null;
+  busy: string | null;
+  setBusy: (v: string | null) => void;
+  onRefresh: () => Promise<void>;
+}) {
+  if (!open || !info) return null;
+  const browser = info.browser;
+  const adminOn = browser ? browser.admin_allowed : feat(info, "browser_use");
+  const userOn = browser?.user_enabled ?? true;
+  const installed = browser?.installed ?? false;
+
+  const toggle = async () => {
+    if (!adminOn) return;
+    setBusy("browser-use");
+    try {
+      const r = await fetch("/api/llm/harness", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ browser: !userOn }),
+      });
+      if (r.ok) await onRefresh();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const status = !adminOn
+    ? "disabled by organisation"
+    : !installed
+      ? (userOn ? "on, CLI not installed" : "off, CLI not installed")
+      : (userOn ? "on" : "off");
+
+  return (
+    <section className="sy-settings-section">
+      <h3 className="sy-settings-h">Local browser</h3>
+      <p className="sy-settings-blurb">
+        Headless Chromium on this machine for the rail assistant, via
+        Playwright CLI {browser?.version ?? "0.1.23"}. The assistant
+        loads the <code>playwright-cli</code> skill and calls{" "}
+        <code>playwright_cli</code>. Off hides that skill and tool.
+        The install stays on disk.
+      </p>
+      <div className="sy-settings-perm-row">
+        <span>
+          <strong>Status:</strong> {status}
+          {installed && browser?.binary ? ` (${browser.binary})` : ""}
+        </span>
+        <span className="sy-spacer" />
+        <button
+          type="button"
+          className={
+            "sy-settings-pill"
+            + (adminOn && userOn ? " sy-settings-pill--on" : "")
+          }
+          onClick={() => void toggle()}
+          disabled={!adminOn || busy !== null}
+          title={
+            !adminOn
+              ? "Admin policy browser_use is off"
+              : userOn
+                ? "Hide the browser skill and tool"
+                : "Let the rail assistant use the local browser"
+          }
+        >
+          {!adminOn ? "locked" : userOn ? "on" : "off"}
+        </button>
+      </div>
     </section>
   );
 }

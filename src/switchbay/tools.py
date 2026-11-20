@@ -567,6 +567,10 @@ def _run_command(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "error": "command or argv required"}
     if not cmd:
         return {"ok": False, "error": "empty command"}
+    from . import playwright_cli
+    blocked = playwright_cli.shell_block_reason(cmd)
+    if blocked:
+        return {"ok": False, "error": blocked}
     deny = permissions.hard_deny_reason("Bash", {"command": display})
     if deny:
         return {"ok": False, "error": deny}
@@ -611,6 +615,40 @@ register(Tool(
         },
     },
     handler=_run_command,
+))
+
+
+def _playwright_cli(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from . import playwright_cli
+    data = dict(payload)
+    if "argv" in data:
+        data["argv"] = _parse_json_value(data.get("argv"))
+    return playwright_cli.run(workspace, data)
+
+
+register(Tool(
+    name="playwright_cli",
+    description=(
+        "Drive the local browser with the pinned Playwright CLI "
+        "(@playwright/cli 0.1.23). load_skill(\"playwright-cli\") and "
+        "follow it. argv is the CLI arguments only, for example "
+        "[\"open\", \"https://example.com\"], [\"snapshot\"], "
+        "[\"click\", \"e15\"], [\"type\", \"hello\"]. "
+        "A switchbay session is added for you. Headless unless argv "
+        "includes --headed. Snapshots are written under the workspace."
+    ),
+    input_schema={
+        "type": "object",
+        "required": ["argv"],
+        "properties": {
+            "argv": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Arguments after playwright-cli.",
+            },
+        },
+    },
+    handler=_playwright_cli,
 ))
 
 register(Tool(

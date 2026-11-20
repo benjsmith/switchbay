@@ -16,8 +16,9 @@ PYDIR := $(CURDIR)/src
 # checks node/pnpm) → Python deps → frontend build → always-on service.
 # Add SEMANTIC=1 to also pull the light fastembed embeddings (~150 MB).
 # Add ENTERPRISE_USER=1 for a tester enterprise overlay (repo admin.json, no sudo).
+# Add NO_BROWSER=1 to skip Playwright CLI, its skill, and its browsers.
 install:
-	bash scripts/install.sh $(if $(SEMANTIC),--semantic,) $(if $(ENTERPRISE_USER),--enterprise-user,)
+	bash scripts/install.sh $(if $(SEMANTIC),--semantic,) $(if $(ENTERPRISE_USER),--enterprise-user,) $(if $(NO_BROWSER),--no-browser,)
 
 sync:
 	uv sync --locked
@@ -107,9 +108,10 @@ build-frontend:
 # conveniences. On Windows run `python -m switchbay service <action>`.
 # install builds the frontend first so the daemon has something to serve.
 # ENTERPRISE_USER=1 stamps <repo>/admin.json (tester enterprise, no sudo).
+# NO_BROWSER=1 skips Playwright CLI, its skill, and its browsers.
 ENTERPRISE_USER ?=
 install-service: build-frontend
-	PYTHONPATH=$(PYDIR) uv run --no-sync python -m switchbay service install $(if $(ENTERPRISE_USER),--enterprise-user,)
+	PYTHONPATH=$(PYDIR) uv run --no-sync python -m switchbay service install $(if $(ENTERPRISE_USER),--enterprise-user,) $(if $(NO_BROWSER),--no-browser,)
 uninstall-service:
 	PYTHONPATH=$(PYDIR) uv run --no-sync python -m switchbay service uninstall
 start:

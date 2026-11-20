@@ -618,6 +618,10 @@ def hard_deny_reason(tool: str, tool_input: dict[str, Any]) -> str | None:
     ).strip()
     if not cmd:
         return None
+    from . import playwright_cli
+    blocked = playwright_cli.shell_block_reason_from_command(cmd)
+    if blocked:
+        return blocked
 
     # mdfind / locate always hit the whole machine (TCC + out of scope)
     if _ALWAYS_DENY_BIN.search(cmd):

@@ -68,6 +68,13 @@ make install SEMANTIC=1      # + local semantic embeddings (fastembed/ONNX, ~150
 Then open `http://127.0.0.1:8765` and install it as an app. You can add
 local semantic embeddings later with `make sync-semantic`.
 
+The installer also sets up a local browser for the rail assistant:
+Playwright CLI 0.1.23, the `playwright-cli` skill, and the browser
+builds that CLI needs. Those builds sit beside the browsers used by
+the UI tests; they do not replace them. Skip the browser with
+`make install NO_BROWSER=1`. Enterprise installs skip it unless an
+admin turns `browser_use` on. Details: [`docs/browser.md`](docs/browser.md).
+
 > **Prerequisites:** `git`, **Node.js + pnpm** (the installer guides you
 > if they're missing), and `uv` (auto-installed). Python ≥3.11 is
 > provisioned by `uv`. The base install is ~50 MB of Python deps;

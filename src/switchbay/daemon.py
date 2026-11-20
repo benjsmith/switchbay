@@ -7128,6 +7128,7 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
         routing = None
     from .kernel.harness_pi import pi_binary
     from .kernel.harness import pi_harness_permitted
+    from . import playwright_cli
     pi_bin = pi_binary()
     admin_pi = admin_policy.feature_enabled("pi_harness")
     user_pi = llm_config.get_pi_harness()
@@ -7139,6 +7140,7 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
         "default_model": default_model,
         "routing": routing,
         "policy": admin_policy.public_view(),
+        "browser": playwright_cli.status_view(),
         "harness": {
             "pi": {
                 "admin_allowed": admin_pi,
@@ -7153,30 +7155,46 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
 
 
 async def handle_llm_harness(request: web.Request) -> web.Response:
-    """User toggle for the optional Pi harness. Admin policy can still deny."""
+    """User toggles for the Pi harness and the local browser.
+
+    Admin policy can still deny either one. The body may set ``pi``,
+    ``browser``, or both.
+    """
     try:
         body = await request.json()
     except json.JSONDecodeError:
         return web.json_response({"error": "invalid json"}, status=400)
-    if "pi" not in body:
-        return web.json_response({"error": "expected {pi: bool}"}, status=400)
-    if not admin_policy.feature_enabled("pi_harness"):
+    if "pi" not in body and "browser" not in body:
+        return web.json_response(
+            {"error": "expected {pi: bool} or {browser: bool}"},
+            status=400,
+        )
+    if "pi" in body and not admin_policy.feature_enabled("pi_harness"):
         return web.json_response(
             {"error": admin_policy.feature_error("pi_harness")},
             status=403,
         )
-    llm_config.set_pi_harness(bool(body.get("pi")))
-    from .kernel.harness_pi import pi_binary
-    from .kernel.harness import pi_harness_permitted
-    return web.json_response({
-        "ok": True,
-        "pi": {
+    if "browser" in body and not admin_policy.feature_enabled("browser_use"):
+        return web.json_response(
+            {"error": admin_policy.feature_error("browser_use")},
+            status=403,
+        )
+    out: dict[str, Any] = {"ok": True}
+    if "pi" in body:
+        llm_config.set_pi_harness(bool(body.get("pi")))
+        from .kernel.harness_pi import pi_binary
+        from .kernel.harness import pi_harness_permitted
+        out["pi"] = {
             "admin_allowed": True,
             "user_enabled": llm_config.get_pi_harness(),
             "installed": pi_binary() is not None,
             "used": pi_harness_permitted() and pi_binary() is not None,
-        },
-    })
+        }
+    if "browser" in body:
+        llm_config.set_browser_use(bool(body.get("browser")))
+        from . import playwright_cli
+        out["browser"] = playwright_cli.status_view()
+    return web.json_response(out)
 
 
 async def handle_llm_set_default(request: web.Request) -> web.Response:
