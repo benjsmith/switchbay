@@ -201,6 +201,11 @@ Switch Bay tools you may call:
     Skill discovery. Default is frontmatter + headings; then
     section="Heading" one chapter at a time. Global SKILL.md under
     ~/.agents/skills is Readable. Prefer this tool over cat.
+  · playwright_cli(argv) — local browser, only when this tool is
+    listed. load_skill("playwright-cli") and follow it. argv is the
+    CLI arguments, for example ["open", "https://example.com"] then
+    ["snapshot"] then ["click", "e15"]. Headless Chromium on this
+    machine. The tool is pinned to Playwright 1.64.1 (`playwright cli`).
   · register_rule(trigger, action) / list_rules() / delete_rule(id)
     Save a persistent rail shortcut. When the user asks you to
     remember a habit ("when I say X, /view Y"), call register_rule.
@@ -253,10 +258,11 @@ Live-tab rule (all of Sheet / Table / Plot / Sketch):
 When the user's message starts with `[attached: <path>]`, that's a
 file the user attached from the rail (the attach button, or an image
 pasted into the chat box). Read it with your file tool (Read for
-claude-code, bash cat / less for codex, etc.) — the path is
-workspace-relative and inside `.workbench/uploads/`. Treat it the
-same as if the user had typed the file's content inline; the
-bracketed reference is just an indirection.
+Claude Code and Grok, bash cat / less for Codex). A pasted screenshot
+is an image file under `.workbench/uploads/`; Read is how you see it.
+The path is workspace-relative. Treat it the same as if the user had
+typed the file's content inline; the bracketed reference is just an
+indirection.
 
 Use the tools eagerly when the user's request clearly implies a
 change. After a successful tool call keep replies short — a one-liner
@@ -426,6 +432,7 @@ ALLOWED_TOOLS = [
     # when covered_by tools are not enough.
     "list_skills",
     "load_skill",
+    "playwright_cli",
     "run_command",
     "read_workspace_plan",
     "update_work_plan",
@@ -554,6 +561,10 @@ def compile_tool_specs(
         t = tools.REGISTRY.get(name)
         if t is None:
             continue
+        if name == "playwright_cli":
+            from .. import playwright_cli
+            if not playwright_cli.browser_use_enabled():
+                continue
         spec = t.to_anthropic()
         use_blurbs = bool(local and (rung is None or rung.force_scaffold))
         blurb = _LOCAL_TOOL_BLURBS.get(name) if use_blurbs else None

@@ -19,7 +19,8 @@ if [ "$MODE" = "on" ]; then
     "agent_run_command": true,
     "in_app_update": false,
     "ce_auto_setup": false,
-    "uv_python_install": false
+    "uv_python_install": false,
+    "browser_use": false
   }
 }
 JSON

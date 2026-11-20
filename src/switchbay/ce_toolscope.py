@@ -190,6 +190,12 @@ def bash_rules(workspace: Path) -> list[str]:
     # entries with the date.
     rules.append("Bash(printenv CURATOR_PRESET:*)")
     rules.append("Bash(date:*)")
+    try:
+        from . import playwright_cli
+        if playwright_cli.browser_use_enabled():
+            rules.append("Bash(playwright-cli:*)")
+    except Exception:  # noqa: BLE001
+        log.exception("playwright-cli allow rule skipped")
     return _dedup(rules)
 
 

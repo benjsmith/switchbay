@@ -245,8 +245,10 @@ flowchart LR
   pending/retryable rather than counting as ingested. Each ingest file
   uses the interpreter that already has that extractor: workspace CE
   venv for pypdf/openpyxl when present, Switch Bay host for
-  `python-pptx` when the workspace lacks it. Scan/graph stay on the
-  workspace venv (kuzu). Old vault extracts that say
+  `python-pptx` when the workspace lacks it. Graph rebuild and the
+  viewer use the workspace `.venv` when that venv can import kuzu,
+  and otherwise the Switch Bay interpreter (`uv sync --locked`
+  installs kuzu). Old vault extracts that say
   `PPTX extraction unavailable` need an explicit re-ingest; Switch
   Bay does not rewrite them. The extract's `source_path` /
   `extracted_from` record the authorized original watch path.

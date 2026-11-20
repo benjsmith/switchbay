@@ -40,6 +40,7 @@ def test_enterprise_default_allows_copilot_and_local(enterprise_env):
     assert not admin_policy.feature_enabled("hf_model_download")
     assert admin_policy.feature_enabled("user_mcp_servers")
     assert not admin_policy.feature_enabled("pi_harness")
+    assert not admin_policy.feature_enabled("browser_use")
 
 
 def test_open_profile_allows_hosted_apis(monkeypatch):
@@ -51,6 +52,7 @@ def test_open_profile_allows_hosted_apis(monkeypatch):
     assert admin_policy.feature_enabled("ce_auto_setup")
     assert admin_policy.feature_enabled("hf_model_download")
     assert admin_policy.feature_enabled("pi_harness")
+    assert admin_policy.feature_enabled("browser_use")
     assert llmgateway.default_provider_id() == "anthropic"
 
 

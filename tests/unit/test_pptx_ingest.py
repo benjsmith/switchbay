@@ -89,10 +89,12 @@ def test_host_python_has_pptx_and_workspace_venv_can_lack_it(tmp_path: Path):
     scan_py = cebridge.script_python_for(ws, "scan.py")
     xlsx_py = cebridge.python_for_ingest(ws, ".xlsx")
     assert ingest_py == [sys.executable]
-    assert graph_py == [str(py)]
+    # A bare workspace venv cannot import kuzu. Graph uses the Switch
+    # Bay interpreter, which `uv sync --locked` installs kuzu into.
+    assert graph_py == [sys.executable]
     assert scan_py == [str(py)]
     assert xlsx_py == [str(py)]
-    assert ingest_py != graph_py
+    assert scan_py != graph_py
 
 
 def test_real_ce_pptx_ingest_extracts_title_bullets_table(tmp_path: Path):
@@ -306,7 +308,8 @@ def test_xlsx_pdf_prefer_workspace_venv_that_has_extractors(tmp_path: Path):
     assert cebridge.python_for_ingest(ws, ".pdf") == [ws_py]
     assert cebridge.python_for_ingest(ws, ".pptx") == [sys.executable]
     assert cebridge.script_python_for(ws, "scan.py") == [ws_py]
-    assert cebridge.script_python_for(ws, "graph.py") == [ws_py]
+    assert not cebridge.interpreter_has_module(venv_py, "kuzu")
+    assert cebridge.script_python_for(ws, "graph.py") == [sys.executable]
 
 
 def test_real_xlsx_pdf_and_mixed_directory_ingest(tmp_path: Path):

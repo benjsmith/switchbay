@@ -72,6 +72,25 @@ def set_pi_harness(enabled: bool) -> None:
     save(data)
 
 
+def get_browser_use() -> bool:
+    """User opt-in for the local Playwright CLI. Default on.
+
+    Admin ``browser_use`` can still deny it. Unset means on, matching
+    the installer (the CLI is installed unless the user passed
+    ``--no-browser`` or enterprise policy skipped it).
+    """
+    val = load().get("browser_use")
+    if val is None:
+        return True
+    return bool(val)
+
+
+def set_browser_use(enabled: bool) -> None:
+    data = load()
+    data["browser_use"] = bool(enabled)
+    save(data)
+
+
 def get_model(provider: str) -> str | None:
     """User-chosen model for `provider`, or None to fall back to the
     provider's static default."""

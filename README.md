@@ -22,7 +22,8 @@ and nothing leaves unless you send it.
 - **Bring your own models** — hosted APIs (Anthropic, xAI Grok, OpenAI,
   Gemini, Meta Muse Spark), subscription coding CLIs (Claude Code, Grok
   Build, Muse Code, Codex, Copilot), or fully-local models (llama.cpp /
-  Ollama). Mix them per task with a model ladder.
+  Ollama). Mix them per task with a model ladder. Grok Build is the
+  signed-in `grok` command: [install and sign in](docs/grok.md).
 - **Knowledge that compounds** — capture → curate → graph. Every session
   leaves the graph richer, so the next one starts smarter. Agents propose
   wiki edits; a stronger reviewer (and you) keep them honest.
@@ -67,6 +68,15 @@ make install SEMANTIC=1      # + local semantic embeddings (fastembed/ONNX, ~150
 
 Then open `http://127.0.0.1:8765` and install it as an app. You can add
 local semantic embeddings later with `make sync-semantic`.
+
+The installer also sets up a local browser for the rail assistant:
+Playwright 1.64.1's `playwright cli`, the `playwright-cli` skill, and
+the same browser builds the UI tests use. Skip the browser with
+`make install NO_BROWSER=1`. Enterprise installs skip it unless an
+admin turns `browser_use` on. Details: [`docs/browser.md`](docs/browser.md).
+
+The locked Python install includes kuzu, which the first graph rebuild
+uses when the workspace does not yet have its own `.venv`.
 
 > **Prerequisites:** `git`, **Node.js + pnpm** (the installer guides you
 > if they're missing), and `uv` (auto-installed). Python ≥3.11 is

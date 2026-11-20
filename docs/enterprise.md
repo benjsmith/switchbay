@@ -104,6 +104,7 @@ Provider ids: `github_copilot`, `llamacpp`, `mlx`, `ollama`,
 | `watch_folders` | on | Local directory poll. New arrivals only (existing files are baselined). Watcher writes a **deterministic vault extract**; it does not immediately author wiki pages (Curate does that later). macOS iCloud hydration is per-file, not a tree pin — not live-cloud certified in CI. |
 | `web_egress` | off | Workspace Web on/off. Off: no search/fetch. On: the user may still enable Web **per workspace** (workspace default remains off). Each search/fetch still needs a once/deny card that is **never remembered**. Model API transport is a separate allowlist. |
 | `pi_harness` | off | Optional PATH harness for hired packages. Off until IT opts in. |
+| `browser_use` | off | Local browser for agents (Playwright 1.64.1 `playwright cli`, its skill, and the same browser builds as the UI tests). Off: install skips that step, and agents do not receive the skill or the `playwright_cli` tool. On: the user can still turn it off in Settings → Local browser. See [Local browser](browser.md). |
 
 ## Live worker ceiling
 
