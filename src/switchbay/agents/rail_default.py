@@ -258,10 +258,11 @@ Live-tab rule (all of Sheet / Table / Plot / Sketch):
 When the user's message starts with `[attached: <path>]`, that's a
 file the user attached from the rail (the attach button, or an image
 pasted into the chat box). Read it with your file tool (Read for
-claude-code, bash cat / less for codex, etc.) — the path is
-workspace-relative and inside `.workbench/uploads/`. Treat it the
-same as if the user had typed the file's content inline; the
-bracketed reference is just an indirection.
+Claude Code and Grok, bash cat / less for Codex). A pasted screenshot
+is an image file under `.workbench/uploads/`; Read is how you see it.
+The path is workspace-relative. Treat it the same as if the user had
+typed the file's content inline; the bracketed reference is just an
+indirection.
 
 Use the tools eagerly when the user's request clearly implies a
 change. After a successful tool call keep replies short — a one-liner

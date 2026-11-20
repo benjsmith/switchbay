@@ -61,5 +61,9 @@ skill and calls `playwright_cli` with that CLI's arguments (`open`,
 files for the workspace land in `.playwright-cli/` inside the
 workspace.
 
+For a subscription login, set the rail to **Grok Build** (the `grok`
+command). Install, sign-in, and pasted screenshots:
+[Grok on the rail](grok.md).
+
 The assistant uses the pinned 0.1.23 install. It does not fetch a
 newer `@playwright/cli`.

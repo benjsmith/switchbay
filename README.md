@@ -22,7 +22,8 @@ and nothing leaves unless you send it.
 - **Bring your own models** — hosted APIs (Anthropic, xAI Grok, OpenAI,
   Gemini, Meta Muse Spark), subscription coding CLIs (Claude Code, Grok
   Build, Muse Code, Codex, Copilot), or fully-local models (llama.cpp /
-  Ollama). Mix them per task with a model ladder.
+  Ollama). Mix them per task with a model ladder. Grok Build is the
+  signed-in `grok` command: [install and sign in](docs/grok.md).
 - **Knowledge that compounds** — capture → curate → graph. Every session
   leaves the graph richer, so the next one starts smarter. Agents propose
   wiki edits; a stronger reviewer (and you) keep them honest.
