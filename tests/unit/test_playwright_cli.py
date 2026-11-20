@@ -43,14 +43,23 @@ def _recording_runner(calls: list):
                 json.dumps({"version": playwright_cli.CLI_VERSION}),
                 encoding="utf-8",
             )
-            bindir = prefix / "node_modules" / ".bin"
-            bindir.mkdir(parents=True)
-            exe = bindir / "playwright-cli"
-            exe.write_text("#!/bin/sh\n", encoding="utf-8")
-            exe.chmod(0o755)
+            exe = playwright_cli.cli_path(prefix)
+            exe.parent.mkdir(parents=True, exist_ok=True)
+            if exe.suffix.lower() == ".cmd":
+                exe.write_text("@echo off\r\n", encoding="utf-8")
+            else:
+                exe.write_text("#!/bin/sh\n", encoding="utf-8")
+                exe.chmod(0o755)
         return subprocess.CompletedProcess(argv, 0, "", "")
 
     return runner
+
+
+def test_windows_cli_shim_is_cmd(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(playwright_cli.os, "name", "nt")
+    monkeypatch.setattr(playwright_cli, "_home", lambda: tmp_path)
+    assert playwright_cli.cli_path(tmp_path).name == "playwright-cli.cmd"
+    assert playwright_cli.bin_link().name == "playwright-cli.cmd"
 
 
 def test_browser_revisions_do_not_replace_e2e_browsers():
@@ -157,7 +166,7 @@ def test_install_pins_cli_skill_and_browsers(tmp_path: Path, monkeypatch):
     browser_argv, browser_timeout, _browser_env = calls[2]
     assert browser_argv[1:] == ["install-browser"]
     assert browser_timeout == playwright_cli.BROWSER_TIMEOUT_S
-    assert (home / ".local" / "bin" / "playwright-cli").is_file()
+    assert playwright_cli.bin_link().is_file()
     assert playwright_cli.installed_version() == "0.1.23"
 
     calls.clear()
