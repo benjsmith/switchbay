@@ -66,6 +66,8 @@
   --type-procedures:    #5e4fa2;
   --type-execution:     #c51b8a;   /* pink-magenta — dated instances */
   --type-executions:    #c51b8a;
+  --type-hypothesis:    #7570b3;  /* blue-violet — claims evidence can bear on */
+  --type-hypotheses:    #7570b3;
   /* Unclassified is a placeholder for "no type yet" — render with
    * a white fill + a thicker black ring so it visually reads as
    * "outline only", obviously different from the typed colour
@@ -266,3 +268,5 @@
   opacity: 0.35;
   cursor: not-allowed;
 }
+
+.dot.dot-hypothesis { background: var(--type-hypothesis); }

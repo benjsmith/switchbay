@@ -2418,13 +2418,16 @@ def _list_wiki_pages(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]
 
 # ── In-process knowledge graph (multi-hop) ───────────────────────────
 # CE builds a rich typed graph in `.curator/graph.kuzu` (WikiLink / Cites
-# / etc.) but that needs kuzu installed + a fresh rebuild, and the
-# viewer's data.json drops all edges when kuzu is absent. So we build the
-# same graph IN-PROCESS from the wiki pages themselves — the filesystem is
-# the source of truth — giving the agent real multi-hop traversal, path
-# finding, and co-citation ("bridge") queries with no external dependency.
-# This is what lets the agent answer connective / multi-hop questions that
-# lexical search alone can't (structural disconnection).
+# / OntologyEdge / etc.) but that needs kuzu installed + a fresh rebuild,
+# and the viewer's data.json drops all edges when kuzu is absent. So we
+# build the same graph IN-PROCESS from the wiki pages themselves — the
+# filesystem is the source of truth — giving the agent real multi-hop
+# traversal, path finding, and co-citation ("bridge") queries with no
+# external dependency. Typed frontmatter edges (supports, contradicts,
+# and any other ontology edge that names both ends) are included, so
+# this walk is not limited to [[wikilinks]]. This is what lets the
+# agent answer connective / multi-hop questions that lexical search
+# alone can't (structural disconnection).
 
 _VAULT_CITE = re.compile(r"\(vault:([^)\s]+)")
 
@@ -2440,11 +2443,11 @@ class _GraphIndex:
         self.ptitle: dict[str, str] = {}
 
 
-_GRAPH_CACHE: dict[str, tuple[tuple[int, float], _GraphIndex]] = {}
+_GRAPH_CACHE: dict[str, tuple[tuple[int, float, float], _GraphIndex]] = {}
 
 
-def _graph_signature(workspace: Path) -> tuple[int, float]:
-    """Cheap staleness key: (page count, max mtime). Rebuild when it changes."""
+def _graph_signature(workspace: Path) -> tuple[int, float, float]:
+    """Cheap staleness key: (page count, max mtime, ontology mtime)."""
     n = 0
     mx = 0.0
     for _rel, p in _iter_wiki_pages(workspace):
@@ -2453,7 +2456,48 @@ def _graph_signature(workspace: Path) -> tuple[int, float]:
             mx = max(mx, p.stat().st_mtime)
         except OSError:
             pass
-    return (n, mx)
+    ont_m = 0.0
+    ont = Path(workspace) / ".curator" / "meta-ontology.yaml"
+    if ont.is_file():
+        try:
+            ont_m = ont.stat().st_mtime
+        except OSError:
+            pass
+    return (n, mx, ont_m)
+
+
+
+def _add_typed_ontology_edges(workspace: Path, idx: _GraphIndex) -> None:
+    """Walk supports/contradicts and other typed frontmatter edges.
+
+    Curiosity Engine 1.10 stores these as OntologyEdge in kuzu;
+    graph.py neighbors already follows them. The in-process index
+    used to assume only [[wikilinks]] were traversable.
+    """
+    try:
+        from . import meta_ontology
+        ont, err = meta_ontology.load_result(workspace)
+    except Exception:  # noqa: BLE001
+        return
+    if ont is None or err:
+        return
+    try:
+        edges, _issues = meta_ontology.survey_typed_edges(workspace, ont)
+    except Exception:  # noqa: BLE001
+        return
+    if not edges:
+        return
+    id_to_rel: dict[str, str] = {}
+    for rel in idx.out:
+        pid = wiki_cite_target(rel)
+        if pid:
+            id_to_rel[pid.casefold()] = rel
+    for edge in edges:
+        src = id_to_rel.get(edge.source_id.casefold())
+        tgt = id_to_rel.get(edge.target_id.casefold())
+        if src and tgt and src != tgt:
+            idx.out.setdefault(src, set()).add(tgt)
+            idx.inc.setdefault(tgt, set()).add(src)
 
 
 def _graph_index(workspace: Path) -> _GraphIndex:
@@ -2490,6 +2534,7 @@ def _graph_index(workspace: Path) -> _GraphIndex:
                 idx.inc[tgt].add(rel)
         for m in _VAULT_CITE.findall(text):
             idx.cites[rel].add(m.strip().rstrip(")").rstrip("."))
+    _add_typed_ontology_edges(workspace, idx)
     _GRAPH_CACHE.pop(key, None)
     _GRAPH_CACHE[key] = (sig, idx)
     overflow = len(_GRAPH_CACHE) - 4
@@ -2799,9 +2844,13 @@ def _ce_graph_neighbors(workspace: Path, payload: dict[str, Any]) -> dict[str, A
     direction = str(payload.get("direction") or "both").strip().lower()
     if direction not in ("out", "in", "both"):
         direction = "both"
+    args = ["neighbors", "wiki", page_id, "--hops", str(hops), "--direction", direction]
+    edge = str(payload.get("edge") or "").strip()
+    if edge:
+        args.extend(["--edge", edge])
     return cebridge.run_script(
         "graph.py",
-        ["neighbors", "wiki", page_id, "--hops", str(hops), "--direction", direction],
+        args,
         cwd=workspace, timeout=60.0,
     )
 
@@ -2889,9 +2938,11 @@ register(Tool(
     name="ce_graph_neighbors",
     description=(
         "Kuzu-backed multi-hop neighbourhood of a wiki page (CE graph.py). "
-        "Richer typed edges than the in-process wiki_neighbors tool when "
-        "the graph DB is built. Accepts path/stem/title; resolved to "
-        "type/slug.md for CE. On missing kuzu returns a clear install hint."
+        "Walks wikilinks, citations, and typed ontology edges such as "
+        "supports and contradicts. Pass edge to keep only that "
+        "relationship (for example edge=supports). Accepts path/stem/title; "
+        "resolved to type/slug.md for CE. On missing kuzu returns a clear "
+        "install hint."
     ),
     input_schema={
         "type": "object",
@@ -2900,6 +2951,10 @@ register(Tool(
             "page": {"type": "string"},
             "hops": {"type": "integer", "description": "1–6 (default 2)."},
             "direction": {"type": "string", "enum": ["out", "in", "both"]},
+            "edge": {
+                "type": "string",
+                "description": "Optional relationship name; passed as --edge.",
+            },
         },
     },
     handler=_ce_graph_neighbors,

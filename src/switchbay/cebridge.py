@@ -463,11 +463,11 @@ def read_cached(
     parse + cheap in-memory backfills. Usable on workspace switch so
     the graph paints in milliseconds even when the vault is huge.
     Pair with ``enrich_from_disk`` / a background rebuild to refresh
-    filesystem truth (types, decks, on-disk pages) off the request.
+    filesystem truth (decks, on-disk pages) off the request.
 
-    ``enrich=True`` also runs the full disk-truth pass (resync types,
-    inject decks, inject on-disk pages). Prefer that only on slow
-    paths (curation history, post-build) — never on ``/api/graph/data``.
+    ``enrich=True`` also runs the full disk-truth pass (inject decks,
+    inject on-disk pages). Prefer that only on slow paths (curation
+    history, post-build) — never on ``/api/graph/data``.
 
     Returns None when no cached build is on disk yet OR the file
     parses badly OR the workspace has no wiki/."""
@@ -491,26 +491,24 @@ def read_cached(
 def enrich_from_disk(workspace: Path, data: dict[str, Any]) -> dict[str, int]:
     """Filesystem-truth pass over an in-memory viewer bundle.
 
-    Runs the three expensive walks that used to live inside
-    ``read_cached``:
-      1. ``resync_types_from_disk`` — align node/page types with
-         frontmatter (full wiki rglob + per-file reads).
-      2. ``inject_deck_nodes`` — ensure ``kind: deck`` pages appear
+    Runs the expensive walks that used to live inside ``read_cached``:
+      1. ``inject_deck_nodes`` — ensure ``kind: deck`` pages appear
          in nodes/pages.
-      3. ``wiki_sync.inject_on_disk_pages`` — fold in new/deleted
+      2. ``wiki_sync.inject_on_disk_pages`` — fold in new/deleted
          wiki docs + wikilink edges (full-file reads).
 
-    Mutates ``data``. Returns per-stage change counts so callers can
-    surface progress. Safe to call repeatedly; designed for the
-    background sync kicked by ``/api/graph/data``.
+    Page types come from Curiosity Engine's payload (and, for pages
+    with no type, from a title-prefix backfill). Mutates ``data``.
+    Returns per-stage change counts so callers can surface progress.
+    Safe to call repeatedly; designed for the background sync kicked
+    by ``/api/graph/data``.
     """
     from . import wiki_sync
-    types_n = int(resync_types_from_disk(workspace, data) or 0)
     decks_n = int(inject_deck_nodes(workspace, data) or 0)
     pages_n = int(wiki_sync.inject_on_disk_pages(workspace, data) or 0)
     _override_palette(data)
     _apply_meta_ontology(workspace, data)
-    return {"types": types_n, "decks": decks_n, "pages": pages_n}
+    return {"decks": decks_n, "pages": pages_n}
 
 
 def has_workspace_venv(workspace: Path) -> bool:
@@ -1077,6 +1075,8 @@ _PALETTE_OVERRIDE: dict[str, str] = {
     "procedures":      "#5e4fa2",
     "execution":       "#c51b8a",  # pink-magenta — dated instances
     "executions":      "#c51b8a",
+    "hypothesis":      "#7570b3",  # blue-violet — CE 1.10 built-in
+    "hypotheses":      "#7570b3",
     "unclassified":    "#ffffff",  # white + black stroke via graph.js
 }
 
@@ -1170,102 +1170,6 @@ def _backfill_unclassified_types(data: dict) -> None:
                 n["type"] = new_type
     if promoted:
         log.info("backfilled %d page types from title prefix (pages + nodes)", promoted)
-
-
-# Match a one-line `type: foo` frontmatter declaration. Tolerant of
-# quoting + trailing whitespace. We don't pull a YAML dep for this —
-# CE's writer emits the simple form and that's what we need to read.
-_FM_TYPE_RE = re.compile(r"^\s*type\s*:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$")
-
-
-def resync_types_from_disk(workspace: Path, data: dict) -> int:
-    """Walk wiki/*.md, read each file's `type:` frontmatter line
-    directly, and override `data['pages'][id].type` AND
-    `data['nodes'][id].type` to match. Filesystem is the source of
-    truth — CE's wiki_render sometimes ships node entries typed
-    `unclassified` even when the page's frontmatter clearly
-    declares a type. This forces both data structures into sync
-    with what's actually on disk.
-
-    Returns the number of nodes whose type changed."""
-    wiki = workspace / "wiki"
-    if not wiki.is_dir():
-        return 0
-    pages = data.get("pages") if isinstance(data, dict) else None
-    nodes = data.get("nodes") if isinstance(data, dict) else None
-    if not isinstance(pages, dict) or not isinstance(nodes, list):
-        return 0
-    # Map page-id → declared frontmatter type. Page ids in CE-shaped
-    # data.json are the wiki-relative path minus the .md extension,
-    # so `wiki/tables/foo.md` → `tables/foo`. We mirror that here.
-    declared: dict[str, str] = {}
-    for md in wiki.rglob("*.md"):
-        try:
-            text = md.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if not text.startswith("---"):
-            continue
-        end = text.find("\n---", 3)
-        if end == -1:
-            continue
-        block = text[3:end]
-        type_line = None
-        for line in block.splitlines():
-            m = _FM_TYPE_RE.match(line)
-            if m:
-                type_line = m.group(1).lower()
-                break
-        if not type_line:
-            continue
-        try:
-            rel = md.resolve().relative_to(wiki.resolve())
-        except ValueError:
-            continue
-        pid = rel.with_suffix("").as_posix()
-        # Canonicalise plurals + CE subtypes → the singular form
-        # the sidebar's TYPE_CANONICAL expects. `extracted-table`
-        # is the CE subtype for tables lifted out of source PDFs;
-        # CE itself canonicalises it to `table` on the page side
-        # but not on the node side, which is the desync the user
-        # hit: page modal shows `type: table`, sidebar still groups
-        # under UNCLASSIFIED.
-        canon = {
-            "projects": "project", "analyses": "analysis",
-            "concepts": "concept", "entities": "entity",
-            "facts": "fact", "figures": "figure",
-            "tables": "table", "sources": "source",
-            "notes": "note", "todo": "todo-list",
-            "todos": "todo-list",
-            "procedures": "procedure", "executions": "execution",
-            "extracted-table": "table",
-            "extracted_table": "table",
-        }.get(type_line, type_line)
-        declared[pid] = canon
-    if not declared:
-        return 0
-    changed = 0
-    for pid, want in declared.items():
-        page = pages.get(pid)
-        if isinstance(page, dict) and str(page.get("type") or "").lower() != want:
-            page["type"] = want
-            changed += 1
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        want = declared.get(str(n.get("id") or ""))
-        if want and str(n.get("type") or "").lower() != want:
-            n["type"] = want
-            changed += 1
-    if changed:
-        log.info("resync_types_from_disk: %d type fields aligned with frontmatter", changed)
-    return changed
-
-
-# Frontmatter keys we care about for deck discovery. Hand-rolled so we
-# don't pull a YAML dep (same dialect as analyses.parse_frontmatter).
-_FM_KIND_RE = re.compile(r"^\s*kind\s*:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$")
-_FM_TITLE_RE = re.compile(r"^\s*title\s*:\s*(.+?)\s*$")
 
 
 def inject_deck_nodes(workspace: Path, data: dict[str, Any]) -> int:

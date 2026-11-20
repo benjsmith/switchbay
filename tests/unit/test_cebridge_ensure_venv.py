@@ -115,7 +115,6 @@ async def test_build_calls_ensure_venv_when_no_venv(
 
     monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_exec)
     # Also stub disk-truth helpers so they don't need a real CE tree.
-    monkeypatch.setattr(cebridge, "resync_types_from_disk", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_backfill_unclassified_types", lambda *_a, **_k: None)
@@ -156,7 +155,6 @@ async def test_build_skips_ensure_when_disabled(
     monkeypatch.setattr(
         __import__("asyncio"), "create_subprocess_exec", fake_exec,
     )
-    monkeypatch.setattr(cebridge, "resync_types_from_disk", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_backfill_unclassified_types", lambda *_a, **_k: None)
@@ -208,7 +206,6 @@ async def test_build_uses_workspace_venv_python_for_wiki_render(
     monkeypatch.setattr(
         __import__("asyncio"), "create_subprocess_exec", fake_exec,
     )
-    monkeypatch.setattr(cebridge, "resync_types_from_disk", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
     monkeypatch.setattr(cebridge, "_backfill_unclassified_types", lambda *_a, **_k: None)

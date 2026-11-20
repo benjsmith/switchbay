@@ -60,10 +60,11 @@ export function planLegend(existing: LegendRow[], data: unknown): LegendPlan | n
     const type = (node.type || "").trim();
     const label = (node.label || "").trim();
     if (!type || !label) continue;
+    const paletteColor = paletteColorOf(data, type);
     const item = {
       type,
       label,
-      color: node.color,
+      color: node.color || paletteColor,
       description: node.description,
     };
     if (have.has(type)) relabel.push(item);
@@ -88,42 +89,26 @@ export function planLegend(existing: LegendRow[], data: unknown): LegendPlan | n
   return { relabel, add, edges };
 }
 
-/** CSS so classic graph and modal subgraph strokes follow edge type. */
-export function edgeStyleCss(edges: LegendPlan["edges"]): string {
-  const rules: string[] = [];
-  for (const edge of edges) {
-    const color = (edge.color || "").trim();
-    if (!color) continue;
-    const kind = cssAttr(edge.type);
-    const sel = `.edge[data-kind="${kind}"], .sub-edge[data-kind="${kind}"]`;
-    rules.push(`${sel} { stroke: ${color}; stroke-opacity: 0.9; }`);
-    rules.push(
-      `.edge[data-kind="${kind}"][data-vis="focus"], .sub-edge[data-kind="${kind}"][data-vis="focus"] { stroke: var(--accent); }`,
-    );
-  }
-  return rules.join("\n");
-}
-
 export function applyMetaOntologyChrome(root: ParentNode, data: unknown): void {
   const panel = root.querySelector?.("#label-types-panel");
   if (!panel) return;
   clearOverlay(panel);
+  clearInjectedEdgeStyle(root);
+  applyPaletteVars(root, data);
   const existing = currentRows(panel);
   const plan = planLegend(existing, data);
   if (!plan) {
-    installEdgeStyle(root, "");
     return;
   }
   for (const change of plan.relabel) {
     const row = panel.querySelector(`.label-types-row[data-type="${cssAttr(change.type)}"]`);
     if (!row) continue;
-    const text = labelSpan(row);
-    if (!text) continue;
-    if (!text.dataset.metaDefault) text.dataset.metaDefault = text.textContent || "";
-    text.textContent = change.label;
-    text.dataset.metaLabel = "1";
+    const textEl = labelSpan(row);
+    if (!textEl) continue;
+    if (!textEl.dataset.metaDefault) textEl.dataset.metaDefault = textEl.textContent || "";
+    textEl.textContent = change.label;
+    textEl.dataset.metaLabel = "1";
     if (change.description) row.setAttribute("title", change.description);
-    paintDot(row, change.color);
   }
   const reset = panel.querySelector("#label-types-reset");
   for (const extra of plan.add) {
@@ -174,7 +159,6 @@ export function applyMetaOntologyChrome(root: ParentNode, data: unknown): void {
       else panel.append(row);
     }
   }
-  installEdgeStyle(root, edgeStyleCss(plan.edges));
 }
 
 function clearOverlay(panel: Element): void {
@@ -209,14 +193,6 @@ function labelSpan(row: Element): HTMLElement | null {
   return null;
 }
 
-function paintDot(row: Element, color: string | undefined): void {
-  const dot = row.querySelector("span.dot");
-  if (!(dot instanceof HTMLElement)) return;
-  if (!color) return;
-  dot.style.background = color;
-  dot.dataset.metaColor = "1";
-}
-
 function cssAttr(value: string): string {
   return value.replace(/["\\]/g, "");
 }
@@ -227,17 +203,34 @@ function stringList(raw: unknown): string[] | undefined {
   return items.length ? items : undefined;
 }
 
-function installEdgeStyle(root: ParentNode, css: string): void {
+function paletteColorOf(data: unknown, type: string): string | undefined {
+  if (!data || typeof data !== "object" || !("palette" in data)) return undefined;
+  const raw = (data as { palette?: unknown }).palette;
+  if (!raw || typeof raw !== "object") return undefined;
+  const color = (raw as Record<string, unknown>)[type];
+  return typeof color === "string" && color.trim() ? color.trim() : undefined;
+}
+
+function applyPaletteVars(root: ParentNode, data: unknown): void {
+  if (!data || typeof data !== "object" || !("palette" in data)) return;
+  const raw = (data as { palette?: unknown }).palette;
+  if (!raw || typeof raw !== "object") return;
   const doc = root instanceof Document ? root : (root as Node).ownerDocument;
-  if (!doc) return;
-  const id = "meta-ontology-edge-style";
-  const existing = doc.getElementById(id);
-  if (!css) {
-    existing?.remove();
-    return;
+  const el = doc?.documentElement;
+  if (!el) return;
+  for (const [typeName, color] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof color !== "string") continue;
+    const hex = color.trim();
+    if (!/^#[0-9a-fA-F]{6}$/.test(hex)) continue;
+    const safe = typeName.replace(/[^a-zA-Z0-9_-]/g, "");
+    if (!safe) continue;
+    el.style.setProperty(`--type-${safe}`, hex);
   }
-  const style = existing ?? doc.createElement("style");
-  style.id = id;
-  style.textContent = css;
-  if (!existing) doc.head?.append(style);
+}
+
+function clearInjectedEdgeStyle(root: ParentNode): void {
+  // Older Switch Bay builds injected stroke rules that overrode the
+  // payload colour. Drop any leftover stylesheet if it is still present.
+  const doc = root instanceof Document ? root : (root as Node).ownerDocument;
+  doc?.getElementById("meta-ontology-edge-style")?.remove();
 }

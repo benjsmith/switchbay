@@ -408,7 +408,8 @@ edges:
     assert "color" not in ont.to_export()["edges"][0]
 
 
-def test_typed_edges_are_drawn_and_hypothesis_type_is_kept(tmp_path: Path):
+def test_apply_to_graph_does_not_rewrite_types_or_append_edges(tmp_path: Path):
+    """Curiosity Engine 1.10 already emits declared types and typed edges."""
     _write(tmp_path, """
 version: 1
 nodes:
@@ -429,12 +430,6 @@ edges:
     source: [evidence]
     target: [hypothesis]
     description: When the result matches a prediction.
-  - type: contradicts
-    label: contradicts
-    color: "#d55e00"
-    source: [evidence]
-    target: [hypothesis]
-    description: When the result conflicts with a prediction.
 """)
     evidence = tmp_path / "wiki" / "evidence" / "cpu.md"
     hypothesis = tmp_path / "wiki" / "hypotheses" / "queue.md"
@@ -445,7 +440,6 @@ type: evidence
 title: CPU
 supports:
   - hypotheses/queue
-contradicts: [hypotheses/queue.md]
 ---
 
 The series moved.
@@ -470,19 +464,45 @@ The queue grows.
         "edges": [{"source": "evidence/cpu", "target": "hypotheses/queue", "type": "wikilink"}],
     }
     assert meta_ontology.apply_to_graph_if_configured(tmp_path, data) is True
-    assert data["nodes"][1]["type"] == "hypothesis"
-    assert data["pages"]["hypotheses/queue"]["type"] == "hypothesis"
-    typed = [edge for edge in data["edges"] if edge["type"] in {"supports", "contradicts"}]
-    assert {(edge["type"], edge["color"]) for edge in typed} == {
-        ("supports", "#0072b2"),
-        ("contradicts", "#d55e00"),
+    assert data["nodes"][1]["type"] == "unclassified"
+    assert data["pages"]["hypotheses/queue"]["type"] == "unclassified"
+    assert [edge["type"] for edge in data["edges"]] == ["wikilink"]
+    assert data["pages"]["evidence/cpu"]["properties"] == {}
+    assert data["palette"]["hypothesis"] == "#7570b3"
+    assert data["nodes"][0]["typeLabel"] == "Evidence"
+    assert data["palette"]["evidence"] == "#73af48"
+    edges, issues = meta_ontology.survey_typed_edges(
+        tmp_path, meta_ontology.load(tmp_path),
+    )
+    assert issues == ()
+    assert {(e.edge_type, e.source_id, e.target_id) for e in edges} == {
+        ("supports", "evidence/cpu", "hypotheses/queue"),
     }
-    assert all(edge["target"] == "hypotheses/queue" for edge in typed)
-    assert data["nodes"][0]["degree"] == 2
-    assert data["pages"]["evidence/cpu"]["properties"]["supports"] == ["hypotheses/queue"]
-    meta_ontology.apply_to_graph_if_configured(tmp_path, data)
-    assert len([edge for edge in data["edges"] if edge["type"] == "supports"]) == 1
-    assert data["nodes"][0]["degree"] == 2
+
+
+def test_default_and_yaml_colours_and_stable_custom_type(tmp_path: Path):
+    data = {"palette": dict(cebridge._PALETTE_OVERRIDE)}
+    assert data["palette"]["hypothesis"] == "#7570b3"
+    assert data["palette"]["evidence"] == "#73af48"
+
+    _write(tmp_path, """
+version: 1
+nodes:
+  - type: hypothesis
+    label: Hypothesis
+    color: "#111111"
+    description: A claim.
+  - type: instrument
+    label: Instrument
+    description: A custom type with no colour.
+edges: []
+""")
+    assert meta_ontology.apply_to_graph_if_configured(tmp_path, data) is True
+    assert data["palette"]["hypothesis"] == "#111111"
+    assert data["palette"]["evidence"] == "#73af48"
+    assert data["palette"]["instrument"] == meta_ontology.deterministic_color("instrument")
+    assert data["palette"]["instrument"] not in meta_ontology._RESERVED_COLORS
+
 
 
 def test_export_carries_typed_edges(tmp_path: Path):

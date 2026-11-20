@@ -829,7 +829,7 @@ register(Tool(
     description=(
         "Rebuild the kuzu knowledge graph from wiki pages on disk "
         "(CE graph.py rebuild wiki). Run after authoring or accepting "
-        "pages so [[wikilink]] edges appear. Idempotent."
+        "pages so [[wikilink]] and typed ontology edges appear. Idempotent."
     ),
     input_schema={"type": "object", "properties": {}},
     handler=_ce_graph_rebuild,
