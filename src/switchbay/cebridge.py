@@ -588,8 +588,8 @@ def _ce_python() -> list[str]:
 # workspace venv when it already has the module (CE setup.sh commonly
 # installs pypdf + openpyxl). Fall back to the Switch Bay host for
 # modules the workspace lacks (python-pptx is a Switch Bay dep).
-# Never merge site-packages via PYTHONPATH. scan.py / graph.py always
-# stay on the workspace venv (kuzu).
+# Never merge site-packages via PYTHONPATH. scan.py stays on the
+# workspace venv. graph.py / wiki_render.py use python_for_graph.
 _EXT_EXTRACTOR = {
     ".pptx": "pptx",
     ".xlsx": "openpyxl",
@@ -682,17 +682,53 @@ def python_for_ingest(cwd: Path, ext: str = "") -> list[str]:
     return ["uv", "run", "python3"]
 
 
+# graph.py prints this when `import kuzu` fails. The install puts kuzu
+# on Switch Bay's own interpreter; say that when neither interpreter
+# has it.
+KUZU_MISSING = (
+    "kuzu is not installed. Switch Bay's install includes it "
+    "(`uv sync --locked` in the Switch Bay checkout). "
+    "A workspace .venv that should own the graph needs it too: "
+    "`uv pip install kuzu`, or rerun curiosity-engine setup.sh."
+)
+_KUZU_SCRIPTS = frozenset({"graph.py", "wiki_render.py"})
+
+
+def python_for_graph(cwd: Path) -> list[str] | None:
+    """Interpreter that can ``import kuzu`` for graph.py / wiki_render.
+
+    The workspace ``.venv`` wins when setup.sh already installed kuzu
+    there. Otherwise the Switch Bay interpreter, which
+    ``uv sync --locked`` installs kuzu into. ``uv run`` in a workspace
+    that is not this project does not see that install, so it is not
+    a fallback.
+    """
+    ws = _workspace_venv_python(cwd)
+    if ws is not None and interpreter_has_module(ws, "kuzu"):
+        return [str(ws)]
+    if sys.executable and host_has_module("kuzu"):
+        return [sys.executable]
+    return None
+
+
 def _script_python(cwd: Path, *, script: str = "") -> list[str]:
     """Interpreter for a CE script run *against* a workspace.
 
-    kuzu lives in the workspace `.venv` (setup.sh). Graph, scan, and
-    query scripts always use that interpreter. ``local_ingest.py``
-    without an extension hint prefers the workspace venv; callers that
-    know the file type pass ``python=python_for_ingest(...)``.
+    Graph scripts use :func:`python_for_graph` so a fresh
+    ``uv sync --locked`` (no workspace ``.venv`` yet) still has kuzu.
+    Other scripts keep the workspace venv, then ``uv run``.
+    ``local_ingest.py`` without an extension hint prefers the workspace
+    venv; callers that know the file type pass
+    ``python=python_for_ingest(...)``.
     """
     name = Path(script).name if script else ""
     if name == "local_ingest.py":
         return python_for_ingest(cwd, "")
+    if name in _KUZU_SCRIPTS:
+        chosen = python_for_graph(cwd)
+        if chosen is not None:
+            return chosen
+        return [sys.executable] if sys.executable else ["python3"]
     py = _workspace_venv_python(cwd)
     if py is not None:
         return [str(py)]
@@ -782,6 +818,12 @@ def run_script(
             return {"error": f"CE script not found: {script} (looked under {root / 'scripts'})"}
     if not Path(cwd).is_dir():
         return {"error": f"workspace is not a directory: {cwd}"}
+    if (
+        python is None
+        and script_path.name in _KUZU_SCRIPTS
+        and python_for_graph(Path(cwd)) is None
+    ):
+        return {"error": KUZU_MISSING}
 
     cmd = [
         *(python or _script_python(Path(cwd), script=script_path.name)),
@@ -887,8 +929,11 @@ async def graph_rebuild(workspace: Path) -> tuple[bool, str]:
     script = ce_root() / "scripts" / "graph.py"
     if not script.is_file():
         return False, f"CE graph.py not found at {script}"
+    py = python_for_graph(Path(workspace))
+    if py is None:
+        return False, KUZU_MISSING
     env = _scrubbed_env()
-    cmd = [*_script_python(Path(workspace)), str(script), "rebuild", "wiki"]
+    cmd = [*py, str(script), "rebuild", "wiki"]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -939,12 +984,16 @@ async def build(
     # follows system 3.14.
     env = _scrubbed_env()
 
-    # Prefer workspace .venv python (has kuzu) over sys.executable
-    # (Switchbay's own venv usually does not). Falls back to CE venv /
-    # uv run via _script_python.
+    # Workspace .venv when it can import kuzu, else this process
+    # (uv sync --locked installs kuzu). `uv run` in the workspace
+    # does not see that install.
     if render_py.is_file():
+        py = python_for_graph(Path(workspace))
+        if py is None:
+            log.warning("%s", KUZU_MISSING)
+            return None
         cmd = [
-            *_script_python(Path(workspace)), str(render_py), "build",
+            *py, str(render_py), "build",
             str(workspace / "wiki"),
             "--output-dir", str(output_dir(workspace)),
         ]

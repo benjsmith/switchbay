@@ -355,6 +355,58 @@ def add_pattern(workspace: Path, pattern: str) -> list[str]:
 # ── Pattern matching ──────────────────────────────────────────────
 
 
+# File-read tool ids. Claude's is ``Read``. Grok 1.0.78's hook sends
+# ``read_file`` (ReadFileInput's JSON field is ``target_file``).
+# ``hashline_read`` is that same read with hashline formatting, also
+# marked read-only. Writes (``write_file``, ``search_replace``, Edit,
+# Write) are not in this set.
+_WORKSPACE_READ_TOOLS = frozenset({
+    "Read",
+    "read_file",
+    "hashline_read",
+})
+_READ_PATH_KEYS = ("target_file", "file_path", "path")
+
+
+def _workspace_read_paths(tool_input: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    for key in _READ_PATH_KEYS:
+        val = tool_input.get(key)
+        if isinstance(val, str) and val.strip():
+            found.append(val.strip())
+    return found
+
+
+def _path_inside_workspace(workspace: Path, raw: str) -> bool:
+    """True when ``raw`` resolves to a path under ``workspace``.
+
+    Relative paths resolve against the workspace, so
+    ``.workbench/uploads/…`` is inside. ``..`` and symlinks that
+    leave the workspace are not.
+    """
+    candidate = Path(raw)
+    if not candidate.is_absolute():
+        candidate = workspace / candidate
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(workspace.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def workspace_read_allows(
+    workspace: Path, tool: str, tool_input: dict[str, Any],
+) -> bool:
+    """True when this call only reads files inside ``workspace``."""
+    if tool not in _WORKSPACE_READ_TOOLS:
+        return False
+    paths = _workspace_read_paths(tool_input)
+    if not paths:
+        return False
+    return all(_path_inside_workspace(workspace, p) for p in paths)
+
+
 def pattern_for(tool: str, tool_input: dict[str, Any]) -> str:
     """Canonical wildcard pattern derived from a tool call. Matches
     claude-code's allowlist syntax for familiarity:
@@ -373,9 +425,21 @@ def pattern_for(tool: str, tool_input: dict[str, Any]) -> str:
         # is covered by the same approval that grants `npm test`.
         head = " ".join(cmd.split()[:2])
         return f"Bash({head}*)" if head else f"Bash({cmd[:40]})"
-    if tool in ("Read", "Edit", "Write", "NotebookEdit"):
-        path = str(tool_input.get("file_path") or tool_input.get("path") or "")
-        return f"{tool}({path})" if path else f"{tool}(*)"
+    if tool in (
+        "Read", "Edit", "Write", "NotebookEdit", "read_file", "hashline_read",
+    ):
+        path = str(
+            tool_input.get("file_path")
+            or tool_input.get("target_file")
+            or tool_input.get("path")
+            or ""
+        )
+        # An empty path must not become ``Read(*)``: the allow check is
+        # symmetric, and ``Read(*)`` matches every workspace Read grant.
+        if not path:
+            return f"{tool}(*)"
+        shown = "Read" if tool in _WORKSPACE_READ_TOOLS else tool
+        return f"{shown}({path})"
     if tool == "Orchestration":
         action = str(tool_input.get("action") or "").strip() or "unknown"
         return f"Orchestration({action})"
@@ -495,6 +559,13 @@ def is_pre_approved(
     ):
         return True
     if tool and tool_input is not None and _skill_read_allows(tool, tool_input):
+        return True
+    # Workspace file reads, including Grok's ``read_file`` of a relative
+    # ``.workbench/uploads/…`` path. The builtin ``Read({workspace}/*)``
+    # pattern only matches Claude's absolute ``Read`` paths.
+    if tool and tool_input is not None and workspace_read_allows(
+        workspace, tool, tool_input,
+    ):
         return True
     allows = _builtin_allow(workspace)
     allows.extend(_load_allow(workspace))

@@ -171,11 +171,15 @@ async def test_build_skips_ensure_when_disabled(
 async def test_build_uses_workspace_venv_python_for_wiki_render(
     wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """wiki_render must run under workspace .venv (kuzu), not sys.executable."""
+    """wiki_render uses the workspace .venv when that venv can import kuzu."""
     py = wiki_ws / ".venv" / "bin" / "python"
     py.parent.mkdir(parents=True)
     py.write_text("#!/bin/sh\n", encoding="utf-8")
     py.chmod(0o755)
+    monkeypatch.setattr(
+        cebridge, "interpreter_has_module",
+        lambda p, m: m == "kuzu" and Path(p) == py,
+    )
 
     scripts = wiki_ws / "fake-ce" / "scripts"
     scripts.mkdir(parents=True)
@@ -228,3 +232,86 @@ def test_script_python_prefers_workspace_venv(wiki_ws: Path) -> None:
 
 def test_script_python_falls_back_to_uv_run(wiki_ws: Path) -> None:
     assert cebridge._script_python(wiki_ws) == ["uv", "run", "python3"]
+
+
+def test_python_for_graph_uses_host_when_workspace_venv_lacks_kuzu(
+    wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    py = wiki_ws / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("x", encoding="utf-8")
+    host = "/opt/switchbay/.venv/bin/python"
+    monkeypatch.setattr(cebridge.sys, "executable", host)
+    monkeypatch.setattr(cebridge, "interpreter_has_module", lambda _p, _m: False)
+    monkeypatch.setattr(cebridge, "host_has_module", lambda m: m == "kuzu")
+    assert cebridge.python_for_graph(wiki_ws) == [host]
+
+
+def test_python_for_graph_prefers_workspace_venv_that_has_kuzu(
+    wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    py = wiki_ws / ".venv" / "bin" / "python"
+    py.parent.mkdir(parents=True)
+    py.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        cebridge, "interpreter_has_module",
+        lambda p, m: m == "kuzu" and Path(p) == py,
+    )
+    monkeypatch.setattr(cebridge, "host_has_module", lambda _m: True)
+    assert cebridge.python_for_graph(wiki_ws) == [str(py)]
+
+
+def test_python_for_graph_none_when_kuzu_is_missing(
+    wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(cebridge, "host_has_module", lambda _m: False)
+    assert cebridge.python_for_graph(wiki_ws) is None
+
+
+@pytest.mark.asyncio
+async def test_graph_rebuild_reports_missing_kuzu(
+    wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scripts = wiki_ws / "fake-ce" / "scripts"
+    scripts.mkdir(parents=True)
+    (scripts / "graph.py").write_text("# fake\n", encoding="utf-8")
+    monkeypatch.setattr(cebridge, "ce_root", lambda: wiki_ws / "fake-ce")
+    monkeypatch.setattr(cebridge, "python_for_graph", lambda _cwd: None)
+
+    async def boom(*_a, **_k):
+        raise AssertionError("graph.py ran without kuzu")
+
+    monkeypatch.setattr(__import__("asyncio"), "create_subprocess_exec", boom)
+    ok, text = await cebridge.graph_rebuild(wiki_ws)
+    assert ok is False
+    assert "uv sync --locked" in text
+    assert "kuzu" in text
+
+
+@pytest.mark.asyncio
+async def test_graph_rebuild_uses_host_python(
+    wiki_ws: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scripts = wiki_ws / "fake-ce" / "scripts"
+    scripts.mkdir(parents=True)
+    script = scripts / "graph.py"
+    script.write_text("# fake\n", encoding="utf-8")
+    monkeypatch.setattr(cebridge, "ce_root", lambda: wiki_ws / "fake-ce")
+    host = "/opt/switchbay/.venv/bin/python"
+    monkeypatch.setattr(cebridge, "python_for_graph", lambda _cwd: [host])
+    captured: dict = {}
+
+    async def fake_exec(*argv, **kwargs):
+        captured["argv"] = argv
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.communicate = AsyncMock(return_value=(b"rebuilt\n", b""))
+        return proc
+
+    monkeypatch.setattr(__import__("asyncio"), "create_subprocess_exec", fake_exec)
+    ok, text = await cebridge.graph_rebuild(wiki_ws)
+    assert ok is True
+    assert captured["argv"][0] == host
+    assert captured["argv"][1] == str(script)
+    assert captured["argv"][2:] == ("rebuild", "wiki")
+    assert "rebuilt" in text

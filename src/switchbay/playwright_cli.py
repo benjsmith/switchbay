@@ -1,16 +1,17 @@
 """Pinned local browser for Switch Bay agents.
 
-Microsoft's Playwright CLI (``@playwright/cli@0.1.23``, released
-31 Oct 2026) plus the skill it ships. The CLI depends on Playwright
-``1.65.0-alpha-2026-10-30``, which downloads its own browser builds:
+Playwright 1.64.1 (the same release as the UI tests) ships
+``playwright cli`` and installs its skill with
+``playwright cli install --skills``. The browser builds are the ones
+the UI tests already use:
 
-  chromium 1252, firefox 1569, webkit 2386, ffmpeg 1013
+  chromium 1248, firefox 1555, webkit 2370, ffmpeg 1013
 
-Switch Bay's UI tests pin ``@playwright/test`` 1.64.1, whose browsers
-are chromium 1248, firefox 1555, webkit 2370, and the same ffmpeg
-1013. Playwright stores each revision in its own cache directory, so
-the agent browsers and the test browsers sit side by side. ffmpeg
-1013 is one shared build.
+``@playwright/cli@0.1.23`` is not the pin. That package depends on
+Playwright ``1.65.0-alpha-2026-10-30`` and downloads a second,
+pre-release set (chromium 1252, firefox 1569, webkit 2386). A wrapper
+named ``playwright-cli`` runs ``playwright cli`` so the official skill
+text keeps working.
 
 Install is on by default. ``service install --no-browser`` skips it.
 Enterprise ``browser_use`` skips it and, at runtime, hides the skill
@@ -30,27 +31,21 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-CLI_VERSION = "0.1.23"
-CLI_SPEC = f"@playwright/cli@{CLI_VERSION}"
-# playwright dependency of that exact CLI release. Not a float.
-CLI_PLAYWRIGHT = "1.65.0-alpha-2026-10-30"
-# Browser revisions CLI_PLAYWRIGHT installs (browsers.json installByDefault).
+CLI_VERSION = "1.64.1"
+CLI_SPEC = f"playwright@{CLI_VERSION}"
+# The agent CLI is `playwright cli` from this exact release, so the
+# browser revisions are the UI-test revisions. Not a float.
+CLI_PLAYWRIGHT = CLI_VERSION
 CLI_BROWSER_REVISIONS = {
-    "chromium": "1252",
-    "chromium-headless-shell": "1252",
-    "firefox": "1569",
-    "webkit": "2386",
-    "ffmpeg": "1013",
-}
-# @playwright/test 1.64.1 / playwright-core 1.64.1. Different revisions,
-# same cache root, except ffmpeg which is the same build.
-E2E_BROWSER_REVISIONS = {
     "chromium": "1248",
     "chromium-headless-shell": "1248",
     "firefox": "1555",
     "webkit": "2370",
     "ffmpeg": "1013",
 }
+# @playwright/test 1.64.1 / playwright-core 1.64.1. Same revisions:
+# one browser cache, no alpha download.
+E2E_BROWSER_REVISIONS = dict(CLI_BROWSER_REVISIONS)
 
 SKILL_NAME = "playwright-cli"
 TOOL_NAME = "playwright_cli"
@@ -94,13 +89,24 @@ def install_prefix() -> Path:
     return _home() / ".local" / "share" / "switchbay" / "playwright-cli"
 
 
+def _playwright_filename() -> str:
+    return "playwright.cmd" if os.name == "nt" else "playwright"
+
+
 def _cli_filename() -> str:
     return "playwright-cli.cmd" if os.name == "nt" else "playwright-cli"
 
 
-def cli_path(prefix: Path | None = None) -> Path:
+def playwright_bin(prefix: Path | None = None) -> Path:
+    """The pinned ``playwright`` binary (``playwright cli`` is the agent CLI)."""
     root = prefix if prefix is not None else install_prefix()
-    return root / "node_modules" / ".bin" / _cli_filename()
+    return root / "node_modules" / ".bin" / _playwright_filename()
+
+
+def cli_path(prefix: Path | None = None) -> Path:
+    """User-facing wrapper. Kept so older callers still find the command name."""
+    _ = prefix
+    return bin_link()
 
 
 def bin_link() -> Path:
@@ -119,7 +125,7 @@ def cli_binary() -> str | None:
 
 
 def installed_version(prefix: Path | None = None) -> str | None:
-    pkg = (prefix if prefix is not None else install_prefix()) / "node_modules" / "@playwright" / "cli" / "package.json"
+    pkg = (prefix if prefix is not None else install_prefix()) / "node_modules" / "playwright" / "package.json"
     try:
         data = json.loads(pkg.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -253,29 +259,27 @@ def _default_runner(
     )
 
 
-def _link_cli(src: Path, dest: Path) -> None:
+def _write_cli_wrapper(playwright: Path, dest: Path) -> None:
+    """``playwright-cli …`` execs ``playwright cli …``.
+
+    The skill text calls ``playwright-cli``. The stable binary's agent
+    commands live under the ``cli`` subcommand.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        if dest.is_symlink() and dest.resolve() == src.resolve():
-            return
-    except OSError:
-        pass
     try:
         if dest.is_symlink() or dest.exists():
             dest.unlink()
     except OSError:
         pass
-    try:
-        dest.symlink_to(src)
-        return
-    except OSError:
-        pass
-    if os.name == "nt":
-        dest.write_text(f'@echo off\r\n"{src}" %*\r\n', encoding="utf-8")
+    if os.name == "nt" or dest.suffix.lower() == ".cmd":
+        dest.write_text(
+            f'@echo off\r\n"{playwright}" cli %*\r\n',
+            encoding="utf-8",
+        )
         return
     dest.write_text(
         "#!/bin/sh\n"
-        f"exec {shlex.quote(str(src))} \"$@\"\n",
+        f"exec {shlex.quote(str(playwright))} cli \"$@\"\n",
         encoding="utf-8",
     )
     dest.chmod(0o755)
@@ -377,15 +381,15 @@ def install(
             print(f"  playwright-cli: FAILED ({msg})")
             return InstallResult("failed", msg, commands)
 
-    binary = cli_path(prefix)
+    binary = playwright_bin(prefix)
     if not binary.is_file():
         msg = f"missing {binary}"
         print(f"  playwright-cli: FAILED ({msg})")
         return InstallResult("failed", msg, commands)
-    _link_cli(binary, bin_link())
+    _write_cli_wrapper(binary, bin_link())
 
-    skill_cmd = [str(binary), "install", "--skills=agents", "-g"]
-    browser_cmd = [str(binary), "install-browser"]
+    skill_cmd = [str(binary), "cli", "install", "--skills=agents", "-g"]
+    browser_cmd = [str(binary), "install"]
     if with_deps:
         browser_cmd.append("--with-deps")
     for cmd, timeout in (
@@ -410,17 +414,15 @@ def install(
 
     print(
         f"  playwright-cli {CLI_VERSION} installed "
-        f"(playwright {CLI_PLAYWRIGHT}; "
-        f"chromium {CLI_BROWSER_REVISIONS['chromium']}). "
-        f"UI tests keep Playwright 1.64.1 "
-        f"(chromium {E2E_BROWSER_REVISIONS['chromium']}) "
-        "beside it in the browser cache."
+        f"(Playwright {CLI_PLAYWRIGHT}; "
+        f"chromium {CLI_BROWSER_REVISIONS['chromium']}, "
+        "the same builds as the UI tests)."
     )
     if sys.platform.startswith("linux") and not with_deps:
         print(
             "  Linux system libraries were not installed. "
             "If Chromium does not start, run: "
-            "playwright-cli install-browser --with-deps"
+            f"{binary} install --with-deps"
         )
     return InstallResult("installed", "", commands)
 

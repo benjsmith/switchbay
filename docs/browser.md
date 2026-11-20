@@ -1,25 +1,25 @@
 # Local browser
 
-The rail assistant can open pages on this machine with Microsoft's
-Playwright CLI. The browser runs locally. Headless unless you ask
-for a visible window.
+The rail assistant can open pages on this machine with Playwright's
+agent CLI. The browser runs locally. Headless unless you ask for a
+visible window.
 
 ## What gets installed
 
 A normal install (`make install` or `make install-service`) installs:
 
-- `@playwright/cli` **0.1.23** under
-  `~/.local/share/switchbay/playwright-cli`
-- a `playwright-cli` command on `~/.local/bin`
-- the official agent skill at `~/.agents/skills/playwright-cli`
-- the browser builds that CLI release needs (Playwright
-  `1.65.0-alpha-2026-10-30`): Chromium 1252, Firefox 1569, WebKit 2386
+- Playwright **1.64.1** under `~/.local/share/switchbay/playwright-cli`
+- a `playwright-cli` command on `~/.local/bin` that runs `playwright cli`
+- the agent skill at `~/.agents/skills/playwright-cli`
+- the browser builds that release uses: Chromium 1248, Firefox 1555,
+  WebKit 2370
 
-Switch Bay's own UI tests use Playwright 1.64.1, which needs Chromium
-1248, Firefox 1555, and WebKit 2370. Both sets live in the Playwright
-browser cache, in separate revision folders. They share the ffmpeg
-1013 build. Installing the agent browsers does not replace the test
-browsers.
+Those are the same builds Switch Bay's UI tests install. There is
+one copy of each in the Playwright browser cache.
+
+`@playwright/cli` 0.1.23 is not installed. That package depends on
+Playwright `1.65.0-alpha-2026-10-30` and would download a separate
+pre-release set (Chromium 1252, Firefox 1569, WebKit 2386).
 
 Node.js 20 or newer is required. On Linux the installer also installs
 Chromium's system libraries when it can do that without asking for a
@@ -27,7 +27,7 @@ password. If it cannot, the browser files are still downloaded. If
 Chromium then fails to start, run:
 
 ```sh
-playwright-cli install-browser --with-deps
+~/.local/share/switchbay/playwright-cli/node_modules/.bin/playwright install --with-deps
 ```
 
 ## Skip the install
@@ -65,5 +65,5 @@ For a subscription login, set the rail to **Grok Build** (the `grok`
 command). Install, sign-in, and pasted screenshots:
 [Grok on the rail](grok.md).
 
-The assistant uses the pinned 0.1.23 install. It does not fetch a
-newer `@playwright/cli`.
+The assistant uses the pinned 1.64.1 install. It does not fetch a
+newer Playwright or `@playwright/cli`.

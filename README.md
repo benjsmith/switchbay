@@ -70,11 +70,13 @@ Then open `http://127.0.0.1:8765` and install it as an app. You can add
 local semantic embeddings later with `make sync-semantic`.
 
 The installer also sets up a local browser for the rail assistant:
-Playwright CLI 0.1.23, the `playwright-cli` skill, and the browser
-builds that CLI needs. Those builds sit beside the browsers used by
-the UI tests; they do not replace them. Skip the browser with
+Playwright 1.64.1's `playwright cli`, the `playwright-cli` skill, and
+the same browser builds the UI tests use. Skip the browser with
 `make install NO_BROWSER=1`. Enterprise installs skip it unless an
 admin turns `browser_use` on. Details: [`docs/browser.md`](docs/browser.md).
+
+The locked Python install includes kuzu, which the first graph rebuild
+uses when the workspace does not yet have its own `.venv`.
 
 > **Prerequisites:** `git`, **Node.js + pnpm** (the installer guides you
 > if they're missing), and `uv` (auto-installed). Python ≥3.11 is

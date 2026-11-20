@@ -37,13 +37,13 @@ def _recording_runner(calls: list):
         calls.append((list(argv), timeout, dict(env)))
         if len(argv) >= 2 and argv[1] == "install" and "--prefix" in argv:
             prefix = Path(argv[argv.index("--prefix") + 1])
-            pkg = prefix / "node_modules" / "@playwright" / "cli"
+            pkg = prefix / "node_modules" / "playwright"
             pkg.mkdir(parents=True)
             (pkg / "package.json").write_text(
                 json.dumps({"version": playwright_cli.CLI_VERSION}),
                 encoding="utf-8",
             )
-            exe = playwright_cli.cli_path(prefix)
+            exe = playwright_cli.playwright_bin(prefix)
             exe.parent.mkdir(parents=True, exist_ok=True)
             if exe.suffix.lower() == ".cmd":
                 exe.write_text("@echo off\r\n", encoding="utf-8")
@@ -58,20 +58,20 @@ def _recording_runner(calls: list):
 def test_windows_cli_shim_is_cmd(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(playwright_cli.os, "name", "nt")
     monkeypatch.setattr(playwright_cli, "_home", lambda: tmp_path)
-    assert playwright_cli.cli_path(tmp_path).name == "playwright-cli.cmd"
+    assert playwright_cli.playwright_bin(tmp_path).name == "playwright.cmd"
     assert playwright_cli.bin_link().name == "playwright-cli.cmd"
 
 
-def test_browser_revisions_do_not_replace_e2e_browsers():
-    assert playwright_cli.CLI_VERSION == "0.1.23"
-    assert playwright_cli.CLI_PLAYWRIGHT == "1.65.0-alpha-2026-10-30"
-    cli = playwright_cli.CLI_BROWSER_REVISIONS
-    e2e = playwright_cli.E2E_BROWSER_REVISIONS
-    assert cli["chromium"] != e2e["chromium"]
-    assert cli["firefox"] != e2e["firefox"]
-    assert cli["webkit"] != e2e["webkit"]
-    # Same ffmpeg revision: one shared build, not a second copy.
-    assert cli["ffmpeg"] == e2e["ffmpeg"] == "1013"
+def test_browser_revisions_match_e2e_browsers():
+    # Playwright 1.64.1's `playwright cli` uses the UI-test browser
+    # builds. @playwright/cli 0.1.23 would download the 1.65 alpha
+    # (chromium 1252) instead.
+    assert playwright_cli.CLI_VERSION == "1.64.1"
+    assert playwright_cli.CLI_SPEC == "playwright@1.64.1"
+    assert playwright_cli.CLI_PLAYWRIGHT == "1.64.1"
+    assert playwright_cli.CLI_BROWSER_REVISIONS == playwright_cli.E2E_BROWSER_REVISIONS
+    assert playwright_cli.CLI_BROWSER_REVISIONS["chromium"] == "1248"
+    assert playwright_cli.CLI_BROWSER_REVISIONS["ffmpeg"] == "1013"
 
 
 def test_install_skip_flag_does_not_run(monkeypatch):
@@ -158,16 +158,18 @@ def test_install_pins_cli_skill_and_browsers(tmp_path: Path, monkeypatch):
     npm_argv, npm_timeout, npm_env = calls[0]
     assert npm_env.get("NO_UPDATE_NOTIFIER") == "1"
     assert npm_argv[0] == "npm"
-    assert npm_argv[-1] == "@playwright/cli@0.1.23"
+    assert npm_argv[-1] == "playwright@1.64.1"
     assert "@latest" not in npm_argv
+    assert "@playwright/cli" not in npm_argv
     assert npm_timeout == playwright_cli.NPM_TIMEOUT_S
     skill_argv, _skill_timeout, _skill_env = calls[1]
-    assert skill_argv[1:] == ["install", "--skills=agents", "-g"]
+    assert skill_argv[1:] == ["cli", "install", "--skills=agents", "-g"]
     browser_argv, browser_timeout, _browser_env = calls[2]
-    assert browser_argv[1:] == ["install-browser"]
+    assert browser_argv[1:] == ["install"]
     assert browser_timeout == playwright_cli.BROWSER_TIMEOUT_S
-    assert playwright_cli.bin_link().is_file()
-    assert playwright_cli.installed_version() == "0.1.23"
+    wrapper = playwright_cli.bin_link().read_text(encoding="utf-8")
+    assert "cli" in wrapper
+    assert playwright_cli.installed_version() == "1.64.1"
 
     calls.clear()
     again = playwright_cli.install(
@@ -178,7 +180,7 @@ def test_install_pins_cli_skill_and_browsers(tmp_path: Path, monkeypatch):
     )
     assert again.status == "installed", again.reason
     assert all("--prefix" not in argv for argv, _timeout, _env in calls)
-    assert calls[-1][0][1:] == ["install-browser", "--with-deps"]
+    assert calls[-1][0][1:] == ["install", "--with-deps"]
 
 
 def test_old_node_fails_before_npm():
@@ -216,7 +218,7 @@ def test_skill_and_tool_wired_when_enabled(tmp_path: Path, monkeypatch):
         s for s in rail_default.tools_for_provider(local=False)
         if s["name"] == "playwright_cli"
     )
-    assert "0.1.23" in spec["description"]
+    assert "1.64.1" in spec["description"]
     listed = {
         t["name"] for t in _list_tools(["playwright_cli"])["tools"]
     }
@@ -276,7 +278,7 @@ def test_user_setting_hides_skill_and_tool(tmp_path: Path, monkeypatch):
         {"argv": ["npx", "-y", "@playwright/cli@0.1.25", "--help"]},
     )
     assert blocked["ok"] is False
-    assert "0.1.23" in blocked["error"]
+    assert "1.64.1" in blocked["error"]
     llm_config.set_browser_use(True)
 
 
@@ -325,7 +327,7 @@ def test_npx_other_cli_is_hard_denied():
         "Bash", {"command": "npx -y @playwright/cli@latest --help"},
     )
     assert reason
-    assert "0.1.23" in reason
+    assert "1.64.1" in reason
     assert permissions.hard_deny_reason(
         "Bash", {"command": "npx -y skills add benjsmith/curiosity-engine"},
     ) is None
