@@ -762,9 +762,9 @@ def _hello_payload(app: web.Application) -> dict:
 async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
     """Background filesystem-truth enrich of an already-served graph.
 
-    Runs resync_types / inject_deck / inject_on_disk_pages off the
-    request path with ``graph_progress`` stages so the UI never
-    whites out on a large vault. Deduped per workspace via
+    Runs inject_deck / inject_on_disk_pages off the request path
+    with ``graph_progress`` stages so the UI never whites out on a
+    large vault. Deduped per workspace via
     ``app["graph_enrich_inflight"]``.
     """
     from pathlib import Path as _Path
@@ -785,18 +785,6 @@ async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
                 "ready", "Graph ready", workspace=ws_key, done=True,
             ))
             return
-
-        await _broadcast(app, protocol.graph_progress(
-            "types", "Syncing page types…", workspace=ws_key,
-        ))
-        types_n = await asyncio.to_thread(
-            cebridge.resync_types_from_disk, workspace, data,
-        )
-        await _broadcast(app, protocol.graph_progress(
-            "types",
-            f"Syncing page types… ({int(types_n or 0)} updated)",
-            workspace=ws_key, current=int(types_n or 0),
-        ))
 
         await _broadcast(app, protocol.graph_progress(
             "decks", "Refreshing deck nodes…", workspace=ws_key,
@@ -829,7 +817,7 @@ async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
         ))
         # Only bump files_changed when something actually moved —
         # otherwise every prefetch would remount the graph.
-        if int(types_n or 0) or int(decks_n or 0) or int(pages_n or 0):
+        if int(decks_n or 0) or int(pages_n or 0):
             await _broadcast(app, protocol.files_changed())
     except Exception:  # noqa: BLE001
         log.exception("background graph enrich failed for %s", ws_key)

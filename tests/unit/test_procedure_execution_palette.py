@@ -30,3 +30,23 @@ def test_ce_embed_label_types_include_procedure_execution():
     assert 'data-type="execution"' in src
     assert "dot-procedure" in src
     assert "dot-execution" in src
+
+
+HYP = "#7570b3"
+
+
+def test_css_var_includes_hypothesis():
+    palette = (FRONTEND / "palette.css").read_text()
+    assert f"--type-hypothesis:{HYP}" in palette.replace(" ", "")
+
+
+def test_ce_embed_label_types_include_hypothesis():
+    src = (EMBED / "ceEmbedShell.html").read_text()
+    assert 'data-type="hypothesis"' in src
+    assert "dot-hypothesis" in src
+
+
+def test_cebridge_default_palette_includes_hypothesis():
+    from switchbay import cebridge
+    assert cebridge._PALETTE_OVERRIDE["hypothesis"] == HYP
+    assert cebridge._PALETTE_OVERRIDE["hypotheses"] == HYP

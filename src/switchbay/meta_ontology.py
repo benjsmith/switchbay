@@ -11,8 +11,10 @@ loaded on its own.
 An edge may name the node types it runs between. Those typed edges
 are optional. A file that omits them, and a workspace with no file,
 keep the previous behaviour. When they are set, curate prompts
-include the endpoints, the viewer draws the edges from wiki
-frontmatter, and OKF export records them.
+include the endpoints, and OKF export records them from frontmatter.
+Curiosity Engine 1.10 already puts declared types, typed
+``OntologyEdge`` relationships, and payload colours in the viewer
+bundle, so this module does not rewrite those.
 """
 
 from __future__ import annotations
@@ -42,6 +44,15 @@ _EDGE_KEYS = frozenset({
 })
 # Distinct strokes for typed edges that do not set their own colour.
 _EDGE_COLORS = ("#0072b2", "#d55e00", "#cc79a7", "#009e73", "#e69f00", "#56b4e9")
+HYPOTHESIS_COLOR = "#7570b3"
+# Colours the deterministic fallback must not reuse. Matches
+# curiosity-engine's reserved set so a custom type gets the same
+# swatch here as in the CE viewer and Atlas.
+_RESERVED_COLORS = frozenset({
+    "#4d1ae8", "#1d6996", "#38a6a5", "#0f8554", "#73af48", "#edad08",
+    "#e17c05", "#cc503e", "#94346e", "#6f4070", "#9656a2", "#5e4fa2",
+    "#c51b8a", "#7570b3", "#ffffff", "#bbbbbb",
+})
 _SKIP_DIR_PARTS = frozenset({"_assets", "_archive", ".git"})
 _SCHEMA_KEYS = frozenset({
     "key", "description", "applies_to", "values", "minimum", "maximum",
@@ -261,32 +272,83 @@ def curation_system(workspace: Path, *, cap_chars: int = 8000) -> str:
     return text
 
 
+def deterministic_color(type_name: str) -> str:
+    """Stable colour for a declared type that did not set ``color``.
+
+    The same function lives in Curiosity Engine (``meta_ontology.py``,
+    ``theme.js``, and Knowledge Atlas) so a custom type paints the
+    same stroke everywhere. It is never white and never one of the
+    built-in swatches.
+    """
+    name = (type_name or "").strip().lower()
+    hue = _fnv1a(name) % 360
+    for _ in range(12):
+        color = _hsl_hex(hue, 0.55, 0.46)
+        if color not in _RESERVED_COLORS:
+            return color
+        hue = (hue + 29) % 360
+    return _hsl_hex(hue, 0.55, 0.46)
+
+
+def _fnv1a(text: str) -> int:
+    h = 2166136261
+    for byte in text.encode("utf-8"):
+        h ^= byte
+        h = (h * 16777619) & 0xFFFFFFFF
+    return h
+
+
+def _hsl_hex(hue: int, sat: float, light: float) -> str:
+    c = (1 - abs(2 * light - 1)) * sat
+    hp = (hue % 360) / 60
+    x = c * (1 - abs(hp % 2 - 1))
+    if hp < 1:
+        r, g, b = c, x, 0.0
+    elif hp < 2:
+        r, g, b = x, c, 0.0
+    elif hp < 3:
+        r, g, b = 0.0, c, x
+    elif hp < 4:
+        r, g, b = 0.0, x, c
+    elif hp < 5:
+        r, g, b = x, 0.0, c
+    else:
+        r, g, b = c, 0.0, x
+    m = light - c / 2
+
+    def channel(v: float) -> int:
+        return max(0, min(255, round((v + m) * 255)))
+
+    return f"#{channel(r):02x}{channel(g):02x}{channel(b):02x}"
+
+
 def apply_to_graph(
     data: dict[str, Any],
     ontology: MetaOntology,
     workspace: Path | None = None,
 ) -> None:
-    """Stamp labels onto a viewer bundle.
+    """Stamp labels and colours onto a viewer bundle.
 
-    Node ``type`` stays as the bundle has it, except a type this
-    ontology names is restored from the wiki file when the viewer
-    had bucketed the page as unclassified. Typed edges listed in
-    frontmatter are added to ``edges``.
+    Node ``type`` and typed edges stay as Curiosity Engine emitted
+    them. ``workspace`` is accepted for compatibility and is not
+    used to rewrite the graph.
     """
-    if workspace is not None:
-        _apply_workspace_graph(data, ontology, Path(workspace))
+    del workspace
     data["metaOntology"] = ontology.to_viewer()
-    colors = {n.type: n.color for n in ontology.nodes if n.color}
-    if colors:
-        palette = data.get("palette")
-        if not isinstance(palette, dict):
-            palette = {}
-            data["palette"] = palette
-        for key, color in colors.items():
-            palette[key] = color
-            folder = ontology.node(key)
-            if folder and folder.folder:
-                palette[folder.folder] = color
+    palette = data.get("palette")
+    if not isinstance(palette, dict):
+        palette = {}
+        data["palette"] = palette
+    for node in ontology.nodes:
+        if node.color:
+            palette[node.type] = node.color
+            if node.folder:
+                palette[node.folder] = node.color
+        elif node.type not in palette:
+            color = deterministic_color(node.type)
+            palette[node.type] = color
+            if node.folder and node.folder not in palette:
+                palette[node.folder] = color
     by_node = {n.type: n for n in ontology.nodes}
     by_edge = {e.type: e for e in ontology.edges}
 
@@ -799,19 +861,6 @@ def typed_edge_map(
     return out
 
 
-def _apply_workspace_graph(
-    data: dict[str, Any], ontology: MetaOntology, workspace: Path,
-) -> None:
-    wiki = workspace / "wiki"
-    if not wiki.is_dir():
-        return
-    pages = _wiki_pages(workspace, ontology)
-    _restore_declared_types(data, ontology, pages)
-    edges, _issues = _typed_from_pages(pages, ontology)
-    _merge_typed_edges(data, ontology, pages, edges)
-    _surface_edge_lists(data, ontology, pages)
-
-
 def _wiki_pages(workspace: Path, ontology: MetaOntology) -> list[_Page]:
     wiki = workspace / "wiki"
     if not wiki.is_dir():
@@ -965,144 +1014,3 @@ def _key_line(text: str, key: str) -> int:
             return i
     return 1
 
-
-def _restore_declared_types(
-    data: dict[str, Any], ontology: MetaOntology, pages: list[_Page],
-) -> None:
-    """Use the wiki type when this ontology names it.
-
-    Curiosity Engine's viewer buckets types it does not know, such as
-    ``hypothesis``, as ``unclassified``. The file on disk still has the
-    declared type.
-    """
-    want = {
-        page.id: page.type
-        for page in pages
-        if page.type and ontology.node(page.type) is not None
-    }
-    if not want:
-        return
-
-    def take(current: Any, declared: str) -> bool:
-        shown = str(current or "").strip().lower()
-        return shown in {"", "unclassified", "default"} or shown == declared
-
-    for node in data.get("nodes") or []:
-        if not isinstance(node, dict):
-            continue
-        declared = want.get(str(node.get("id") or ""))
-        if declared and take(node.get("type"), declared):
-            node["type"] = declared
-    page_map = data.get("pages")
-    if isinstance(page_map, dict):
-        for pid, declared in want.items():
-            page = page_map.get(pid)
-            if isinstance(page, dict) and take(page.get("type"), declared):
-                page["type"] = declared
-
-
-def _surface_edge_lists(
-    data: dict[str, Any], ontology: MetaOntology, pages: list[_Page],
-) -> None:
-    page_map = data.get("pages")
-    if not isinstance(page_map, dict):
-        return
-    by_id = {page.id: page for page in pages}
-    for pid, page in page_map.items():
-        src = by_id.get(str(pid))
-        if src is None or not isinstance(page, dict):
-            continue
-        props = page.get("properties")
-        if not isinstance(props, dict):
-            props = {}
-            page["properties"] = props
-        for term in ontology.edges:
-            if not term.typed or term.type in props:
-                continue
-            values = _target_list(src.fm.get(term.type))
-            if values:
-                props[term.type] = values
-
-
-def _merge_typed_edges(
-    data: dict[str, Any],
-    ontology: MetaOntology,
-    pages: list[_Page],
-    edges: tuple[TypedEdge, ...],
-) -> None:
-    current = data.get("edges")
-    if not isinstance(current, list):
-        current = []
-        data["edges"] = current
-    have: set[tuple[str, str, str]] = set()
-    for edge in current:
-        if not isinstance(edge, dict):
-            continue
-        kind = str(edge.get("type") or "").strip().lower()
-        have.add((_endpoint(edge.get("source")), _endpoint(edge.get("target")), kind))
-        term = ontology.edge(kind)
-        if term is None:
-            continue
-        edge["typeLabel"] = term.label
-        color = ontology.edge_color(term.type)
-        if color and term.typed:
-            edge["color"] = color
-    nodes = data.get("nodes")
-    if not isinstance(nodes, list):
-        nodes = []
-        data["nodes"] = nodes
-    by_node = {
-        str(node.get("id")): node
-        for node in nodes
-        if isinstance(node, dict) and node.get("id")
-    }
-    by_page = {page.id: page for page in pages}
-    for item in edges:
-        _ensure_endpoint(nodes, by_node, by_page, item.source_id)
-        _ensure_endpoint(nodes, by_node, by_page, item.target_id)
-        key = (item.source_id, item.target_id, item.edge_type)
-        if key in have:
-            continue
-        row: dict[str, Any] = {
-            "source": item.source_id,
-            "target": item.target_id,
-            "type": item.edge_type,
-        }
-        term = ontology.edge(item.edge_type)
-        if term is not None:
-            row["typeLabel"] = term.label
-        color = ontology.edge_color(item.edge_type)
-        if color:
-            row["color"] = color
-        current.append(row)
-        have.add(key)
-        for pid in (item.source_id, item.target_id):
-            node = by_node.get(pid)
-            if isinstance(node, dict):
-                node["degree"] = int(node.get("degree") or 0) + 1
-
-
-def _ensure_endpoint(
-    nodes: list[Any],
-    by_node: dict[str, dict[str, Any]],
-    by_page: dict[str, _Page],
-    pid: str,
-) -> None:
-    if pid in by_node:
-        return
-    page = by_page.get(pid)
-    node = {
-        "id": pid,
-        "path": f"{pid}.md",
-        "type": page.type if page and page.type else "unclassified",
-        "title": page.title if page else pid,
-        "degree": 0,
-    }
-    nodes.append(node)
-    by_node[pid] = node
-
-
-def _endpoint(value: Any) -> str:
-    if isinstance(value, dict):
-        return str(value.get("id") or "")
-    return str(value or "")

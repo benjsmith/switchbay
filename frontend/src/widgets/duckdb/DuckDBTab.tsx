@@ -49,6 +49,7 @@ function typeColor(type: string): string {
     todo: "var(--type-todo)",
     "todo-list": "var(--type-todo-list)",
     project: "var(--type-project)",
+    hypothesis: "var(--type-hypothesis)",
     unclassified: "var(--type-unclassified)",
   };
   return m[type] ?? "var(--type-default)";
@@ -72,6 +73,7 @@ function typeLabel(type: string): string {
     note: "Notes",
     todo: "Todos",
     "todo-list": "Todos",
+    hypothesis: "Hypotheses",
     unclassified: "Unclassified",
   };
   return m[type] ?? type.charAt(0).toUpperCase() + type.slice(1);
