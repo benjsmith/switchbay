@@ -1225,6 +1225,7 @@ def _save_plot(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     sources = payload.get("sources")
     relates = payload.get("relates_to") or payload.get("relates")
     analysis = payload.get("analysis") or payload.get("source_analysis")
+    artists = payload.get("artists")
     try:
         rec = plots.save_plot(
             workspace, name=name, spec=spec,
@@ -1234,6 +1235,7 @@ def _save_plot(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
             sources=sources if isinstance(sources, list) else None,
             relates_to=relates if isinstance(relates, list) else None,
             analysis=str(analysis) if isinstance(analysis, str) and analysis else None,
+            artists=artists if isinstance(artists, dict) else None,
         )
     except ValueError as e:
         return {"ok": False, "error": str(e)}
@@ -1270,7 +1272,9 @@ register(Tool(
         "Call ONCE. Put every requested series (history, projection, "
         "derivative) in THIS spec — do not save a second plot. "
         "The spec is stored at "
-        ".workbench/plots/<id>.json. Use when the user asks for a "
+        ".workbench/plots/<id>.json and a figure page is written under "
+        "wiki/figures/ (caption, axis titles, series legend, provenance) "
+        "when that plot does not already have one. Use when the user asks for a "
         "plot, chart, histogram, scatter, etc. — author the spec "
         "based on data already in the workspace (CSVs, parquet, "
         "the wiki/vault DuckDB) and save it. Pre-seeded DuckDB "
@@ -1375,6 +1379,15 @@ register(Tool(
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "Related wiki page stems for [[wikilinks]].",
+            },
+            "artists": {
+                "type": "object",
+                "description": (
+                    "Optional axis and legend text read from the plotting "
+                    "code (for example matplotlib xlabel, ylabel, title, "
+                    "and legend entries). Stored on the figure page. Do not "
+                    "OCR the image."
+                ),
             },
         },
     },

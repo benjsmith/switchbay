@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useSelection } from "../../selection/SelectionContext";
 import PlotAdjustDialog from "./PlotAdjustDialog";
 import { ackUiCommand, takePlotShow } from "../../lib/pendingUiCommands";
 import { fitSpecToPlotZone, plotCellSize, tileSizeFor, type PlotZone } from "./prepareSpec";
+import { highlightParts, matchesQuery, searchBlob } from "./plotSearch";
 
 /**
  * Vega-Lite plot tab — tiled gallery.
@@ -23,6 +24,24 @@ type PlotMeta = {
   origin?: string | null;
   created_at?: number;
   updated_at?: number;
+  title?: string;
+  caption?: string;
+  axis_titles?: string[];
+  legend_titles?: string[];
+  legend_entries?: string[];
+  figure_path?: string;
+  thumb?: string;
+};
+
+type ExtractedFigure = {
+  id: string;
+  title: string;
+  caption?: string;
+  axis_titles?: string[];
+  legend_titles?: string[];
+  legend_entries?: string[];
+  image?: string;
+  path?: string;
 };
 
 type Plot = PlotMeta & {
@@ -201,6 +220,20 @@ function captionFor(spec: Record<string, unknown>): string | null {
 }
 
 
+function HitText({ text, query }: { text: string; query: string }) {
+  const parts = highlightParts(text, query);
+  return (
+    <>
+      {parts.map((part, index) => (
+        part.hit
+          ? <mark key={index} className="sy-plot-hit">{part.text}</mark>
+          : <span key={index}>{part.text}</span>
+      ))}
+    </>
+  );
+}
+
+
 /** One plot tile. Mounts its own vega-embed instance; exposes the
  *  live view via the `onView` callback so the parent can drive
  *  Save / Save-All without re-rendering. */
@@ -218,11 +251,17 @@ type PlotCardProps = {
   onDelete: () => void;
   onRegenerate: () => void;
   zone: PlotZone | null;
+  query: string;
+  captionText?: string | null;
+  axisTitles?: string[];
+  legendEntries?: string[];
+  figurePath?: string;
 };
 function PlotCard(props: PlotCardProps) {
   const {
     plot, selected, themeGen, onSelect, onEdit, onAdjust, onSaveFigure,
     onCopyPng, onClear, onClone, onDelete, onRegenerate, zone,
+    query, captionText, axisTitles, legendEntries, figurePath,
   } = props;
   const hostRef = useRef<HTMLDivElement>(null);
   const embedRef = useRef<EmbedResult | null>(null);
@@ -308,7 +347,9 @@ function PlotCard(props: PlotCardProps) {
     }
   }, []);
 
-  const caption = captionFor(plot.spec);
+  const caption = captionText ?? captionFor(plot.spec);
+  const axes = (axisTitles || []).filter(Boolean);
+  const legend = (legendEntries || []).filter(Boolean);
   const tile = tileSizeFor(plot.spec);
   // `grid-column / grid-row` span tells the parent grid to let
   // this card occupy more than one cell. Capped via tileSizeFor
@@ -335,9 +376,13 @@ function PlotCard(props: PlotCardProps) {
         setMenu({ x: e.clientX, y: e.clientY });
       }}
       aria-label={`${plot.name}. Double-click to edit, right-click for actions`}
+      data-plot-id={plot.id}
+      data-figure-path={figurePath || undefined}
     >
       <header className="sy-plot-card-head">
-        <span className="sy-plot-card-title" title={plot.name}>{plot.name}</span>
+        <span className="sy-plot-card-title" title={plot.name}>
+          <HitText text={plot.name} query={query} />
+        </span>
         <span className="sy-plot-card-actions">
           <button
             type="button"
@@ -374,7 +419,17 @@ function PlotCard(props: PlotCardProps) {
         </span>
       </header>
       <div ref={hostRef} className="sy-plot-card-canvas" />
-      {caption && <p className="sy-plot-card-caption">{caption}</p>}
+      {caption && (
+        <p className="sy-plot-card-caption">
+          <HitText text={caption} query={query} />
+        </p>
+      )}
+      {axes.length > 0 && (
+        <p className="sy-plot-card-axes">Axes: {axes.join(" · ")}</p>
+      )}
+      {legend.length > 0 && (
+        <p className="sy-plot-card-axes">Legend: {legend.join(", ")}</p>
+      )}
       {renderError && (
         <p className="sy-plot-card-err">Render error: {renderError}</p>
       )}
@@ -445,6 +500,9 @@ function PlotCard(props: PlotCardProps) {
 export default function VegaTab() {
   const { selection, setSelection } = useSelection();
   const [plots, setPlots] = useState<PlotMeta[] | null>(null);
+  const [extracted, setExtracted] = useState<ExtractedFigure[]>([]);
+  const [q, setQ] = useState("");
+  const [query, setQuery] = useState("");
   const [specs, setSpecs] = useState<Record<string, Plot>>({});
   const [listError, setListError] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<string | null>(null);
@@ -495,8 +553,9 @@ export default function VegaTab() {
     try {
       const r = await fetch("/api/plots");
       if (!r.ok) { setListError(`HTTP ${r.status}`); return; }
-      const body = (await r.json()) as { plots: PlotMeta[] };
-      setPlots(body.plots);
+      const body = (await r.json()) as { plots?: PlotMeta[]; extracted?: ExtractedFigure[] };
+      setPlots(Array.isArray(body.plots) ? body.plots : []);
+      setExtracted(Array.isArray(body.extracted) ? body.extracted : []);
       setListError(null);
     } catch (e) {
       setListError((e as Error).message);
@@ -946,12 +1005,40 @@ export default function VegaTab() {
     return () => window.removeEventListener("keydown", onKey);
   }, [editing, commitEditor]);
 
+  useEffect(() => {
+    const id = window.setTimeout(() => setQuery(q), 80);
+    return () => window.clearTimeout(id);
+  }, [q]);
+
+  const plotRows = useMemo(
+    () => (plots || []).map((meta) => ({ meta, blob: searchBlob(meta) })),
+    [plots],
+  );
+  const extractedRows = useMemo(
+    () => extracted.map((fig) => ({ fig, blob: searchBlob(fig) })),
+    [extracted],
+  );
+  const shownPlots = useMemo(
+    () => plotRows.filter((row) => !hiddenIds.has(row.meta.id) && matchesQuery(row.blob, query)),
+    [plotRows, hiddenIds, query],
+  );
+  const shownExtracted = useMemo(
+    () => extractedRows.filter((row) => matchesQuery(row.blob, query)),
+    [extractedRows, query],
+  );
+  const visiblePlotCount = useMemo(
+    () => (plots || []).filter((meta) => !hiddenIds.has(meta.id)).length,
+    [plots, hiddenIds],
+  );
+  const figureTotal = extracted.length + visiblePlotCount;
+  const figureShown = shownExtracted.length + shownPlots.length;
+
   // ── Render ───────────────────────────────────────────────────────
 
   if (plots === null) {
     return <div className="sy-vega-banner">Loading plots…</div>;
   }
-  if (plots.length === 0) {
+  if (plots.length === 0 && extracted.length === 0) {
     return (
       <div className="sy-vega" ref={zoneElRef}>
         <div className="sy-vega-toolbar">
@@ -971,13 +1058,14 @@ export default function VegaTab() {
           </button>
         </div>
         <div className="sy-vega-empty">
-          <h2>No plots yet</h2>
+          <h2>No figures yet</h2>
           <p>
-            Plots are Vega-Lite specs — click <strong>+ New Plot…</strong>{" "}
+            Extracted figures from your sources show up here beside
+            plots generated in the workspace. Click <strong>+ New Plot…</strong>{" "}
             to drop a primer into the rail chat, or ask the agent
-            yourself (“plot quarterly revenue from sales.csv”).
-            You can also click <strong>↗ Plot</strong> on a table to
-            fan out a few plots from its data.
+            (“plot quarterly revenue from sales.csv”). You can also
+            click <strong>↗ Plot</strong> on a table to fan out a few
+            plots from its data.
           </p>
           {listError && <p className="sy-vega-err">List error: {listError}</p>}
         </div>
@@ -1016,7 +1104,15 @@ export default function VegaTab() {
             {saveStatus}
           </span>
         )}
-        <span className="sy-spacer" />
+        <input
+          type="search"
+          className="sy-plot-search"
+          aria-label="Search plots"
+          placeholder="Search titles, captions, axes, legends"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          spellCheck={false}
+        />
         {hiddenIds.size > 0 && (
           <button
             type="button"
@@ -1026,49 +1122,119 @@ export default function VegaTab() {
           >Show {hiddenIds.size} hidden</button>
         )}
         <span className="sy-vega-counter">
-          {plots.length - hiddenIds.size} / {plots.length} shown
+          {query.trim() ? `${figureShown} of ${figureTotal}` : String(figureTotal)}
         </span>
       </div>
-      <div className="sy-plot-grid">
-        {plots.filter((meta) => !hiddenIds.has(meta.id)).map((meta) => {
-          const full = specs[meta.id];
-          if (!full) {
-            return (
-              <article key={meta.id} className="sy-plot-card sy-plot-card--loading">
-                <header className="sy-plot-card-head">
-                  <span className="sy-plot-card-title">{meta.name}</span>
-                </header>
-                <div className="sy-plot-card-canvas" />
-                <p className="sy-plot-card-caption">Loading spec…</p>
-              </article>
-            );
-          }
-          return (
-            <div
-              key={meta.id}
-              ref={(el) => { cardRefs.current.set(meta.id, el); }}
-              style={{ display: "contents" }}
-            >
-              <PlotCard
-                plot={full}
-                selected={selectedId === meta.id}
-                themeGen={themeGen}
-                onSelect={() => setSelection({
-                  kind: "plot", id: full.id, name: full.name,
-                })}
-                onEdit={() => onEditOne(full)}
-                onAdjust={() => setAdjusting(full)}
-                onSaveFigure={(view) => { void onSaveOne(full, view); }}
-                onCopyPng={(view) => { void onCopyPngOne(full, view); }}
-                onClear={() => onClearOne(full)}
-                onRegenerate={() => onRegenerateOne(full)}
-                onClone={() => { void onCloneOne(full); }}
-                onDelete={() => { void onDeleteOne(full); }}
-                zone={zone}
-              />
+      <div className="sy-plot-scroll">
+        <section className="sy-plot-section" aria-label="Extracted Figures" data-plot-section="extracted">
+          <header className="sy-plot-section-head">
+            <h2>Extracted Figures</h2>
+            <span className="sy-plot-section-count">
+              {query.trim()
+                ? `${shownExtracted.length} of ${extracted.length}`
+                : String(extracted.length)}
+            </span>
+          </header>
+          {shownExtracted.length === 0 ? (
+            <p className="sy-plot-section-empty">
+              {extracted.length === 0
+                ? "No figures extracted from sources yet."
+                : "No extracted figures match this search."}
+            </p>
+          ) : (
+            <div className="sy-plot-grid">
+              {shownExtracted.map(({ fig }) => (
+                <article key={fig.id} className="sy-plot-card sy-extracted-card" data-figure-id={fig.id}>
+                  <header className="sy-plot-card-head">
+                    <span className="sy-plot-card-title" title={fig.title}>
+                      <HitText text={fig.title} query={query} />
+                    </span>
+                  </header>
+                  <div className="sy-plot-card-canvas">
+                    {fig.image && (
+                      <img src={fig.image} alt={fig.title} />
+                    )}
+                  </div>
+                  {fig.caption && (
+                    <p className="sy-plot-card-caption">
+                      <HitText text={fig.caption} query={query} />
+                    </p>
+                  )}
+                  {(fig.axis_titles || []).length > 0 && (
+                    <p className="sy-plot-card-axes">Axes: {(fig.axis_titles || []).join(" · ")}</p>
+                  )}
+                  {(fig.legend_entries || []).length > 0 && (
+                    <p className="sy-plot-card-axes">Legend: {(fig.legend_entries || []).join(", ")}</p>
+                  )}
+                </article>
+              ))}
             </div>
-          );
-        })}
+          )}
+        </section>
+        <section className="sy-plot-section" aria-label="Plots" data-plot-section="plots">
+          <header className="sy-plot-section-head">
+            <h2>Plots</h2>
+            <span className="sy-plot-section-count">
+              {query.trim()
+                ? `${shownPlots.length} of ${visiblePlotCount}`
+                : String(visiblePlotCount)}
+            </span>
+          </header>
+          {shownPlots.length === 0 ? (
+            <p className="sy-plot-section-empty">
+              {plots.length === 0
+                ? "No generated plots yet."
+                : "No plots match this search."}
+            </p>
+          ) : (
+            <div className="sy-plot-grid">
+              {shownPlots.map(({ meta }) => {
+                const full = specs[meta.id];
+                if (!full) {
+                  return (
+                    <article key={meta.id} className="sy-plot-card sy-plot-card--loading" data-plot-id={meta.id}>
+                      <header className="sy-plot-card-head">
+                        <span className="sy-plot-card-title">{meta.name}</span>
+                      </header>
+                      <div className="sy-plot-card-canvas" />
+                      <p className="sy-plot-card-caption">Loading spec…</p>
+                    </article>
+                  );
+                }
+                return (
+                  <div
+                    key={meta.id}
+                    ref={(el) => { cardRefs.current.set(meta.id, el); }}
+                    style={{ display: "contents" }}
+                  >
+                    <PlotCard
+                      plot={full}
+                      selected={selectedId === meta.id}
+                      themeGen={themeGen}
+                      onSelect={() => setSelection({
+                        kind: "plot", id: full.id, name: full.name,
+                      })}
+                      onEdit={() => onEditOne(full)}
+                      onAdjust={() => setAdjusting(full)}
+                      onSaveFigure={(view) => { void onSaveOne(full, view); }}
+                      onCopyPng={(view) => { void onCopyPngOne(full, view); }}
+                      onClear={() => onClearOne(full)}
+                      onRegenerate={() => onRegenerateOne(full)}
+                      onClone={() => { void onCloneOne(full); }}
+                      onDelete={() => { void onDeleteOne(full); }}
+                      zone={zone}
+                      query={query}
+                      captionText={meta.caption}
+                      axisTitles={meta.axis_titles}
+                      legendEntries={meta.legend_entries}
+                      figurePath={meta.figure_path}
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </section>
       </div>
       {adjusting && (
         <PlotAdjustDialog

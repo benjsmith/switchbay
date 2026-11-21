@@ -1,8 +1,11 @@
-"""Unified library index: reports · slideshows · worksheets.
+"""Unified library index: reports · slideshows · worksheets · plots.
 
 List + lightweight search for the Library tab. Full FTS5 index lands
 in a later phase; v1 is in-memory filter over package metas (plenty
 fast for personal workspaces) and exposes a stable API.
+
+Plots here are charts generated in the workspace. Figures extracted
+from source documents stay on the Plot tab and are not listed.
 """
 
 from __future__ import annotations
@@ -11,12 +14,14 @@ import re
 from pathlib import Path
 from typing import Any
 
-from . import html_decks, report_packages, worksheets_store
+from . import html_decks, plot_gallery, report_packages, worksheets_store
 
 
 def list_all(workspace: Path) -> dict[str, Any]:
+    plot_gallery.backfill_figure_docs(workspace)
     reports = report_packages.list_packages(workspace)
     worksheets = worksheets_store.list_packages(workspace)
+    plot_items = plot_gallery.library_items(workspace)
     slideshows = []
     for d in html_decks.list_decks(workspace):
         slideshows.append({
@@ -37,10 +42,12 @@ def list_all(workspace: Path) -> dict[str, Any]:
         "reports": reports,
         "slideshows": slideshows,
         "worksheets": worksheets,
+        "plots": plot_items,
         "counts": {
             "reports": len(reports),
             "slideshows": len(slideshows),
             "worksheets": len(worksheets),
+            "plots": len(plot_items),
         },
     }
 
@@ -53,7 +60,7 @@ def search(workspace: Path, query: str, *, limit: int = 40) -> list[dict[str, An
     tokens = [t for t in re.split(r"\s+", q) if t]
     catalog = list_all(workspace)
     hits: list[tuple[int, dict[str, Any]]] = []
-    for kind in ("reports", "slideshows", "worksheets"):
+    for kind in ("reports", "slideshows", "worksheets", "plots"):
         for item in catalog[kind]:
             blob = " ".join([
                 str(item.get("title") or ""),
@@ -62,6 +69,9 @@ def search(workspace: Path, query: str, *, limit: int = 40) -> list[dict[str, An
                 str(item.get("path") or ""),
                 " ".join(str(s) for s in (item.get("sheet_names") or [])),
                 " ".join(str(s) for s in (item.get("sources") or [])),
+                " ".join(str(s) for s in (item.get("axis_titles") or [])),
+                " ".join(str(s) for s in (item.get("legend_titles") or [])),
+                " ".join(str(s) for s in (item.get("legend_entries") or [])),
             ]).lower()
             if not all(t in blob for t in tokens):
                 continue

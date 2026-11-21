@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import pathlib
+import shutil
+import time
 from typing import Any
 
 from aiohttp import WSMsgType, web
 
 WS_A = "/tmp/switchbay-e2e-mock-ws"
 WS_B = "/tmp/switchbay-e2e-mock-ws-b"
+GALLERY_WS = pathlib.Path("/tmp/switchbay-e2e-plots-ws")
 
 STATE: dict[str, Any] = {
     "workspace": WS_A,
@@ -97,6 +101,21 @@ def _policy(workspace: str | None = None) -> dict[str, Any]:
     }
 
 
+def _tabs() -> list[dict[str, Any]]:
+    if STATE.get("gallery"):
+        return [
+            {"id": "plot", "title": "Plot", "kind": "vega", "source": "core"},
+            {"id": "library", "title": "Library", "kind": "library", "source": "core"},
+        ]
+    return [
+        {"id": "wiki", "title": "Wiki", "kind": "wiki", "source": "core"},
+        {"id": "agents", "title": "Agents", "kind": "agents", "source": "system"},
+        {"id": "comms", "title": "Comms", "kind": "comms", "source": "user"},
+    ] + ([
+        {"id": "graph", "title": "Graph", "kind": "graph", "source": "core"},
+    ] if STATE["graph_tab"] else [])
+
+
 def _hello() -> dict[str, Any]:
     ws = STATE["workspace"]
     return {
@@ -105,13 +124,7 @@ def _hello() -> dict[str, Any]:
         "default_file": None,
         "mode": {
             "name": "default",
-            "tabs": [
-                {"id": "wiki", "title": "Wiki", "kind": "wiki", "source": "core"},
-                {"id": "agents", "title": "Agents", "kind": "agents", "source": "system"},
-                {"id": "comms", "title": "Comms", "kind": "comms", "source": "user"},
-            ] + ([
-                {"id": "graph", "title": "Graph", "kind": "graph", "source": "core"},
-            ] if STATE["graph_tab"] else []),
+            "tabs": _tabs(),
         },
         "selection": None,
         "workspaces": {
@@ -148,6 +161,7 @@ async def handle_health(_request: web.Request) -> web.Response:
         "repo_root": "",
         "policy": {"profile": "open", "source": "mock"},
         "e2e_mock": True,
+        "gallery": bool(STATE.get("gallery")),
     })
 
 
@@ -536,7 +550,222 @@ async def handle_ce_data(_request: web.Request) -> web.Response:
     })
 
 
+def _gallery_ws() -> pathlib.Path:
+    return pathlib.Path(STATE.get("gallery_ws") or GALLERY_WS)
+
+
+def _init_gallery() -> None:
+    """Real plot + extracted-figure workspace for the plots e2e."""
+    from PIL import Image, ImageDraw
+
+    from switchbay import plots
+
+    ws = GALLERY_WS
+    if ws.exists():
+        shutil.rmtree(ws)
+    assets = ws / "wiki" / "figures" / "_assets"
+    assets.mkdir(parents=True)
+    pages = ws / "wiki" / "figures"
+
+    def _write_figure(
+        stem: str,
+        title: str,
+        caption: str,
+        axes: tuple[str, str],
+        legend: tuple[str, ...],
+        draw_image,
+    ) -> None:
+        image = Image.new("RGB", (800, 480), "#fbfcfe")
+        draw = ImageDraw.Draw(image)
+        draw.text((56, 20), title, fill="#1a1d22")
+        draw_image(draw)
+        image.save(assets / f"{stem}.png", format="PNG")
+        axis_lines = "\n".join(f'  - "{label}"' for label in axes)
+        legend_lines = "\n".join(f'  - "{label}"' for label in legend)
+        (pages / f"{stem}.md").write_text(
+            "---\n"
+            f'title: "{title}"\n'
+            "type: figure\n"
+            "origin: extracted\n"
+            f"asset: {stem}.png\n"
+            "sources: [source-doc]\n"
+            "axis_titles:\n"
+            f"{axis_lines}\n"
+            "legend:\n"
+            f"{legend_lines}\n"
+            "---\n\n"
+            f"![[figures/_assets/{stem}.png]]\n\n"
+            f"*{caption}*\n",
+            encoding="utf-8",
+        )
+
+    def _glucose_bars(draw: ImageDraw.ImageDraw) -> None:
+        draw.rectangle((48, 64, 752, 430), outline="#d5d9e0")
+        for i, height in enumerate((120, 180, 150, 220, 160)):
+            x = 90 + i * 70
+            draw.rectangle((x, 400 - height, x + 40, 400), fill="#e17c05")
+
+    def _floor_plan(draw: ImageDraw.ImageDraw) -> None:
+        draw.rectangle((80, 70, 720, 420), outline="#1d6996", width=3)
+        draw.line((400, 70, 400, 420), fill="#1d6996", width=2)
+        draw.line((80, 250, 720, 250), fill="#1d6996", width=2)
+        draw.ellipse((180, 140, 210, 170), fill="#cc503e")
+        draw.ellipse((520, 300, 550, 330), fill="#0f8554")
+
+    _write_figure(
+        "glucose",
+        "Glucose curve",
+        "Plasma glucose after the meal.",
+        ("Time", "Concentration"),
+        ("control", "treated"),
+        _glucose_bars,
+    )
+    _write_figure(
+        "site-plan",
+        "Site plan",
+        "Camera positions on the floor.",
+        ("East-west", "North-south"),
+        ("Lobby", "Loading dock"),
+        _floor_plan,
+    )
+    plots.save_plot(
+        ws,
+        name="Revenue by region",
+        spec={
+            "title": "Revenue by region",
+            "description": "Quarterly revenue split by region.",
+            "mark": "bar",
+            "data": {"values": [
+                {"quarter": "Q1", "region": "North", "revenue": 10},
+                {"quarter": "Q1", "region": "South", "revenue": 7},
+                {"quarter": "Q2", "region": "North", "revenue": 12},
+                {"quarter": "Q2", "region": "South", "revenue": 9},
+            ]},
+            "encoding": {
+                "x": {"field": "quarter", "type": "ordinal", "title": "Quarter"},
+                "y": {"field": "revenue", "type": "quantitative", "axis": {"title": "Revenue"}},
+                "color": {"field": "region", "type": "nominal", "legend": {"title": "Region"}},
+            },
+        },
+        sources=["vault/sales.csv"],
+    )
+    # On disk without a figure page, so opening the Plot tab backfills it.
+    cohort = {
+        "id": "cohort-retention",
+        "name": "Cohort retention",
+        "spec": {
+            "title": "Cohort retention",
+            "description": "Share of each cohort still active.",
+            "mark": "line",
+            "data": {"values": [
+                {"week": 1, "cohort": "Jan", "share": 0.8},
+                {"week": 4, "cohort": "Jan", "share": 0.55},
+                {"week": 1, "cohort": "Feb", "share": 0.78},
+                {"week": 4, "cohort": "Feb", "share": 0.5},
+            ]},
+            "encoding": {
+                "x": {"field": "week", "type": "quantitative", "title": "Weeks since signup"},
+                "y": {"field": "share", "type": "quantitative", "title": "Share still active"},
+                "color": {"field": "cohort", "type": "nominal", "legend": {"title": "Cohort"}},
+            },
+        },
+        "created_at": time.time(),
+        "updated_at": time.time(),
+    }
+    plot_dir = ws / ".workbench" / "plots"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+    (plot_dir / "cohort-retention.json").write_text(json.dumps(cohort), encoding="utf-8")
+    STATE["gallery"] = True
+    STATE["gallery_ws"] = str(ws)
+    STATE["workspace"] = str(ws)
+
+
+def _ensure_gallery() -> None:
+    if os.environ.get("E2E_GALLERY") != "1":
+        return
+    if STATE.get("gallery"):
+        return
+    _init_gallery()
+
+
+async def handle_gallery_plots(_request: web.Request) -> web.Response:
+    if not STATE.get("gallery"):
+        return web.json_response({"plots": [], "extracted": []})
+    from switchbay import plot_gallery
+    ws = _gallery_ws()
+    plot_gallery.backfill_figure_docs(ws)
+    return web.json_response(plot_gallery.gallery(ws))
+
+
+async def handle_gallery_plot(request: web.Request) -> web.Response:
+    if not STATE.get("gallery"):
+        return web.json_response({"error": "not found"}, status=404)
+    from switchbay import plots
+    plot_id = request.query.get("id", "").strip()
+    try:
+        rec = plots.get_plot(_gallery_ws(), plot_id)
+    except ValueError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
+    if rec is None:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response({"plot": rec})
+
+
+async def handle_gallery_figure(request: web.Request) -> web.Response:
+    if not STATE.get("gallery"):
+        return web.json_response({"error": "not found"}, status=404)
+    from switchbay import plot_gallery
+    plot_id = request.query.get("id", "").strip()
+    doc = plot_gallery.figure_doc_for_plot(_gallery_ws(), plot_id)
+    if doc is None:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(doc)
+
+
+async def handle_gallery_thumb(request: web.Request) -> web.Response:
+    if not STATE.get("gallery"):
+        return web.json_response({"error": "not found"}, status=404)
+    from switchbay import plot_gallery
+    plot_id = request.match_info.get("plot_id", "").strip()
+    png = plot_gallery.thumbnail_bytes(_gallery_ws(), plot_id)
+    if not png:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(body=png, content_type="image/png")
+
+
+async def handle_gallery_library(request: web.Request) -> web.Response:
+    if not STATE.get("gallery"):
+        return web.json_response({})
+    from switchbay import library
+    if request.path.endswith("/search"):
+        q = str(request.query.get("q") or "")
+        return web.json_response({"q": q, "hits": library.search(_gallery_ws(), q)})
+    return web.json_response(library.list_all(_gallery_ws()))
+
+
+async def handle_gallery_figures(request: web.Request) -> web.Response:
+    if not STATE.get("gallery"):
+        return web.json_response({"error": "not found"}, status=404)
+    rel = request.match_info.get("path", "").strip()
+    ws = _gallery_ws()
+    roots = [
+        (ws / "wiki" / "figures" / "_assets").resolve(),
+        (ws / "figures").resolve(),
+        (ws / "wiki" / "figures").resolve(),
+    ]
+    for root in roots:
+        if not root.is_dir():
+            continue
+        candidate = (root / rel).resolve()
+        if root not in candidate.parents and candidate != root:
+            continue
+        if candidate.is_file():
+            return web.FileResponse(candidate)
+    return web.json_response({"error": "not found"}, status=404)
+
+
 def build_app(dist: pathlib.Path) -> web.Application:
+    _ensure_gallery()
     app = web.Application()
     app["dist"] = dist
 
@@ -547,6 +776,13 @@ def build_app(dist: pathlib.Path) -> web.Application:
         return web.FileResponse(index)
 
     app.router.add_get("/api/health", handle_health)
+    app.router.add_get("/api/plots", handle_gallery_plots)
+    app.router.add_get("/api/plots/{plot_id}/thumb", handle_gallery_thumb)
+    app.router.add_get("/api/plot/figure", handle_gallery_figure)
+    app.router.add_get("/api/plot", handle_gallery_plot)
+    app.router.add_get("/api/library/search", handle_gallery_library)
+    app.router.add_get("/api/library", handle_gallery_library)
+    app.router.add_get("/figures/{path:.*}", handle_gallery_figures)
     app.router.add_get("/api/comms/review", handle_comms_get)
     app.router.add_post("/api/comms/review", handle_comms_post)
     app.router.add_post("/api/comms/review/open", handle_comms_open)
