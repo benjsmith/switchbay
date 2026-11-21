@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the workflow suite against two daemons and print a parity table.
 #
-# PRE is current main (default 3fc2659, federated mounts). POST is
+# PRE is current main (default b3ea541, enterprise controls). POST is
 # the checkout you run the script from. Each daemon gets its own port,
 # state directory, config directory, and a copy of samples/ml-walkthrough
 # with a Reviews tab and one proposed page. No provider API keys are
@@ -17,7 +17,7 @@ set -euo pipefail
 set -m
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PRE_REF="${PRE_REF:-3fc2659}"
+PRE_REF="${PRE_REF:-b3ea541}"
 PRE_PORT="${PRE_PORT:-8871}"
 POST_PORT="${POST_PORT:-8872}"
 WORK="${WORK:-/tmp/switchbay-parity}"
@@ -91,7 +91,11 @@ for name in ("ws-pre", "ws-post"):
     wb = dest / ".workbench"
     (wb / "state").mkdir(parents=True, exist_ok=True)
     (wb / "mode.json").write_text(json.dumps(mode), encoding="utf-8")
-    body = "# Parity concept\n\nA seeded review for the workflow suite.\n"
+    body = (
+        "---\nprovenance: untrusted-import\n---\n\n"
+        "# Parity concept\n\nUNTRUSTED REMOTE CONTENT\n\n"
+        "A seeded review for the workflow suite.\n"
+    )
     page = dest / "wiki" / "concepts" / "parity-concept.md"
     page.parent.mkdir(parents=True, exist_ok=True)
     page.write_text(body, encoding="utf-8")
@@ -145,6 +149,12 @@ for name in ("ws-pre", "ws-post"):
         }],
     }), encoding="utf-8")
 print("workspaces ready")
+synced = work / "Dropbox" / "inbox" / "wiki"
+synced.mkdir(parents=True, exist_ok=True)
+(synced / "index.md").write_text("# synced inbox\n", encoding="utf-8")
+for side in ("pre", "post"):
+    (work / f"admin-{side}.json").write_text(
+        json.dumps({"profile": "open"}) + "\n", encoding="utf-8")
 PY
 
 for side in pre post; do
@@ -189,6 +199,7 @@ start_daemon() {
     cd "$tree"
     exec env -u XAI_API_KEY -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
       SWITCHBAY_STATE_DIR="$WORK/state-$side" \
+      SWITCHBAY_ADMIN_POLICY="$WORK/admin-$side.json" \
       XDG_CONFIG_HOME="$WORK/config-$side" \
       PYTHONPATH="$tree/src" \
       "$PY" -m switchbay serve --workspace "$ws" --host 127.0.0.1 --port "$port"
@@ -226,6 +237,8 @@ run_suite() {
     E2E_BASE_URL="http://127.0.0.1:$port" \
       E2E_WORKSPACE="$WORK/ws-$side" \
       E2E_ALT_WORKSPACE="$WORK/ws-$side-alt" \
+      E2E_ADMIN_POLICY="$WORK/admin-$side.json" \
+      E2E_SYNCED_WORKSPACE="$WORK/Dropbox/inbox" \
       pnpm exec playwright test tests/e2e/workflows.spec.ts \
         --reporter=json --output "$WORK/results-$side"
   ) >"$out"

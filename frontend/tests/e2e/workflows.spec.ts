@@ -10,6 +10,7 @@
  *
  * Run: E2E_BASE_URL=http://127.0.0.1:8872 pnpm --dir frontend exec playwright test tests/e2e/workflows.spec.ts
  */
+import { readFileSync, writeFileSync } from "node:fs";
 import { test, expect, type Page } from "@playwright/test";
 
 test.use({ screenshot: "only-on-failure" });
@@ -564,13 +565,18 @@ test("settings stores an exclusion rule and removes it", async ({ page }) => {
   await openSettings(page);
   const panel = page.locator("[data-testid='exclusion-rules']");
   await panel.scrollIntoViewIfNeeded();
-  await panel.getByLabel("Exclusion rule").fill("export the customer list");
-  await panel.getByLabel("Rule decision").selectOption("deny");
-  await panel.getByRole("button", { name: "Add" }).click();
-  await expect(panel.getByText("export the customer list")).toBeVisible();
-  await expect(panel.locator(".sy-class-badge[data-label='deny']")).toBeVisible();
-  await panel.getByRole("button", { name: "Remove" }).click();
-  await expect(panel.getByText("export the customer list")).toHaveCount(0);
+  for (const decision of ["allow", "ask", "deny"] as const) {
+    await panel.getByLabel("Exclusion rule").fill(`parity ${decision}`);
+    await panel.getByLabel("Rule decision").selectOption(decision);
+    await panel.getByRole("button", { name: "Add" }).click();
+    const row = panel.locator(".sy-settings-perm-row", { hasText: `parity ${decision}` });
+    await expect(row.locator(`.sy-class-badge[data-label='${decision}']`)).toBeVisible();
+  }
+  for (const decision of ["allow", "ask", "deny"] as const) {
+    const row = panel.locator(".sy-settings-perm-row", { hasText: `parity ${decision}` });
+    await row.getByRole("button", { name: "Remove" }).click();
+    await expect(panel.getByText(`parity ${decision}`)).toHaveCount(0);
+  }
 });
 
 test("presidio setting turns off and back on", async ({ page }) => {
@@ -595,6 +601,100 @@ test("public write dialog can be cancelled", async ({ page }) => {
   await expect(dialog.getByRole("button", { name: "Always allow" })).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
+});
+
+test("review shows the untrusted import marker", async ({ page }) => {
+  await ready(page);
+  await openTab(page, "Reviews");
+  await expect(page.getByText("untrusted-import").first()).toBeVisible();
+  await expect(page.getByText("UNTRUSTED REMOTE CONTENT").first()).toBeVisible();
+});
+
+test("public write ok closes the dialog", async ({ page }) => {
+  await ready(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("sy:public-write", { detail: { mount: "remote" } }));
+  });
+  const dialog = page.locator("[data-testid='public-write-dialog']");
+  await dialog.getByRole("button", { name: "OK" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("public write always-allow can be narrowed to this workspace", async ({ page }) => {
+  await ready(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("sy:public-write", { detail: { mount: "remote" } }));
+  });
+  const dialog = page.locator("[data-testid='public-write-dialog']");
+  await dialog.getByRole("button", { name: "Always allow" }).click();
+  await expect(dialog).toHaveCount(0);
+  await openSettings(page);
+  const setting = page.locator("[data-testid='presidio-setting']");
+  await setting.scrollIntoViewIfNeeded();
+  const rule = setting.locator("[data-scope='global']");
+  await expect(rule).toBeVisible();
+  await rule.getByRole("button", { name: "This workspace only" }).click();
+  await expect(setting.locator("[data-scope='workspace']")).toBeVisible();
+});
+
+test("slideshow pdf export stops while the session is confidential", async ({ page }) => {
+  await ready(page);
+  await page.locator(".sy-fb-search").fill("wiki/index.md");
+  await page.locator(".sy-fb-name", { hasText: /^index\.md$/ }).click();
+  await page.getByRole("button", { name: "→ Slideshow" }).click();
+  const save = page.getByRole("button", { name: "↓ save PDF" });
+  await expect(save).toBeVisible();
+  const dialogPromise = page.waitForEvent("dialog");
+  await save.click();
+  const dialog = await dialogPromise;
+  expect(dialog.message()).toMatch(/this chat is confidential/);
+  await dialog.accept();
+});
+
+test("adding a synced folder is refused at the trust boundary", async ({ page }) => {
+  const policyPath = process.env.E2E_ADMIN_POLICY;
+  const synced = process.env.E2E_SYNCED_WORKSPACE;
+  if (!policyPath || !synced) throw new Error("E2E_ADMIN_POLICY and E2E_SYNCED_WORKSPACE are required");
+  const original = readFileSync(policyPath, "utf8");
+  const enterprise = {
+    profile: "enterprise",
+    features: {
+      in_app_update: true,
+      install_skills_npx: true,
+      ce_auto_setup: true,
+      ce_bundled_setup: true,
+      uv_python_install: true,
+      scan_other_app_caches: true,
+      hf_model_download: true,
+      comms_streams: true,
+      github_share: true,
+      media_generation: true,
+      user_mcp_servers: true,
+      watch_folders: true,
+      interactive_terminal: true,
+      agent_run_command: true,
+      demo_workspace: true,
+      pi_harness: true,
+      browser_use: true,
+      web_egress: true,
+    },
+    graph_mounts: { enabled: true, allowlist: ["*"], allow_public: true, remote_write: "propose" },
+    sources: { enabled: true, allowlist: ["*"], allow_act_tools: false, snapshot: "allowed" },
+    public_writes: { allowed: true, user_control: true },
+    classification_review: { mandatory: false },
+    paths: { trust_boundary: [] },
+  };
+  writeFileSync(policyPath, JSON.stringify(enterprise));
+  try {
+    await ready(page);
+    await page.locator(".sy-ws-trigger").click();
+    await page.getByRole("button", { name: "+ Add workspace…" }).click();
+    await page.locator(".sy-ws-input").fill(synced);
+    await page.getByRole("button", { name: "Add", exact: true }).click();
+    await expect(page.locator(".sy-ws-error")).toContainText("trust boundary");
+  } finally {
+    writeFileSync(policyPath, original);
+  }
 });
 
 test("review tab sets a classification and clears the row", async ({ page }) => {
