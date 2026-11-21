@@ -3,21 +3,74 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
-## Unreleased — mounted graphs
+## 2026-11-21 — v0.16.0
 
-A workspace can attach other graphs beside its own wiki. A snapshot is
-a copy pinned at one revision. A live graph is a server the workspace
-queries, with sign-in rather than a token in the settings file. Search
-and page reads can cover more than the local wiki, and a claim can cite
-a remote page at the revision it was read. Pages carry a classification,
-and a page keeps the highest label of what it cites. Publishing to GitHub refuses a wiki or vault markdown, text, or YAML
-file above public. External sources (Work IQ,
-Databricks, AWS Context, AWS Quick) are called through one broker and
-recorded on this machine. Real accounts for those services are not
-wired up yet.
+**Migration:** none for the wiki or the vault. An admin file may add
+`graph_mounts`, `sources`, `public_writes`, `classification_review`, and
+`exports`. A missing section keeps the profile default. `exports` defaults
+to clearance `restricted`, max ceiling `restricted`, outside-boundary PDF
+saves allowed after confirmation, and no Purview mapping. There is no
+`sources.declassify` key. Lowering a page to public is edit access on that
+page, and nothing else.
 
-Controls, access, and configuration:
-[Enterprise](docs/enterprise/index.md).
+Works with curiosity-engine 1.10.0 for the local wiki and viewer, and
+curiosity-merge 0.8.5 for the published merge tools. Live ce-graph/1 mounts
+need curiosity-engine main at 9ec746a (pull request 37), which is merged and
+not released. Page merge and ontology alignment need curiosity-merge main at
+188c7dc (pull request 6), which is merged and not released. okstratr 0.2.0.
+
+### Added
+
+- **Mounted graphs** — a workspace can attach other graphs beside its own
+  wiki. A snapshot is a copy pinned at one revision. A live graph is a
+  ce-graph/1 server. Sign-in is used; the settings file does not hold a
+  token. Search and page reads can cover more than the local wiki, and a
+  claim can cite a remote page at the revision it was read. A page keeps the
+  highest classification of what it cites. An import that fails the scrub is
+  quarantined. A remote write stays a proposal unless the mount, the live
+  server, and the workspace all allow a direct write. When both sides and
+  the ancestor text are known, a conflict asks curiosity-merge. External
+  sources (Work IQ, Databricks Genie, AWS Context, AWS Quick, Unity Catalog)
+  are called through one broker and recorded on this machine. Real accounts
+  for those services are not wired up yet.
+- **Plots in the Library** — generated plots are listed with reports and
+  slideshows. The Plot tab is the plot you open.
+- **Enterprise controls** — the enterprise profile applies the trust
+  boundary for synced folders, mount ceilings, public-write rules, Presidio
+  when it is installed, classification review, catalog permissions, and
+  exclusion rules. Audit rows, session labels, and captures are owner-only
+  files under the state directory. The controls, access rules, and admin
+  keys are in [Enterprise](docs/enterprise/index.md).
+- **Labelled slideshow PDFs** — Save PDF writes a file at the session label.
+  A confidential session produces a confidential PDF in one click. The label
+  is the higher of the session floor and the labels of the included slides.
+  The export is refused when that label is above the clearance, when a
+  source reference cannot be taken out, or when an exclusion rule denies it.
+  A label above public is stamped at the top and bottom of every page. Every
+  PDF records the label, workspace, OS user, time, and Switchbay version in
+  the Info dictionary and in XMP. `exports.purview.labels` can add a
+  Microsoft Purview label id to that metadata. That metadata does not
+  encrypt the file. `exports.purview.endpoint`, when set, is asked to label
+  the PDF, and only the PDF it returns is saved. If that call fails, nothing
+  is saved. Without an endpoint, the export dialog can encrypt with AES-256,
+  by a password or by a recipient certificate. Encryption stays off unless
+  you turn it on. A destination outside the trust boundary asks OK, Always
+  allow, or Cancel. `exports.forbid_outside_boundary` refuses those paths.
+  Each export is audited with the label, the source refs, the destination
+  class, the file's sha256, the user, and the time.
+
+### Changed
+
+- HTTP handlers now live in `src/switchbay/httpapi/`. What a request does is
+  unchanged.
+- GitHub publish still refuses a session above public, and any `.md`,
+  `.txt`, `.yaml`, or `.yml` file under `wiki/` or `vault/` whose label is
+  above public. Slideshow PDF export does not use that cap.
+
+### Fixed
+
+- Saving a slideshow PDF no longer fails with "export is capped at that
+  label" when the session is above public.
 
 ## 2026-11-20 — v0.15.0
 
