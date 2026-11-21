@@ -3,6 +3,20 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## Unreleased — mounted graphs
+
+A workspace can attach other graphs beside its own wiki. A snapshot is
+a copy pinned at one revision. A live graph is a server the workspace
+queries, with sign-in rather than a token in the settings file. Search
+and page reads can cover more than the local wiki, and a claim can cite
+a remote page at the revision it was read. Pages carry a classification,
+and a page keeps the highest label of what it cites. A chat that reads
+confidential material keeps that label until a person lowers it.
+Publishing refuses anything above public. External sources (Work IQ,
+Databricks, AWS Context, AWS Quick) are called through one broker and
+recorded on this machine. Real accounts for those services are not
+wired up yet.
+
 ## 2026-11-20 — v0.15.0
 
 **Migration:** none. Local browser use is optional: skip it at install with

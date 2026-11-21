@@ -460,6 +460,46 @@ jobs:
               raise SystemExit(f"{label}: expected {want} passed, got {got}")
           print(f"{label}: {got}/{want} passed, no skips")
           PY
+      - name: Playwright leakage controls (mock port 41769)
+        working-directory: frontend
+        env:
+          E2E_MOCK: "1"
+          E2E_LEAK_PORT: "41769"
+          CI: "true"
+        run: |
+          set -euo pipefail
+          unset E2E_BASE_URL || true
+          if [ -n "${E2E_BASE_URL:-}" ]; then
+            echo "E2E_BASE_URL must stay unset so specs use their own ports"
+            exit 1
+          fi
+          if grep -nE 'test\.(skip|fixme)\(' tests/e2e/leakage-controls.spec.ts; then
+            echo "leakage e2e must not skip"
+            exit 1
+          fi
+          pnpm exec playwright test tests/e2e/leakage-controls.spec.ts \
+            --reporter=list --forbid-only --workers=1 \
+            | tee "${RUNNER_TEMP}/pw-leakage.txt"
+          python3 - "${RUNNER_TEMP}/pw-leakage.txt" 4 leakage-controls <<'PY'
+          from pathlib import Path
+          import re, sys
+          plain = re.sub(r"\x1b\[[0-9;]*[A-Za-z]", "", Path(sys.argv[1]).read_text(errors="replace"))
+          want, label = int(sys.argv[2]), sys.argv[3]
+          if "leakage-controls.spec.ts" not in plain:
+              raise SystemExit(f"{label}: spec file did not run")
+          if re.search(r"\b[1-9]\d*\s+skipped\b", plain, re.I):
+              raise SystemExit(f"{label}: skips are not allowed")
+          failed = re.search(r"\b(\d+)\s+failed\b", plain, re.I)
+          if failed and int(failed.group(1)) != 0:
+              raise SystemExit(f"{label}: failed tests")
+          passed = re.findall(r"(?m)^\s*(\d+)\s+passed\b", plain)
+          if not passed:
+              raise SystemExit(f"{label}: no 'N passed' summary")
+          got = int(passed[-1])
+          if got != want:
+              raise SystemExit(f"{label}: expected {want} passed, got {got}")
+          print(f"{label}: {got}/{want} passed, no skips")
+          PY
       - name: Upload Playwright failure artifacts
         if: failure()
         uses: actions/upload-artifact@v4

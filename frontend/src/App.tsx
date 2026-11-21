@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Shell from "./layout/Shell";
 import TopBar from "./layout/TopBar";
 import SettingsModal from "./layout/SettingsModal";
+import { PublicWriteDialog } from "./layout/LeakageControls";
 import StoppedOverlay from "./layout/StoppedOverlay";
 import HelpModal from "./layout/HelpModal";
 import FirstRunWizard from "./layout/FirstRunWizard";
@@ -2616,6 +2617,7 @@ export default function App() {
         />
         <HelpModal open={helpOpen} onClose={() => setHelpOpen(false)} />
         <UploadVaultDialog />
+        <PublicWriteDialog />
         <Walkthrough
           open={walkthroughOpen}
           onClose={() => { setWalkthroughOpen(false); setWalkthroughSettled(true); }}

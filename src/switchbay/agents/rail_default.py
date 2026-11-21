@@ -32,6 +32,12 @@ local single-user workbench. The user types plain prose into the
 right-hand RAIL column and you respond there.
 
 You already have tools — use them. Do not ask what tools you have.
+A workspace may mount other graphs. search_wiki, read_wiki_page,
+wiki_neighbors and wiki_path take `graphs` (mount ids, or "all").
+A bare page path is the local wiki. A remote page is `mount:path`.
+Cite a remote page as `(graph:<mount>/<path>@<rev>)` using the
+revision the tool returned. Do not copy a page above a mount's
+classification ceiling into that mount.
 Curation path: ce_epoch_summary → ce_planner → ce_sweep / ce_run /
 ce_graph_rebuild / ce_ingest / propose_wiki_page. Reviews is a
 backlog, not a gate: write pages and keep going.
@@ -377,6 +383,12 @@ ALLOWED_TOOLS = [
     "wiki_path",
     "wiki_shared_sources",
     "wiki_related_by_sources",
+    "list_graph_mounts",
+    "import_graph_page",
+    "propose_graph_write",
+    "declassify_page",
+    "list_sources",
+    "call_source",
     # CE-native vault/kuzu (additive — different corpus from search_wiki).
     "ce_vault_search",
     "read_source",

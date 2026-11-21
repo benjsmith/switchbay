@@ -8871,6 +8871,21 @@ a.sy-source-cite { color: var(--accent); }
   align-items: center;
   flex-wrap: wrap;
 }
+.sy-class-badge {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #d5dbdf);
+  margin-left: 8px;
+}
+.sy-class-badge[data-label="confidential"],
+.sy-class-badge[data-label="restricted"],
+.sy-class-badge[data-label="deny"] {
+  color: var(--reject, #b0323f);
+}
+.sy-class-review { margin: 12px 0; text-align: left; }
 .sy-review-body {
   flex: 1 1 auto;
   overflow: auto;
