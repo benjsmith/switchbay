@@ -20,6 +20,8 @@ Every line has `ts` (UTC), `event`, and `workspace` (full path). The directory i
 | `capture_prune` | Old captures were deleted | `removed`, `days` |
 | `presidio` | The workspace Presidio toggle changed | `enabled`, `user` |
 | `public_write_allow` | OK, or Always allow | `scope` (`once`, `global`, `workspace`), `mount` or `rule_id` |
+| `export` | A slideshow PDF was written | `label`, `sources` (source refs of included slides), `destination_class` (`inside` or `outside`), `sha256` of the PDF, `user`, `slug`, `path`. `ts` is on every row |
+| `export_allow` | Always allow for a destination outside the trust boundary | `scope` (`global`), `user` |
 
 The overlap warning on declassification is returned to the caller. It is not its own event. Ordinary local edits that are not a declassification or a remote proposal are not in this log. Shell commands and editor opens are not in this log.
 

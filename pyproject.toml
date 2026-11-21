@@ -35,6 +35,12 @@ dependencies = [
     # release old enough to take, is not yanked, and has no published
     # advisories. 47.0.0, the copy the lock already had, does.
     "cryptography==50.0.2",
+    # PDF Info dict, XMP, page stamps, and AES-256 standard security.
+    # 6.21.4 (2026-10-28) is the newest release that is at least 14
+    # days old, is not yanked, and has no open PyPI/OSV advisory.
+    # 7.0.1 and later are younger than 14 days. AES uses the
+    # cryptography pin above; the crypto extra is not a second package.
+    "pypdf==6.21.4",
 ]
 # NOTE: `sentence-transformers` (which pulls PyTorch + the ~450 MB ML
 # stack) is NOT a base dependency — it lives in the `semantic`

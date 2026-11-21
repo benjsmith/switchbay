@@ -324,7 +324,7 @@ def load(*, force: bool = False) -> dict[str, Any]:
     # Federation sections. Absent from both files means "use the profile
     # default" — the key is omitted so federation.policy can tell.
     federation: dict[str, Any] = {}
-    for name in ("graph_mounts", "sources", "public_writes", "classification_review"):
+    for name in ("graph_mounts", "sources", "public_writes", "classification_review", "exports"):
         merged: dict[str, Any] = {}
         found = False
         for src in (baked_data, overlay):
