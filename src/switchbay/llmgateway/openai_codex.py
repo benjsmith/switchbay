@@ -450,13 +450,14 @@ def _mcp_overrides(
         workspace, allowed_tools=allowed_tools,
     )
     flags = _server_flags(name, spec["command"], spec["args"], spec["env"])
-    # User-registered stdio MCP servers (mcpstore). codex TOML mcp_servers
-    # is stdio (command/args/env); http servers are skipped here — they
-    # still reach claude-code/grok.
+    # User-registered MCP servers. Codex's `-c` overrides here are the
+    # stdio shape (command, args, env). HTTP servers are not added to
+    # a Codex launch. Claude Code receives them, and Grok receives them
+    # as url entries in the project config.
     try:
         from .. import mcpstore
 
-        for s in mcpstore.enabled_servers():
+        for s in mcpstore.enabled_servers(workspace):
             if s["transport"] == "stdio" and s.get("command") and s["name"] != name:
                 flags += _server_flags(
                     s["name"], s["command"], s.get("args", []), s.get("env", {}))

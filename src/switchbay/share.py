@@ -144,7 +144,7 @@ def write_ignore(workspace: Path, *, include_vault: bool) -> None:
 # exact file set and scan text files for secret-shaped strings so the
 # UI can show a preview + a warning.
 
-_SKIP_DIR_NAMES = {".git", ".workbench", "__pycache__", "node_modules"}
+_SKIP_DIR_NAMES = {".git", ".workbench", ".grok", "__pycache__", "node_modules"}
 _SCAN_MAX_BYTES = 1_000_000       # don't read big/binary blobs
 _SCAN_MAX_FILES = 5_000           # bound the walk on huge workspaces
 _TEXT_SUFFIXES = {
@@ -177,6 +177,9 @@ def _is_published(rel: str, *, include_vault: bool) -> bool:
     POSIX path. Not a full gitignore engine — it enforces OUR rules
     (the security-relevant ones); a user's own .gitignore is applied by
     git at push time on top of this."""
+    from .federation.secure import export_excluded
+    if export_excluded(rel):
+        return False
     first = rel.split("/", 1)[0]
     if first in _SKIP_DIR_NAMES or first == ".DS_Store" or rel.endswith("/.DS_Store"):
         return False
@@ -227,6 +230,7 @@ def preview(workspace: Path, *, include_vault: bool) -> dict:
         "top_dirs": [{"dir": d, "files": n} for d, n in top_dirs[:12]],
         "largest": [{"path": p, "bytes": b} for p, b in files[:8]],
         "secret_hits": secret_hits[:50],
+        "classification_blocks": _classification_blocks(workspace),
     }
 
 
@@ -248,6 +252,14 @@ def _scan_secrets(fp: Path, rel: str, size: int, out: list[dict]) -> None:
                 break  # one hit per line is enough
 
 
+def _classification_blocks(workspace: Path) -> list[dict]:
+    try:
+        from .federation.classify import blocking_publish_paths
+        return blocking_publish_paths(workspace)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 async def publish(
     workspace: Path,
     *,
@@ -262,6 +274,18 @@ async def publish(
     rc, out = await _run([gh_path() or "gh", "auth", "status"])
     if rc != 0:
         raise ShareError("gh isn't logged in — run `gh auth login` in a shell thread first")
+    blocked = _classification_blocks(workspace)
+    if blocked:
+        listed = ", ".join(item["path"] for item in blocked[:12])
+        raise ShareError(
+            "refusing to publish pages above public: " + listed
+        )
+    from .federation.session_label import floor
+    session = floor(workspace)
+    if session != "public":
+        raise ShareError(
+            f"this chat is {session}; publishing is capped at that label"
+        )
 
     ws = str(workspace)
     if not (workspace / ".git").is_dir():

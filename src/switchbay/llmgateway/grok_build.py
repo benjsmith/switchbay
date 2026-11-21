@@ -453,6 +453,33 @@ def _strip_legacy_mcp_servers(cfg: Path) -> None:
             log.exception("failed to strip legacy MCP server from %s", cfg)
 
 
+def _toml_quote(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _write_http_mcp(cfg: Path, server: dict) -> None:
+    """Record an HTTP MCP server in the project grok config.
+
+    ``grok mcp add`` is the stdio path. HTTP servers used to be skipped
+    with no trace. The url is written here so Grok can see the server.
+    Header values stay in this file, which share excludes, and are not
+    copied into graph-mounts.json.
+    """
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    text = cfg.read_text(encoding="utf-8") if cfg.is_file() else ""
+    table = f"[mcp_servers.{server['name']}]"
+    if table in text and "url" in text.split(table, 1)[-1].split("\n[", 1)[0]:
+        return
+    lines = ["", table, f"url = {_toml_quote(str(server['url']))}"]
+    headers = server.get("headers") or {}
+    if headers:
+        pairs = ", ".join(
+            f"{_toml_quote(str(key))} = {_toml_quote(str(val))}" for key, val in headers.items()
+        )
+        lines.append(f"http_headers = {{ {pairs} }}")
+    cfg.write_text(text + "\n".join(lines) + "\n", encoding="utf-8")
+
+
 async def _ensure_mcp(
     workspace: Path, *, allowed_tools: list[str] | None = None,
 ) -> str:
@@ -500,8 +527,13 @@ async def _ensure_mcp(
     try:
         from .. import mcpstore
 
-        for s in mcpstore.enabled_servers():
-            if s["transport"] != "stdio" or not s.get("command") or s["name"] == "switchbay":
+        for s in mcpstore.enabled_servers(workspace):
+            if s["name"] == "switchbay":
+                continue
+            if s["transport"] == "http" and s.get("url"):
+                _write_http_mcp(cfg, s)
+                continue
+            if s["transport"] != "stdio" or not s.get("command"):
                 continue
             uargv = [grok_binary() or "grok", "mcp", "add", s["name"], s["command"]]
             for k, v in (s.get("env") or {}).items():

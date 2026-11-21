@@ -1448,6 +1448,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/intro", handle_intro_get)
     app.router.add_post("/api/intro/close", handle_intro_close)
     app.router.add_post("/api/reviews/close", handle_reviews_close)
+    from .federation.api import register as _register_federation_http
+    _register_federation_http(app)
     app.router.add_get("/api/walkthrough/status", handle_walkthrough_status)
     app.router.add_post("/api/walkthrough/done", handle_walkthrough_done)
     # Mars Hopper easter egg (vendored static game — not GitHub Pages)

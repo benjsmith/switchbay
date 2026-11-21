@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import WebPolicyToggle from "../widgets/WebPolicyToggle";
+import { ExclusionRules, PresidioSetting } from "./LeakageControls";
 
 type ProviderInfo = {
   auth_flow?: string;
@@ -2088,6 +2089,8 @@ function PermissionsPanel({ open }: { open: boolean }) {
         share this workspace policy. Codex has no per-call hook, so its
         native web_search stays off. Model API traffic is unrelated.
       </p>
+      <ExclusionRules />
+      <PresidioSetting />
     </section>
   );
 }

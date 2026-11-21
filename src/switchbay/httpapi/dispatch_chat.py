@@ -387,6 +387,20 @@ async def _dispatch_chat(
             system_prompt = f"{system_prompt}\n\n{short}"
     except Exception:  # noqa: BLE001
         pass
+    # Exclusion rules ride the hidden system prompt. A missing or
+    # unreadable rules file must not stop the turn.
+    try:
+        from switchbay.federation.exclusion import load as _exclusion_load, prompt_block
+        block = prompt_block(_exclusion_load(workspace))
+        if block:
+            system_prompt = f"{system_prompt}\n\n{block}"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from switchbay.federation.session_label import set_current
+        set_current(str(thread_id or run_id or "rail"))
+    except Exception:  # noqa: BLE001
+        pass
     executed_calls: dict[str, int] = {}
     loop_hits = 0
     wiki_cites: list[str] = []

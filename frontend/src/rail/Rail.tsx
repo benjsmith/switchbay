@@ -12,6 +12,7 @@ import { registerChord } from "../keys";
 import { useComposerDraft } from "../lib/composerDraft";
 import { attachmentsPending, planComposerSubmit, uploadChatAttachment } from "../lib/imagePaste";
 import WebPolicyToggle from "../widgets/WebPolicyToggle";
+import { SessionBadge } from "../layout/LeakageControls";
 import {
   PendingImageChips,
   clearPendingImages,
@@ -802,6 +803,7 @@ export default function Rail({
     <>
       <div className="sy-rail-head">
         <span>RAIL</span>
+        <SessionBadge />
         <span style={{ flex: 1 }} />
         <WebPolicyToggle compact />
         <ProviderPicker />

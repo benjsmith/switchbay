@@ -99,6 +99,9 @@ def _sanitise(e: Any) -> dict[str, Any] | None:
         headers = e.get("headers")
         out["headers"] = (
             {str(k): str(v) for k, v in headers.items()} if isinstance(headers, dict) else {})
+    allowed = e.get("allowed_workspaces")
+    if isinstance(allowed, list):
+        out["allowed_workspaces"] = [str(item) for item in allowed if str(item).strip()]
     return out
 
 
@@ -106,9 +109,35 @@ def _save(servers: list[dict[str, Any]]) -> None:
     atomicio.write_json_atomic(_path(), servers)
 
 
-def enabled_servers() -> list[dict[str, Any]]:
-    """Only the servers that should be fanned into the CLIs."""
-    return [s for s in load() if s.get("enabled")]
+def _shared_workspace(workspace: Path) -> bool:
+    return (workspace / ".workbench" / "share.json").is_file()
+
+
+def enabled_servers(workspace: Path | None = None) -> list[dict[str, Any]]:
+    """Servers to fan into a CLI.
+
+    With no workspace, every enabled server is returned (the historical
+    user-global list). With a workspace, a server that names
+    ``allowed_workspaces`` is included only for those paths. A server
+    with no binding is still included on a private workspace, and is
+    left out of a workspace that has been published (``.workbench/share.json``),
+    so a personal server is not offered inside a shared tree.
+    """
+    rows = [s for s in load() if s.get("enabled")]
+    if workspace is None:
+        return rows
+    resolved = str(workspace.resolve())
+    shared = _shared_workspace(workspace)
+    kept = []
+    for server in rows:
+        allowed = server.get("allowed_workspaces") or []
+        if allowed:
+            if resolved in {str(Path(item).expanduser()) for item in allowed}:
+                kept.append(server)
+            continue
+        if not shared:
+            kept.append(server)
+    return kept
 
 
 # ── Verify (real MCP initialize handshake) ─────────────────────────
@@ -254,11 +283,11 @@ def set_enabled(name: str, enabled: bool) -> bool:
 # ── Fan-out helpers (per-CLI config shapes) ────────────────────────
 
 
-def as_claude_mcp_servers() -> dict[str, dict[str, Any]]:
+def as_claude_mcp_servers(workspace: Path | None = None) -> dict[str, dict[str, Any]]:
     """Entries for claude-code's `mcpServers` JSON (merged alongside the
     switchbay server in build_mcp_config)."""
     out: dict[str, dict[str, Any]] = {}
-    for s in enabled_servers():
+    for s in enabled_servers(workspace):
         if s["transport"] == "stdio" and s.get("command"):
             out[s["name"]] = {"command": s["command"], "args": s.get("args", []),
                               "env": s.get("env", {})}

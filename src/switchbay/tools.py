@@ -2354,6 +2354,11 @@ def _resolve_wiki_page(workspace: Path, ref: str) -> tuple[str, Path] | None:
 
 
 def _search_wiki(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    if not payload.get("_local_only"):
+        from .federation.query import federated_search
+        federated = federated_search(workspace, payload)
+        if federated is not None:
+            return federated
     query = str(payload.get("query") or "").strip()
     if not query:
         return {"error": "query is required"}
@@ -2395,6 +2400,10 @@ def _search_wiki(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _read_wiki_page(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
+    from .federation.query import federated_read
+    remote = federated_read(workspace, payload)
+    if remote is not None:
+        return remote
     hit = _resolve_wiki_page(workspace, str(payload.get("page") or ""))
     if hit is None:
         return {"error": f"no wiki page matching {payload.get('page')!r} — try search_wiki"}
@@ -2560,7 +2569,11 @@ def _graph_index(workspace: Path) -> _GraphIndex:
 def _wiki_neighbors(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     """Multi-hop wikilink neighbourhood (BFS to `hops`, both directions),
     with per-neighbour distance + type. `hops=1` reproduces the old
-    single-hop behaviour."""
+    single-hop behaviour. A mount:path walks that graph only."""
+    from .federation.query import federated_neighbors
+    remote = federated_neighbors(workspace, payload)
+    if remote is not None:
+        return remote
     hit = _resolve_wiki_page(workspace, str(payload.get("page") or ""))
     if hit is None:
         return {"error": f"no wiki page matching {payload.get('page')!r} — try search_wiki"}
@@ -2598,7 +2611,12 @@ def _wiki_neighbors(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 def _wiki_path(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     """Shortest wikilink path between two pages (undirected connectivity),
-    so the agent can see HOW two concepts relate. Returns the page chain."""
+    so the agent can see HOW two concepts relate. Returns the page chain.
+    Both ends must be on the same mount."""
+    from .federation.query import federated_path
+    remote = federated_path(workspace, payload)
+    if remote is not None:
+        return remote
     ha = _resolve_wiki_page(workspace, str(payload.get("from") or payload.get("page_a") or ""))
     hb = _resolve_wiki_page(workspace, str(payload.get("to") or payload.get("page_b") or ""))
     if ha is None or hb is None:
@@ -2687,6 +2705,7 @@ register(Tool(
         "properties": {
             "query": {"type": "string", "description": "Keywords, e.g. 'transformer attention scaling'."},
             "limit": {"type": "integer", "description": "Max results (default 8, cap 25)."},
+            "graphs": {"description": "Mount ids, or 'all'. Default is the workspace read_default (local)."},
         },
     },
     handler=_search_wiki,
@@ -2703,7 +2722,9 @@ register(Tool(
         "type": "object",
         "required": ["page"],
         "properties": {
-            "page": {"type": "string", "description": "Page path, wikilink target, stem, or title."},
+            "page": {"type": "string", "description": "Page path, wikilink target, stem, title, or mount:path."},
+            "graphs": {"description": "Ignored for a bare path (that is local). Use mount:path for a remote page."},
+            "rev": {"type": "string", "description": "Required revision for a live page, when you have one."},
         },
     },
     handler=_read_wiki_page,
@@ -3032,3 +3053,5 @@ from . import workspace_plan as _workspace_plan  # noqa: E402
 from . import orchestration_report as _orchestration_report  # noqa: E402
 _workspace_plan.register_tools()
 _orchestration_report.register_tools()
+from .federation.tools_reg import register_federated_tools as _register_federated_tools  # noqa: E402
+_register_federated_tools()

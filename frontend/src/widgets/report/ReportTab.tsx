@@ -25,6 +25,14 @@ type Proposal = {
   scaffold?: boolean;
 };
 
+type ClassItem = {
+  id: string;
+  title: string;
+  kind: string;
+  source: string;
+  classification?: string;
+};
+
 /**
  * Reviews tab — proposed wiki pages + optional rich HTML reports.
  * Multi-page queue with accept / reject / comments so review is a
@@ -43,6 +51,8 @@ export default function ReportTab() {
     },
   );
   const [html, setHtml] = useState<string | null>(null);
+  const [unclassified, setUnclassified] = useState<ClassItem[]>([]);
+  const [labelChoice, setLabelChoice] = useState("internal");
 
   const loadQueue = useCallback(async () => {
     try {
@@ -51,6 +61,11 @@ export default function ReportTab() {
       const body = (await r.json()) as { proposals?: Proposal[] };
       const next = body.proposals ?? [];
       setQueue(next);
+      const cr = await fetch("/api/classification/queue");
+      if (cr.ok) {
+        const cbody = (await cr.json()) as { items?: ClassItem[] };
+        setUnclassified(cbody.items ?? []);
+      }
       setIdx((i) => Math.min(i, Math.max(0, next.length - 1)));
     } catch { /* best-effort */ }
   }, []);
@@ -160,11 +175,52 @@ export default function ReportTab() {
     } catch { /* hello broadcast will drop the tab */ }
   };
 
+  const classify = async (id: string) => {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await fetch("/api/classification/decide", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, label: labelChoice }),
+      });
+      const b = await r.json().catch(() => ({} as { error?: string }));
+      if (!r.ok) { setErr(b.error || `HTTP ${r.status}`); return; }
+      await loadQueue();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const classList = unclassified.length > 0 && (
+    <div className="sy-class-review" data-testid="classification-review">
+      <p>These items arrived without a label. Choose one before relying on them.</p>
+      {unclassified.map((item) => (
+        <div key={item.id} className="sy-settings-perm-row">
+          <span>{item.title}</span>
+          <span className="sy-settings-blurb">{item.source}</span>
+          <select aria-label={`Label for ${item.title}`} value={labelChoice} onChange={(e) => setLabelChoice(e.target.value)}>
+            <option value="public">public</option>
+            <option value="internal">internal</option>
+            <option value="confidential">confidential</option>
+            <option value="restricted">restricted</option>
+          </select>
+          <button type="button" className="sy-confirm-btn" disabled={busy} onClick={() => void classify(item.id)}>
+            Set label
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+
   if (!current && !report) {
     return (
       <div className="sy-report-empty">
         <div className="sy-report-empty-inner">
           <div className="sy-report-glyph">↗</div>
+          {classList}
           <p>
             Reviews land here — proposed wiki pages and rich reports.
             Kick off a background curate when you want the wiki to
@@ -231,6 +287,7 @@ export default function ReportTab() {
         </div>
       </div>
       {err && <div className="sy-report-error">{err}</div>}
+      {classList}
       {current && (
         <div className="sy-review-body">
           <div className="sy-review-meta">

@@ -29,6 +29,12 @@ dependencies = [
     # (2025-10-10) is the current release, has cp313 wheels, and is
     # not yanked. No wheels past Python 3.13.
     "kuzu==0.11.3",
+    # JWT checks. On Linux this already arrived through keyring's
+    # secretstorage extra; macOS and Windows never installed it, so
+    # the token tests failed there. 50.0.2 (2026-09-30) is the newest
+    # release old enough to take, is not yanked, and has no published
+    # advisories. 47.0.0, the copy the lock already had, does.
+    "cryptography==50.0.2",
 ]
 # NOTE: `sentence-transformers` (which pulls PyTorch + the ~450 MB ML
 # stack) is NOT a base dependency — it lives in the `semantic`
