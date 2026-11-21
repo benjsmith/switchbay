@@ -298,6 +298,13 @@ export const SWITCHBAY_API_RESERVED_PREFIXES = [
   "/api/watch-folders",
   "/api/curation",
   "/api/curator-profile",
+  // Leakage controls. These are Switch Bay routes; the embed fetch
+  // shim must not send them to /embed/ce (that 404s and the settings
+  // panels report a failed save).
+  "/api/exclusion-rules",
+  "/api/public-write",
+  "/api/classification",
+  "/api/session",
   // Chat / rail / agents
   "/api/llm",
   "/api/models",
