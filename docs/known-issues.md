@@ -13,7 +13,7 @@ page only keeps the one-line workarounds.
 | Area | Issue | Workaround |
 |------|-------|-----------|
 | Graph | A page deleted on disk can linger in the graph until the next rebuild. | Run `/rescan` (slash command or button) to force a cold rebuild. |
-| Plots | Plot specs still live in `.workbench/plots/`; Save as figure now writes a CE `wiki/figures/` page with caption + provenance. | Use Save as figure for wiki/graph wiring. |
+| Plots | The Plot tab renders the live Vega-Lite spec. The figure page's image is a preview until you use Save as figure, which replaces it with the rendered chart. | Save as figure when you want the wiki image to match the chart on screen. |
 | Packs | With many pack tabs open the tab strip scrolls; there's no overflow dropdown yet. | Scroll the strip horizontally. |
 | Codex provider | No per-call rail card (upstream has no PreToolUse). MCP works. | Claude Code or Grok Build for rail cards. Details: [`providers.md`](providers.md). |
 | Muse Code | Preview: docs-only spawn, no MCP, no rail card, `--disable-approval`. Contributor-tier models may train on your prompts. | Prefer `muse-spark-1.2`. Use Claude Code / Grok Build for cards + SB tools. Details: [`providers.md`](providers.md). |

@@ -39,7 +39,7 @@ from . import (
     demo_workspace,
     duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, okstratr_harness, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
-    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, ingest_run_drain, packstore, pasteboard, permissions, plots,
+    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, ingest_run_drain, packstore, pasteboard, permissions, plot_gallery, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
@@ -3042,7 +3042,44 @@ async def handle_sheet_save_csv(request: web.Request) -> web.Response:
 
 async def handle_plots_list(request: web.Request) -> web.Response:
     workspace: Path = request.app["workspace"]
-    return web.json_response({"plots": plots.list_plots(workspace)})
+
+    def _build() -> tuple[list[str], dict[str, Any]]:
+        created = plot_gallery.backfill_figure_docs(workspace)
+        return created, plot_gallery.gallery(workspace)
+
+    created, data = await asyncio.to_thread(_build)
+    if created:
+        await _broadcast(request.app, protocol.files_changed())
+    return web.json_response(data)
+
+
+async def handle_plot_thumb(request: web.Request) -> web.Response:
+    """Small cached PNG for a generated plot. Not the full-size asset."""
+    workspace: Path = request.app["workspace"]
+    plot_id = request.match_info.get("plot_id", "").strip()
+    png = await asyncio.to_thread(plot_gallery.thumbnail_bytes, workspace, plot_id)
+    if not png:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(
+        body=png,
+        content_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=60",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def handle_plot_figure(request: web.Request) -> web.Response:
+    """Figure page written for a generated plot."""
+    workspace: Path = request.app["workspace"]
+    plot_id = request.query.get("id", "").strip()
+    if not plot_id:
+        return web.json_response({"error": "id required"}, status=400)
+    doc = await asyncio.to_thread(plot_gallery.figure_doc_for_plot, workspace, plot_id)
+    if doc is None:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(doc)
 
 
 async def handle_plot_get(request: web.Request) -> web.Response:
@@ -17743,6 +17780,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/plot/command", handle_plot_command)
     app.router.add_post("/api/sketch/command", handle_sketch_command)
     app.router.add_get("/api/plots", handle_plots_list)
+    app.router.add_get("/api/plots/{plot_id}/thumb", handle_plot_thumb)
+    app.router.add_get("/api/plot/figure", handle_plot_figure)
     app.router.add_get("/api/plot", handle_plot_get)
     app.router.add_post("/api/plot", handle_plot_post)
     app.router.add_delete("/api/plot", handle_plot_delete)

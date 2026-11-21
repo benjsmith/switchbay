@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTabs } from "../../center/TabsContext";
+import { useSelection } from "../../selection/SelectionContext";
 import { notifyHtmlDeckOpen } from "../htmldeck/htmlDeckOpen";
 import { notifyReportDocOpen } from "./reportDocOpen";
 
@@ -19,7 +20,8 @@ type LibraryPayload = {
   reports: LibItem[];
   slideshows: LibItem[];
   worksheets: LibItem[];
-  counts: { reports: number; slideshows: number; worksheets: number };
+  plots?: LibItem[];
+  counts: { reports: number; slideshows: number; worksheets: number; plots?: number };
 };
 
 const VISIBLE = 3;
@@ -83,10 +85,14 @@ function CarouselRow({
             const thumb = thumbs[ti];
             const sheets = item.sheet_names || [];
             return (
-              <article key={`${item.kind}:${item.slug}`} className="sy-lib-card">
+              <article key={`${item.kind}:${item.slug}`} className="sy-lib-card" data-kind={item.kind}>
                 <div className="sy-lib-thumb">
                   {thumb ? (
-                    <img src={thumb} alt="" />
+                    <img
+                      src={thumb}
+                      alt=""
+                      className={item.kind === "plot" ? "sy-lib-thumb-plot" : undefined}
+                    />
                   ) : (
                     <div className="sy-lib-monogram">
                       {(item.title || item.slug).slice(0, 1).toUpperCase()}
@@ -153,6 +159,7 @@ function CarouselRow({
 
 export default function LibraryTab() {
   const { switchToKind } = useTabs();
+  const { setSelection } = useSelection();
   const [data, setData] = useState<LibraryPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState("");
@@ -207,8 +214,11 @@ export default function LibraryTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slug: item.slug }),
       }).then(() => switchToKind("univer"));
+    } else if (item.kind === "plot") {
+      setSelection({ kind: "plot", id: item.slug, name: item.title });
+      switchToKind("vega");
     }
-  }, [switchToKind]);
+  }, [setSelection, switchToKind]);
 
   const filtered = useMemo(() => {
     if (!data) return null;
@@ -218,6 +228,7 @@ export default function LibraryTab() {
       reports: byKind("report"),
       slideshows: byKind("slideshow"),
       worksheets: byKind("worksheet"),
+      plots: byKind("plot"),
       counts: data.counts,
     };
   }, [data, hits]);
@@ -228,8 +239,8 @@ export default function LibraryTab() {
         <div>
           <h1>Library</h1>
           <p className="sy-lib-sub">
-            Durable reports, slideshows, and worksheets — sealed packages
-            outside the wiki.
+            Reports, slideshows, worksheets, and plots generated in this
+            workspace.
           </p>
         </div>
         <input
@@ -245,6 +256,12 @@ export default function LibraryTab() {
       {!filtered && !error && <div className="sy-lib-empty">loading…</div>}
       {filtered && (
         <>
+          <CarouselRow
+            label="Plots"
+            items={filtered.plots || []}
+            onOpen={openItem}
+            emptyHint="No generated plots yet. Charts you create are listed here; figures extracted from sources stay on the Plot tab."
+          />
           <CarouselRow
             label="Reports"
             items={filtered.reports}
