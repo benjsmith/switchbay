@@ -27,3 +27,5 @@ State directory:
 A snapshot is a second copy of a remote wiki, under `mounts/`, pinned at a revision. Deleting the mount row does not delete that copy. A live mount keeps one JSON file per page per revision under `graph-cache/`. Both trees are mode `0700` / `0600`.
 
 Enterprise refuses a serve path, an add, a switch, and the default home when the detector in [Controls](controls.md) says the folder is synced, unless `paths.trust_boundary` or `allow_synced_workspaces` says otherwise. Those checks do not disable the sync client.
+
+A slideshow PDF defaults to `<workspace>/vault/exports/<slug>.pdf`. A chosen path is written there instead. A path the sync detector names, outside `paths.trust_boundary`, needs the destination dialog unless `exports.forbid_outside_boundary` is true, in which case it is refused. Certificate encryption also writes `<pdf path>.wrap.json` next to the PDF, mode `0600`, holding the RSA-OAEP wrapped password. The PDF password itself is not written to disk. The audit log records the export. It does not contain the PDF bytes or the password.

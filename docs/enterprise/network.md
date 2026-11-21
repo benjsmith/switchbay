@@ -34,6 +34,8 @@ Nothing leaves because the daemon is running.
 
 **Sources.** `call_source` POSTs to the configured URL through the wrapped HTTP client, so enterprise egress applies.
 
+**PDF labeling.** `exports.purview.endpoint`, when set, is called once per slideshow PDF export (4 second timeout, no retry). Enterprise egress applies to that URL. The request body is the labelled PDF. If the host is not allowed, or the call fails, the export is refused and no file is written. With the endpoint empty, PDF export does not leave the machine.
+
 **Comms, media, browser, skills.** Off in enterprise except `install_skills_npx`, which defaults on. `npx` / `uvx` are subprocesses. `skills.allowlist` restricts the ref. `comms_streams`, `media_generation`, and `browser_use` are the flags that turn the others on.
 
 **Keychain.** Local. A missing keychain stores a graph token in a `0600` file. Provider API keys are not written to a file. Saving them fails until a keychain works.

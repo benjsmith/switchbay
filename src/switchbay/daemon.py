@@ -598,6 +598,8 @@ from .httpapi.slideshows import (
     handle_deck_open,
     handle_slideshow_close,
     _pdf_render_error,
+    _render_slideshow_pdf,
+    handle_export_policy,
     handle_slideshow_pdf,
 )
 
@@ -1422,6 +1424,7 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/slideshows", handle_decks_list)
     app.router.add_post("/api/slideshows/open", handle_deck_open)
     app.router.add_post("/api/slideshows/close", handle_slideshow_close)
+    app.router.add_get("/api/exports/policy", handle_export_policy)
     app.router.add_post("/api/slideshows/pdf", handle_slideshow_pdf)
     app.router.add_post("/api/slideshows/from-md", handle_slideshow_from_md)
     app.router.add_get("/api/slideshows/{slug}", handle_deck_file)

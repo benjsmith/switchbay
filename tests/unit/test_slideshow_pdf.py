@@ -29,6 +29,12 @@ def test_pdf_renderer_script_exists_and_prints_16x9():
 
 @pytest.mark.asyncio
 async def test_pdf_handler_writes_vault_export(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("SWITCHBAY_STATE_DIR", str(tmp_path / "state"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("SWITCHBAY_ADMIN_POLICY", str(tmp_path / "admin.json"))
+    (tmp_path / "admin.json").write_text("{}\n", encoding="utf-8")
+    from switchbay import admin_policy
+    admin_policy.reset_cache()
     slideshow_html.write_slideshow(
         tmp_path,
         "demo",
@@ -41,8 +47,12 @@ async def test_pdf_handler_writes_vault_export(tmp_path: Path, monkeypatch):
         returncode = 0
 
         async def communicate(self):
+            from pypdf import PdfWriter
             staging.parent.mkdir(parents=True, exist_ok=True)
-            staging.write_bytes(b"%PDF-1.4 test\n")
+            writer = PdfWriter()
+            writer.add_blank_page(width=960, height=540)
+            with staging.open("wb") as handle:
+                writer.write(handle)
             return b"ok", None
 
         def kill(self) -> None:
@@ -73,5 +83,12 @@ async def test_pdf_handler_writes_vault_export(tmp_path: Path, monkeypatch):
             assert response.status == 200, body
             assert body["ok"] is True
             assert body["path"] == "vault/exports/demo.pdf"
-    assert (tmp_path / "vault" / "exports" / "demo.pdf").is_file()
+    written = tmp_path / "vault" / "exports" / "demo.pdf"
+    assert written.is_file()
     assert not staging.exists()
+    from pypdf import PdfReader
+    reader = PdfReader(str(written))
+    assert reader.metadata is not None
+    assert str(reader.metadata.get("/SwitchbayLabel") or "") == "public"
+    assert reader.xmp_metadata is not None
+    assert b"urn:switchbay:classification:1.0" in reader.xmp_metadata.stream.get_data()

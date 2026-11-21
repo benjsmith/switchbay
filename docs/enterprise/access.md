@@ -24,6 +24,8 @@ A chat turn stores its session id for the workspace (`sessions/<hash>/labels.jso
 
 A `read` / `write` boolean in the tool result is used as returned. A Unity-style `privileges` list treats `SELECT`, `USE_CATALOG`, `USE_SCHEMA`, `READ`, and `BROWSE` as read, and `MODIFY`, `ALL_PRIVILEGES`, `OWNERSHIP`, and `WRITE` as write. `policy_outcome: denied` is a refusal. No configured source, a source without an `http` URL, or a transport error is a refusal for those prefixes.
 
+Slideshow PDF export uses the same call. `export: false` in the tool result refuses the export even when read is allowed. `deny:` refuses it. `readonly:` does not. A catalog error refuses the export.
+
 Search merges the same item from more than one graph onto an `also` list. An `also` entry whose `source_ref` fails the read check is dropped.
 
 Any other `source_ref` prefix is the whole-graph right. Switch Bay does not invent a catalog for it.

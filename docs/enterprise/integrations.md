@@ -45,3 +45,13 @@ The label is the source row's `classification` if it is one of the four labels, 
 AWS Context rows are candidates. The adapter does not create wiki pages. AWS Quick's graph stays in the AWS Quick account. This client searches it. It does not store a copy of that graph except the capture, and a snapshot the user takes.
 
 User MCP servers in Settings are a different list. They are handed to coding CLIs. Those CLIs are off in the enterprise profile until a provider is enabled. A personal server with no `allowed_workspaces` is omitted from a workspace that has `.workbench/share.json`. Grok records an HTTP MCP URL, including headers, under `<workspace>/.grok/`, which publish excludes.
+
+## Purview labels on PDF export
+
+Switch Bay does not embed the Microsoft Information Protection SDK. There is no maintained Python build of that SDK that can be pinned here, and applying RMS protection needs the tenant's protection service.
+
+When `exports.purview.labels` has a GUID for the file's label, the PDF's Info dict and XMP `pdfx` properties carry the `MSIP_Label_<guid>_*` keys documented in [Controls](controls.md). DLP tools that read those keys can see the label. The keys do not encrypt the PDF and do not apply the label's protection policy.
+
+When `exports.purview.endpoint` is set, that URL is the labeling service. HTTP receives the PDF and must return a PDF. MCP (`transport: mcp`, or a URL ending in `/mcp`) is `tools/call` of `apply_sensitivity_label`; the result's `pdf_base64` is the file that is stored. The stored bytes are the service's response, so RMS or other protection exists only when that service applies it. A configured endpoint that is unreachable, blocked by egress, or not a PDF refuses the export. The timeout is 4 seconds. Switch Bay does not retry it and does not fall back to an unlabelled file.
+
+Without an endpoint, optional AES-256 password or recipient-certificate encryption is a separate control. It is not Purview protection. See [Controls](controls.md).

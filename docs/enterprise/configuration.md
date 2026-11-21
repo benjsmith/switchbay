@@ -12,7 +12,7 @@ Template: [`config/admin.enterprise.json`](../../config/admin.enterprise.json). 
 
 `SWITCHBAY_PROFILE=open` or `enterprise` selects the profile when no baked file has locked it. A baked `admin.baked.json` makes a later overlay tighten-only for feature flags and providers. The tester file from `--enterprise-user` has no baked file, so it is not tighten-only.
 
-The loader copies `profile`, `features`, `providers`, `copilot`, `network`, `mcp`, `skills`, `paths`, `updates`, `comms`, `orchestration`, and, when the file contains them, `graph_mounts`, `sources`, `public_writes`, and `classification_review`. A missing federation section leaves the profile default in place. Baked and overlay dictionaries are merged, overlay last.
+The loader copies `profile`, `features`, `providers`, `copilot`, `network`, `mcp`, `skills`, `paths`, `updates`, `comms`, `orchestration`, and, when the file contains them, `graph_mounts`, `sources`, `public_writes`, `classification_review`, and `exports`. A missing federation section leaves the profile default in place. Baked and overlay dictionaries are merged, overlay last.
 
 ## Profile defaults that matter here
 
@@ -79,6 +79,24 @@ Missing provider ids are on in the open profile. In enterprise they are on only 
 `orchestration.max_live_workers`, when a positive integer, caps live seats. A baked value can only be lowered by an overlay. The floor is 4 and the hard maximum is 8.
 
 `comms` is applied when `comms_streams` is on. `require_classification` defaults to on in enterprise. A baked enterprise file forces it on. Headers, secret names, and tenant label ids are in the [packaging guide](../enterprise.md#comms-classification-and-tenant-labels).
+
+## Exports
+
+Absent `exports` uses these values in both profiles. The enterprise template sets the same values so an admin can see the keys.
+
+| Key | Default |
+|---|---|
+| `exports.clearance` | `restricted` |
+| `exports.max_ceiling` | `restricted` |
+| `exports.clearance_by_user` | `{}`. OS user name to a label. When the current user is present, that label replaces `clearance` |
+| `exports.forbid_outside_boundary` | false |
+| `exports.purview.site_id` | empty |
+| `exports.purview.endpoint` | empty. Non-empty means every PDF export calls it and fails closed when it does not return a PDF |
+| `exports.purview.transport` | empty. `http`, or `mcp` when the URL ends in `/mcp` |
+| `exports.purview.source_id` | empty. Keychain id for the MCP bearer token |
+| `exports.purview.labels` | `{}`. Switchbay label to a Purview label GUID |
+
+An unknown `clearance` or `max_ceiling` is treated as `public`. The effective ceiling is the lower of the two. PDF behaviour is in [Controls](controls.md).
 
 ## Workspace file
 

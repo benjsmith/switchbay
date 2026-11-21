@@ -61,9 +61,25 @@ A live `conflict` response asks curiosity-merge's `page_merge.py` when the ances
 
 `declassify_page` sets the page to `public` and `declassified: true`. The only check is edit access on that page. A `readonly:` or `deny:` `source_ref` refuses the call. There is no reason field, no second approver, and no enterprise admin switch. The audit row has `user`, `ts`, `path`, `before`, and `after`. The overlap warning is unchanged: it names shared numbers or phrases and does not undo the write.
 
-## Export cap
+## Export
 
-GitHub publish and slideshow PDF export call the same check. If the active session label is above `public`, the export is refused: `this chat is <label>; export is capped at that label`. Publish also refuses any `.md`, `.txt`, `.yaml`, or `.yml` file under `wiki/` or `vault/` whose effective label is above `public`.
+GitHub publish refuses when the active session label is above `public`: `this chat is <label>; export is capped at that label`. It also refuses any `.md`, `.txt`, `.yaml`, or `.yml` file under `wiki/` or `vault/` whose effective label is above `public`.
+
+Slideshow PDF export does not use that cap. The file label is the higher of the session floor and the labels on the included slides, citations, and `data-classification` attributes. A confidential session writes a confidential PDF in one click. The call is refused when:
+
+- that label is above `exports.clearance` for the OS user (`exports.clearance_by_user` when set for that user) or above `exports.max_ceiling`, whichever is lower. An unknown value in either setting is treated as `public`.
+- a slide `source_ref` is `deny:`, the catalog returns `export: false` or denies the read, or the catalog call errors. `readonly:` may be exported. Work IQ uses `fetch`. Unity Catalog uses `get_permissions`.
+- an exclusion rule's decision is Deny and its text occurs in the export action (slug, label, source refs, slide headings and bodies). Ask does not stop the export.
+
+The default destination is `vault/exports/<slug>.pdf`. A destination the sync detector names (iCloud, OneDrive, Dropbox, Google Drive), and that is not under `paths.trust_boundary`, is `outside`. The response is `needs_dialog` with choices `ok`, `always`, and `cancel` — the same three choices as the public-write dialog. OK writes this file. Always allow stores a global rule in the config dir (`export-destination-rules.json`) and later outside destinations skip the dialog. Cancel writes `refused_write` and no file. A path inside the workspace or under `paths.trust_boundary` is `inside` and is not asked. `exports.forbid_outside_boundary` true refuses outside destinations with no dialog, including after Always allow.
+
+A label above `public` is drawn as a header band and a footer band on every page (`SWITCHBAY` plus the label). `public` has no band. Info-dict and XMP metadata are written for every label: label, workspace path, OS user, UTC timestamp, and Switchbay version. The XMP namespace is `urn:switchbay:classification:1.0`. The same values are `pdfx:Switchbay*` custom properties.
+
+`exports.purview.labels` maps a Switchbay label to a Purview label GUID. When the GUID is set, the Info dict and XMP also carry `MSIP_Label_<guid>_Enabled`, `Method` (`Privileged`), `Name`, `SetDate`, `ContentBits`, `ActionId`, and `SiteId` when `exports.purview.site_id` is set. `ContentBits` is 3 when the bands are drawn (header and footer) and adds 8 when local AES-256 encryption is applied. This metadata does not encrypt the file.
+
+`exports.purview.endpoint`, when non-empty, receives the labelled PDF and the stored file is only the PDF it returns. `transport` `http` (the default unless the URL ends in `/mcp`) is a POST of the PDF bytes with `X-Switchbay-Label`, `X-Switchbay-Label-Id`, `X-Switchbay-Site-Id`, `X-Switchbay-User`, `X-Switchbay-Workspace`, and `X-Switchbay-Version`. `transport` `mcp` calls `apply_sensitivity_label` with `pdf_base64` and reads `pdf_base64` from the tool result. The bearer token is the keychain entry for `exports.purview.source_id` when that id is set. The timeout is 4 seconds, the same as a catalog call, with no retry. Enterprise egress applies. A non-PDF body, a non-2xx status, a timeout, a transport error, or an egress refusal is `refused_write` and no file is written. Local password or certificate encryption is not applied when the endpoint is set.
+
+With no endpoint, the save request may include `encrypt.mode` `password` or `certificate`. Neither is required. Password mode is PDF standard security, revision 6, AES-256 (`/CFM /AESV3`, key length 256). Certificate mode generates a random password, encrypts the PDF the same way, and writes `<file>.wrap.json` (mode `0600`) containing the password wrapped with RSA-OAEP-SHA256 to the recipient RSA public key or certificate (2048 bits or more). That is not Adobe PubSec and not RMS. The password is not stored and is not in the audit log.
 
 ## Caches
 

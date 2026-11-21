@@ -8,6 +8,7 @@ and a deterministic /api + /ws surface.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import os
 import pathlib
@@ -122,6 +123,8 @@ def _tabs() -> list[dict[str, Any]]:
         tabs.append({"id": "graph", "title": "Graph", "kind": "graph", "source": "core"})
     if STATE.get("show_reviews"):
         tabs.append({"id": "reviews", "title": "Reviews", "kind": "report", "source": "core"})
+    if STATE.get("show_slideshow"):
+        tabs.append({"id": "slideshow", "title": "Slideshow", "kind": "html-deck", "source": "core"})
     return tabs
 
 
@@ -626,13 +629,132 @@ async def handle_public_write(request: web.Request) -> web.Response:
     return web.json_response({"ok": True})
 
 
+def _boot_export_env() -> None:
+    """Keep e2e audit, policy, and destination rules out of the user profile."""
+    os.environ.setdefault("SWITCHBAY_STATE_DIR", "/tmp/switchbay-e2e-state")
+    os.environ.setdefault("XDG_CONFIG_HOME", "/tmp/switchbay-e2e-config")
+    os.environ.setdefault("SWITCHBAY_ADMIN_POLICY", "/tmp/switchbay-e2e-admin.json")
+    path = pathlib.Path(os.environ["SWITCHBAY_ADMIN_POLICY"])
+    path.write_text("{}\n", encoding="utf-8")
+
+
+def _write_admin(data: dict[str, Any]) -> None:
+    path = pathlib.Path(os.environ["SWITCHBAY_ADMIN_POLICY"])
+    path.write_text(json.dumps(data) + "\n", encoding="utf-8")
+    from switchbay import admin_policy
+    admin_policy.reset_cache()
+
+
+def _apply_session(label: str) -> None:
+    from switchbay.federation import session_label
+    workspace = pathlib.Path(STATE["workspace"])
+    workspace.mkdir(parents=True, exist_ok=True)
+    session_label.set_current("e2e", workspace)
+    stored = label if label in ("public", "internal", "confidential", "restricted") else "public"
+    data = session_label._load(workspace)
+    data["e2e"] = stored
+    data[session_label._ACTIVE] = "e2e"
+    session_label._save(workspace, data)
+
+
+def _write_slideshow(spec: dict[str, Any]) -> None:
+    slug = str(spec.get("slug") or "demo")
+    folder = pathlib.Path(STATE["workspace"]) / "slideshows" / slug
+    folder.mkdir(parents=True, exist_ok=True)
+    (folder / "index.html").write_text("<!doctype html><title>deck</title><p>slide</p>", encoding="utf-8")
+    payload = {"title": spec.get("title") or slug, "slides": spec.get("slides") or []}
+    (folder / "deck.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _reset_export_files() -> None:
+    from switchbay.federation import audit
+    workspace = pathlib.Path(STATE["workspace"])
+    path = audit._path(workspace)
+    if path.is_file():
+        path.unlink()
+    rules = pathlib.Path(os.environ["XDG_CONFIG_HOME"]) / "switchbay" / "export-destination-rules.json"
+    if rules.is_file():
+        rules.unlink()
+    STATE["label_calls"] = 0
+    STATE["label_id"] = ""
+    STATE["label_name"] = ""
+
+
 async def handle_e2e_seed(request: web.Request) -> web.Response:
     body = await request.json()
     if isinstance(body, dict):
-        for key in ("session_label", "show_reviews", "class_items", "exclusion_rules", "presidio_enabled"):
+        for key in ("session_label", "show_reviews", "class_items", "exclusion_rules", "presidio_enabled", "show_slideshow"):
             if key in body:
                 STATE[key] = body[key]
+        if body.get("reset_exports"):
+            _reset_export_files()
+        if "admin" in body and isinstance(body["admin"], dict):
+            _write_admin(body["admin"])
+        if "session_label" in body:
+            _apply_session(str(body.get("session_label") or "public"))
+        if isinstance(body.get("slideshow"), dict):
+            _write_slideshow(body["slideshow"])
+            STATE["show_slideshow"] = True
     return web.json_response({"ok": True, "e2e_mock": True})
+
+
+async def handle_export_policy(_request: web.Request) -> web.Response:
+    from switchbay import pdf_export
+    return web.json_response(pdf_export.policy_view())
+
+
+async def handle_e2e_audit(_request: web.Request) -> web.Response:
+    from switchbay.federation import audit
+    return web.json_response({"rows": audit.read(pathlib.Path(STATE["workspace"]))})
+
+
+async def handle_e2e_label(request: web.Request) -> web.Response:
+    data = await request.read()
+    STATE["label_calls"] = int(STATE.get("label_calls") or 0) + 1
+    STATE["label_name"] = request.headers.get("X-Switchbay-Label") or ""
+    STATE["label_id"] = request.headers.get("X-Switchbay-Label-Id") or ""
+    if STATE.get("label_fail"):
+        return web.Response(status=503, text="down")
+    return web.Response(body=data, content_type="application/pdf")
+
+
+async def handle_e2e_label_status(_request: web.Request) -> web.Response:
+    return web.json_response({
+        "calls": int(STATE.get("label_calls") or 0),
+        "label": STATE.get("label_name") or "",
+        "label_id": STATE.get("label_id") or "",
+    })
+
+
+async def handle_slideshow_file(_request: web.Request) -> web.Response:
+    return web.Response(text="<!doctype html><title>deck</title>", content_type="text/html")
+
+
+async def handle_slideshow_pdf(request: web.Request) -> web.Response:
+    """Real export rules on a blank PDF. The UI test does not launch Chromium to draw slides."""
+    import io
+
+    from pypdf import PdfWriter
+
+    from switchbay import pdf_export
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    workspace = pathlib.Path(STATE["workspace"])
+    decision = await asyncio.to_thread(
+        pdf_export.prepare, workspace, body if isinstance(body, dict) else {},
+    )
+    if decision["status"] != 200:
+        return web.json_response(decision["body"], status=decision["status"])
+    writer = PdfWriter()
+    writer.add_blank_page(width=960, height=540)
+    buf = io.BytesIO()
+    writer.write(buf)
+    outcome = await asyncio.to_thread(
+        pdf_export.finish, workspace, decision["body"], buf.getvalue(),
+    )
+    return web.json_response(outcome["body"], status=outcome["status"])
 
 
 def _gallery_ws() -> pathlib.Path:
@@ -862,6 +984,12 @@ def build_app(dist: pathlib.Path) -> web.Application:
 
     app.router.add_get("/api/health", handle_health)
     app.router.add_post("/api/e2e/seed", handle_e2e_seed)
+    app.router.add_get("/api/e2e/audit", handle_e2e_audit)
+    app.router.add_post("/api/e2e/label", handle_e2e_label)
+    app.router.add_get("/api/e2e/label-status", handle_e2e_label_status)
+    app.router.add_get("/api/exports/policy", handle_export_policy)
+    app.router.add_post("/api/slideshows/pdf", handle_slideshow_pdf)
+    app.router.add_get("/api/slideshows/{slug}/index.html", handle_slideshow_file)
     app.router.add_get("/api/session/label", handle_session_label)
     app.router.add_get("/api/exclusion-rules", handle_exclusion)
     app.router.add_put("/api/exclusion-rules", handle_exclusion)
@@ -905,6 +1033,7 @@ def build_app(dist: pathlib.Path) -> web.Application:
 
 
 def main() -> None:
+    _boot_export_env()
     p = argparse.ArgumentParser()
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=41765)

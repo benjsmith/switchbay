@@ -54,5 +54,23 @@
     "snapshot": "allowed",
     "capture_retention_days": 0
   },
-  "updates": { "repo": "benjsmith/switchbay", "include_skills": false }
+  "updates": { "repo": "benjsmith/switchbay", "include_skills": false },
+  "exports": {
+    "clearance": "restricted",
+    "max_ceiling": "restricted",
+    "clearance_by_user": {},
+    "forbid_outside_boundary": false,
+    "purview": {
+      "site_id": "",
+      "endpoint": "",
+      "transport": "",
+      "source_id": "",
+      "labels": {
+        "public": "",
+        "internal": "",
+        "confidential": "",
+        "restricted": ""
+      }
+    }
+  }
 }

@@ -12,7 +12,6 @@ from __future__ import annotations
 from pathlib import Path
 import asyncio
 import json
-import os
 from aiohttp import web
 from switchbay import html_decks
 from switchbay import protocol
@@ -98,23 +97,16 @@ def _pdf_render_error(detail: str) -> tuple[str, int]:
         return ("PDF renderer failed to spawn Node or Playwright.", 503)
     return ("PDF rendering failed", 500)
 
-async def handle_slideshow_pdf(request: web.Request) -> web.Response:
-    """Render every HTML slide to one 16:9 PDF page under vault/exports."""
+async def handle_export_policy(_request: web.Request) -> web.Response:
+    """Whether optional PDF encryption is offered. No label ids, no URL."""
+    from switchbay import pdf_export
+    return web.json_response(pdf_export.policy_view())
+
+
+async def _render_slideshow_pdf(request: web.Request, slug: str) -> bytes | web.Response:
+    """Playwright render of the slideshow. Bytes, or an error response."""
     from switchbay import runtime
     workspace: Path = request.app["workspace"]
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        body = {}
-    slug = str((body or {}).get("slug") or "").strip()
-    from switchbay.federation.session_label import export_block_reason
-    blocked_export = export_block_reason(workspace)
-    if blocked_export:
-        return web.json_response({"error": blocked_export}, status=403)
-    if not html_decks.is_valid_slug(slug):
-        return web.json_response({"error": "invalid slideshow slug"}, status=400)
-    if await asyncio.to_thread(html_decks.entry_html, workspace, slug) is None:
-        return web.json_response({"error": "slideshow not found"}, status=404)
     spawn_env = runtime.spawn_env()
     node = runtime.resolve_node(spawn_env)
     renderer = (
@@ -132,7 +124,6 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
         )
     exports = workspace / "vault" / "exports"
     await asyncio.to_thread(exports.mkdir, parents=True, exist_ok=True)
-    destination = exports / f"{slug}.pdf"
     temporary = exports / f".{slug}.rendering.pdf"
     port = int(request.app.get("daemon_port") or 8765)
     url = f"http://127.0.0.1:{port}/api/slideshows/{slug}/index.html"
@@ -162,7 +153,7 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
                 "error": msg,
                 "detail": detail or "Install the Playwright Chromium browser.",
             }, status=status)
-        await asyncio.to_thread(os.replace, temporary, destination)
+        return await asyncio.to_thread(temporary.read_bytes)
     except asyncio.TimeoutError:
         if proc is not None:
             proc.kill()
@@ -174,9 +165,30 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
     finally:
         if temporary.is_file():
             await asyncio.to_thread(temporary.unlink)
-    await _daemon_ns._broadcast(request.app, protocol.files_changed())
-    return web.json_response({
-        "ok": True,
-        "path": destination.relative_to(workspace).as_posix(),
-        "bytes": destination.stat().st_size,
-    })
+
+
+async def handle_slideshow_pdf(request: web.Request) -> web.Response:
+    """Render the slideshow to a labelled PDF.
+
+    The session label is the file's label. There is no dialog for that.
+    A destination outside the trust boundary returns ``needs_dialog``
+    until the person chooses OK, Always allow, or Cancel.
+    """
+    from switchbay import pdf_export
+    workspace: Path = request.app["workspace"]
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+    decision = await asyncio.to_thread(pdf_export.prepare, workspace, body or {})
+    if decision["status"] != 200:
+        return web.json_response(decision["body"], status=decision["status"])
+    rendered = await _render_slideshow_pdf(request, str(decision["body"]["slug"]))
+    if isinstance(rendered, web.Response):
+        return rendered
+    outcome = await asyncio.to_thread(
+        pdf_export.finish, workspace, decision["body"], rendered,
+    )
+    if outcome["status"] == 200:
+        await _daemon_ns._broadcast(request.app, protocol.files_changed())
+    return web.json_response(outcome["body"], status=outcome["status"])
