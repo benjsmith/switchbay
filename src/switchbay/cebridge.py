@@ -1172,6 +1172,14 @@ def _backfill_unclassified_types(data: dict) -> None:
         log.info("backfilled %d page types from title prefix (pages + nodes)", promoted)
 
 
+# Frontmatter lines inside a `---` block. inject_deck_nodes walks every
+# wiki page on each graph build, including the rebuild that follows a
+# page save. These were referenced and never defined, so that rebuild
+# raised NameError and the editor reported HTTP 500 after the write.
+_FM_KIND_RE = re.compile(r"^kind:\s*[\"']?([A-Za-z0-9_-]+)[\"']?\s*$")
+_FM_TITLE_RE = re.compile(r"^title:\s*(.*?)\s*$")
+
+
 def inject_deck_nodes(workspace: Path, data: dict[str, Any]) -> int:
     """Ensure every on-disk `kind: deck` page appears in both
     `data['pages']` and `data['nodes']` as `type: analysis`.
