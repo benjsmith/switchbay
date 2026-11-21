@@ -268,7 +268,7 @@ def test_review_label_is_written_and_unusable_text_is_withheld(workspace, monkey
     assert broker.capture_label(workspace, result["capture_id"]) == "internal"
 
 
-def test_jwt_is_checked_on_a_live_connection(workspace):
+def test_jwt_is_checked_on_a_live_connection(workspace, monkeypatch):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import rsa
     from switchbay.federation import jwt_jwks
@@ -297,8 +297,9 @@ def test_jwt_is_checked_on_a_live_connection(workspace):
             self._send(404, {"error": "no"})
 
     server, origin = _serve(Handler)
+    held = {"token": token}
+    monkeypatch.setattr(oauth, "load_token", lambda mount_id: held["token"])
     try:
-        oauth.store_token("live1", token)
         mount = Mount(
             id="live1", graph_id="ceg://kg", kind="live", url=origin + "/mcp",
             auth="oauth", trust="org", ceiling="confidential",
@@ -306,7 +307,7 @@ def test_jwt_is_checked_on_a_live_connection(workspace):
         )
         info = live.info(workspace, mount)
         assert info["rev"] == "abc"
-        oauth.store_token("live1", "not-a-jwt")
+        held["token"] = "not-a-jwt"
         with pytest.raises(live.GraphError):
             live.info(workspace, mount)
     finally:
