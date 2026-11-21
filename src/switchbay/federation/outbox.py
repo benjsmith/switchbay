@@ -64,14 +64,21 @@ def submit(
         return {"ok": False, "error": f"{mount_id} does not accept writes"}
     adapted, notes = ontology.adapt_for(workspace, mount, content)
     content = adapted
-    block = classify.refuses(workspace, content, mount.ceiling)
+    from .policy import capped_ceiling
+    ceiling = capped_ceiling(mount.trust, mount.ceiling)
+    block = classify.refuses(workspace, content, ceiling)
     if block:
         audit.record(workspace, "refused_write", mount=mount_id, why=block, path=path)
         return {"ok": False, "error": block}
     from .public_write import confirm, gate
     content_label = classify.derived(workspace, content)
-    decision = gate(workspace, mount_id=mount.id, ceiling=content_label if content_label == "public" else mount.ceiling)
-    if content_label == "public" and mount.ceiling == "public":
+    public = content_label == "public" and ceiling == "public"
+    decision = gate(
+        workspace, mount_id=mount.id,
+        ceiling="public" if public else ceiling,
+        text=content,
+    )
+    if public:
         if decision.get("needs_dialog"):
             if not public_write_choice:
                 return decision
@@ -80,11 +87,6 @@ def submit(
                 return confirmed
         elif not decision.get("ok", True):
             return decision
-    if mount.ceiling == "public":
-        gate = ontology.presidio_note(content)
-        if gate.get("blocked"):
-            audit.record(workspace, "refused_write", mount=mount_id, why="presidio", path=path)
-            return {"ok": False, "error": "presidio gate refused a public write"}
     remote_direct = False
     if mount.kind == "live":
         try:
@@ -152,6 +154,7 @@ def submit(
         "rights": rights,
         "ontology": notes,
         "local_proposal": None if local_proposal is None else local_proposal.get("id"),
+        "provenance": _provenance(content),
     }
     _append(workspace, row)
     audit.record(
@@ -182,3 +185,15 @@ def _conflict_card(workspace: Path, mount_id: str, path: str, merged: dict) -> N
 
 def list_entries(workspace: Path) -> list[dict[str, Any]]:
     return _read(workspace)
+
+
+def _provenance(content: str) -> str:
+    """Flag a proposal whose text cites an untrusted import."""
+    text = content or ""
+    if (
+        "untrusted: true" in text
+        or "UNTRUSTED REMOTE CONTENT" in text
+        or "vault/ext/" in text
+    ):
+        return "untrusted-import"
+    return "workspace"

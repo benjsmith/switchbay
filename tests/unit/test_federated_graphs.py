@@ -253,19 +253,35 @@ def test_source_broker_records_a_fake_and_keeps_the_label(workspace):
     assert act["ok"] is False
 
 
-def test_declassify_needs_a_person_and_is_audited(workspace):
+def test_declassify_requires_edit_access_and_is_audited(workspace, monkeypatch):
+    import getpass
+    from switchbay import admin_policy
     _page(workspace / "wiki" / "facts" / "secret.md", "Hidden. (vault:missing.md)",
           title="Secret", type="fact", classification="confidential")
-    refused = classify.declassify(workspace, "facts/secret.md", "because", human_confirmed=False)
+    locked = workspace / "wiki" / "facts" / "locked.md"
+    _page(locked, "Hidden.", title="Locked", type="fact", classification="confidential",
+          source_ref="readonly:sharepoint:9")
+    refused = classify.declassify(workspace, "wiki/facts/locked.md")
     assert refused["ok"] is False
-    done = classify.declassify(
-        workspace, "wiki/facts/secret.md", "cleared for the public note", human_confirmed=True,
-    )
+    assert "edit" in refused["error"]
+    done = classify.declassify(workspace, "wiki/facts/secret.md")
     assert done["ok"] is True
+    assert done["before"] == "confidential"
+    assert done["after"] == "public"
     text = (workspace / "wiki" / "facts" / "secret.md").read_text(encoding="utf-8")
     assert "classification: public" in text
     from switchbay.federation import audit
-    assert any(row["event"] == "declassify" and "cleared" in row["reason"] for row in audit.read(workspace))
+    row = next(item for item in audit.read(workspace) if item["event"] == "declassify")
+    assert row["path"] == "wiki/facts/secret.md"
+    assert row["before"] == "confidential"
+    assert row["after"] == "public"
+    assert row["user"] == getpass.getuser()
+    assert row["ts"]
+    monkeypatch.setattr(admin_policy, "profile", lambda: "enterprise")
+    _page(workspace / "wiki" / "facts" / "secret.md", "Hidden again.",
+          title="Secret", type="fact", classification="confidential")
+    again = classify.declassify(workspace, "facts/secret.md")
+    assert again["ok"] is True
 
 
 def test_unbound_mcp_server_is_not_offered_to_a_published_workspace(tmp_path, monkeypatch):

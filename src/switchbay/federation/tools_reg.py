@@ -57,8 +57,6 @@ def _import(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     rel_path = str(fetched.get("page") or page).split(":", 1)[-1]
     safe = rel_path.replace("/", "__")
     rel = f"vault/ext/graphs/{mount_id}/{safe}.md"
-    dest = workspace / rel
-    dest.parent.mkdir(parents=True, exist_ok=True)
     label = fetched.get("classification") or "public"
     body = (
         "---\n"
@@ -72,7 +70,10 @@ def _import(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
         f"{fetched.get('content') or ''}\n"
         "<!-- END FETCHED CONTENT -->\n"
     )
-    dest.write_text(body, encoding="utf-8")
+    from .scrub import gate_import
+    decision = gate_import(workspace, rel, body)
+    if not decision.get("ok"):
+        return {"ok": False, "quarantined": True, "path": decision.get("path"), "error": decision.get("error")}
     audit.record(workspace, "snapshot", path=rel, mount=mount_id, rev=fetched.get("rev"))
     return {"ok": True, "path": rel, "citation": f"(vault:{rel})", "classification": label}
 
@@ -94,12 +95,7 @@ def _propose(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _declassify(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    return classify.declassify(
-        workspace,
-        str(payload.get("path") or ""),
-        str(payload.get("reason") or ""),
-        human_confirmed=bool(payload.get("human_confirmed")),
-    )
+    return classify.declassify(workspace, str(payload.get("path") or ""))
 
 
 def _list_sources(workspace: Path, _payload: dict[str, Any]) -> dict[str, Any]:
@@ -182,16 +178,15 @@ def register_federated_tools() -> None:
     register(Tool(
         name="declassify_page",
         description=(
-            "Lower a page to public. Requires human_confirmed and a "
-            "reason. Admin policy can forbid it. The reason is audited."
+            "Lower a page to public. Succeeds when the caller can edit "
+            "the page. The change is audited with the user, the page, "
+            "and the old and new labels."
         ),
         input_schema={
             "type": "object",
-            "required": ["path", "reason", "human_confirmed"],
+            "required": ["path"],
             "properties": {
                 "path": {"type": "string"},
-                "reason": {"type": "string"},
-                "human_confirmed": {"type": "boolean"},
             },
         },
         handler=_declassify,

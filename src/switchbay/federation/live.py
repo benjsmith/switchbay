@@ -51,9 +51,47 @@ def token_for(workspace: Path, mount: Mount) -> str:
     if mount.auth == "anonymous":
         return ""
     existing = oauth.load_token(mount.id)
-    if existing:
-        return existing
-    return oauth.obtain(mount.url, mount.id)
+    token = existing or oauth.obtain(mount.url, mount.id)
+    _check_token(mount, token)
+    return token
+
+
+def _check_token(mount: Mount, token: str) -> None:
+    """JWT on every non-dev connection. Introspection when configured."""
+    if mount.auth in ("anonymous", "dev"):
+        return
+    mode = (mount.token_check or "jwt").strip().lower()
+    if mode == "introspection":
+        from .introspect import introspect
+        url = mount.introspection_url or str(_discovered(mount).get("introspection_endpoint") or "")
+        if not url:
+            raise GraphError("introspection endpoint is not configured")
+        try:
+            introspect(url, token)
+        except Exception as exc:
+            raise GraphError(str(exc)) from exc
+        return
+    from .jwt_jwks import JWKSCache, TokenError, validate
+    if token.count(".") != 2:
+        raise GraphError("remote graph token is not a JWT")
+    meta = {} if mount.jwks_url and mount.issuer else _discovered(mount)
+    jwks_url = mount.jwks_url or str(meta.get("jwks_uri") or "")
+    issuer = mount.issuer or str(meta.get("issuer") or "")
+    audience = mount.audience or str(meta.get("resource") or mount.url)
+    if not jwks_url or not issuer:
+        raise GraphError("jwt issuer and jwks url are required")
+    cache = JWKSCache(jwks_url)
+    try:
+        validate(token, cache=cache, issuer=issuer, audience=audience)
+    except TokenError as exc:
+        raise GraphError(str(exc)) from exc
+
+
+def _discovered(mount: Mount) -> dict:
+    try:
+        return oauth.discover(mount.url)
+    except Exception:
+        return {}
 
 
 def info(workspace: Path, mount: Mount) -> dict:

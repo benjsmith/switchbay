@@ -593,9 +593,15 @@ export type LocalModelsDiscovery = {
   };
 };
 
+export type PublicWritePrompt = {
+  type: "public_write";
+  mount?: string;
+};
+
 export type ServerMessage =
   | Hello
   | Notice
+  | PublicWritePrompt
   | SelectionState
   | ThreadFocused
   | RunStarted

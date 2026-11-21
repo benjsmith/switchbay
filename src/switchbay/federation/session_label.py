@@ -17,11 +17,30 @@ from . import audit, classify, secure
 _current: ContextVar[str] = ContextVar("switchbay_session", default="default")
 
 
-def set_current(session_id: str) -> None:
-    _current.set(session_id or "default")
+_ACTIVE = "_active"
 
 
-def current_id() -> str:
+def set_current(session_id: str, workspace: Path | None = None) -> None:
+    """Remember the session the badge, export cap, and reads share.
+
+    The in-process value covers the current task. When ``workspace`` is
+    set, the same id is stored on disk so a later HTTP request (the
+    chat badge, publish) reads the session the chat turn used.
+    """
+    sid = session_id or "default"
+    _current.set(sid)
+    if workspace is None:
+        return
+    data = _load(workspace)
+    data[_ACTIVE] = sid
+    _save(workspace, data)
+
+
+def current_id(workspace: Path | None = None) -> str:
+    if workspace is not None:
+        stored = str(_load(workspace).get(_ACTIVE) or "")
+        if stored:
+            return stored
     return _current.get()
 
 
@@ -48,13 +67,15 @@ def _save(workspace: Path, data: dict) -> None:
 
 
 def floor(workspace: Path, session_id: str | None = None) -> str:
-    sid = session_id or current_id()
+    sid = session_id or current_id(workspace)
+    if sid == _ACTIVE:
+        return "public"
     return str(_load(workspace).get(sid) or "public")
 
 
 def note_read(workspace: Path, label: str, *, source: str, session_id: str | None = None) -> str:
     """Raise the session floor when the read is confidential or higher."""
-    sid = session_id or current_id()
+    sid = session_id or current_id(workspace)
     label = (label or "public").strip().lower()
     if classify.rank(label) >= classify.rank("confidential"):
         audit.record(
@@ -74,8 +95,26 @@ def answer_label(workspace: Path, used: list[str], session_id: str | None = None
     return classify.highest(floor(workspace, session_id), *used)
 
 
+def stamp_reply(text: str, label: str) -> str:
+    """Append the reply's classification so the chat shows the label."""
+    label = (label or "public").strip().lower() or "public"
+    marker = f"classification: {label}"
+    body = text or ""
+    if body.rstrip().endswith(marker):
+        return body
+    return body + f"\n\n{marker}\n"
+
+
+def export_block_reason(workspace: Path) -> str:
+    """Why an export must stop, or an empty string when it may proceed."""
+    label = floor(workspace)
+    if classify.rank(label) > classify.rank("public"):
+        return f"this chat is {label}; export is capped at that label"
+    return ""
+
+
 def lower(workspace: Path, reason: str, *, human_confirmed: bool, session_id: str | None = None) -> dict:
-    sid = session_id or current_id()
+    sid = session_id or current_id(workspace)
     if not human_confirmed:
         audit.record(workspace, "refused_write", why="session label requires a person", session=sid)
         return {"ok": False, "error": "only a person can lower a session label"}

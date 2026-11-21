@@ -62,8 +62,14 @@ def call(
         audit.record(workspace, "refused_write", why="act tool hidden", source=source_id, tool=tool)
         return {"ok": False, "error": f"{tool} is hidden until admin policy enables act tools"}
     arguments = arguments or {}
-    transport = transport or FakeTransport()
-    raw = transport.call(tool, arguments)
+    transport = transport or _default_transport(source)
+    if isinstance(transport, str):
+        return {"ok": False, "error": transport}
+    try:
+        raw = transport.call(tool, arguments)
+    except Exception as exc:
+        audit.record(workspace, "source_call", source=source_id, tool=tool, policy_outcome="error")
+        return {"ok": False, "error": str(exc)}
     normalised = adapters.normalise(source.kind, tool, raw if isinstance(raw, dict) else {"text": str(raw)})
     if normalised["policy_outcome"] == "denied":
         audit.record(
@@ -122,6 +128,11 @@ def call(
         "deep_links": normalised["deep_links"],
         "policy_outcome": "allowed",
     }
+    prune(workspace)
+    if not out["usable"]:
+        out.pop("text", None)
+        out.pop("rows", None)
+        out["withheld"] = True
     if snapshot:
         blocked = policy.synced_workspace_block(workspace)
         if blocked or not policy.snapshot_allowed():
@@ -129,9 +140,66 @@ def call(
             out["snapshot"] = None
             out["snapshot_error"] = blocked or "snapshots are forbidden by admin policy"
         else:
-            out["snapshot"] = write_snapshot(workspace, source, record)
-            audit.record(workspace, "snapshot", capture_id=cid, path=out["snapshot"])
+            try:
+                out["snapshot"] = write_snapshot(workspace, source, record)
+            except PermissionError as exc:
+                audit.record(workspace, "quarantine", capture_id=cid, why=str(exc))
+                out["snapshot"] = None
+                out["snapshot_error"] = str(exc)
+            else:
+                audit.record(workspace, "snapshot", capture_id=cid, path=out["snapshot"])
     return out
+
+
+def _default_transport(source: Source) -> Transport | str:
+    """HTTP MCP against the configured URL. Tests pass their own transport."""
+    url = (source.url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return "source has no http endpoint"
+    from . import oauth
+    return adapters.HttpMcpTransport(url, oauth.load_token(source.id))
+
+
+def set_capture_label(workspace: Path, capture_id: str, label: str) -> bool:
+    """Write a Review decision back onto the capture file."""
+    path = _dir(workspace) / f"{capture_id}.json"
+    if not path.is_file():
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    data["classification"] = label
+    data["needs_classification"] = False
+    from . import secure
+    secure.owner_write(path, json.dumps(data))
+    return True
+
+
+def prune(workspace: Path) -> int:
+    """Delete captures older than ``capture_retention_days``. 0 keeps them."""
+    from .policy import capture_retention_days
+    days = capture_retention_days()
+    if days <= 0:
+        return 0
+    import time as _time
+    cutoff = _time.time() - days * 86400
+    removed = 0
+    folder = _dir(workspace)
+    if not folder.is_dir():
+        return 0
+    for path in folder.glob("*.json"):
+        try:
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+                removed += 1
+        except OSError:
+            continue
+    if removed:
+        audit.record(workspace, "capture_prune", removed=removed, days=days)
+    return removed
 
 
 def write_snapshot(workspace: Path, source: Source, record: dict) -> str:
@@ -159,5 +227,8 @@ def write_snapshot(workspace: Path, source: Source, record: dict) -> str:
         lines.append(json.dumps(record["rows"], indent=2))
     lines.append(_END)
     lines.append("")
-    path.write_text("\n".join(lines), encoding="utf-8")
+    from .scrub import gate_import
+    decision = gate_import(workspace, rel, "\n".join(lines))
+    if not decision.get("ok"):
+        raise PermissionError(decision.get("error") or "import quarantined")
     return rel

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -66,7 +67,21 @@ def ensure(workspace: Path, mount: Mount, *, refresh: bool = False) -> Snapshot:
         _copy_wiki(source, dest)
         marker.write_text(rev + "\n", encoding="utf-8")
         (dest / "graph-id").write_text((mount.graph_id or "") + "\n", encoding="utf-8")
+        _lock_tree(dest)
     return Snapshot(root=dest, wiki=dest / "wiki", rev=rev, graph_id=mount.graph_id)
+
+
+def _lock_tree(root: Path) -> None:
+    """Owner-only mode bits, matching the other per-user caches."""
+    from . import secure
+    secure.owner_dir(root)
+    for dirpath, _dirnames, filenames in os.walk(root):
+        secure.owner_dir(Path(dirpath))
+        for name in filenames:
+            try:
+                (Path(dirpath) / name).chmod(0o600)
+            except OSError:
+                pass
 
 
 def pinned(workspace: Path, mount: Mount) -> Snapshot | None:
