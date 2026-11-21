@@ -76,12 +76,16 @@ test("graph viewer shows the wiki and its search box", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Replay curation history" })).toBeVisible();
 });
 
-test("graph search accepts a query", async ({ page }) => {
+test("graph search filters the mounted wiki and clears", async ({ page }) => {
   await ready(page);
   await page.getByRole("tab", { name: "Graph", exact: true }).click();
   const search = page.getByRole("searchbox", { name: "Search the graph" });
   await search.fill("attention");
   await expect(search).toHaveValue("attention");
+  await expect(page.getByText(/\d+ nodes/)).toBeVisible();
+  await search.fill("");
+  await expect(search).toHaveValue("");
+  await expect(page.getByText(/\d+ nodes/)).toBeVisible();
 });
 
 test("first-run card can be skipped when the wiki probe offers it", async ({ page }) => {
@@ -416,13 +420,16 @@ test("reviews tab shows the seeded proposal", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Comment & keep" })).toBeVisible();
 });
 
-test("commenting on a review keeps the page", async ({ page }) => {
+test("commenting on a review writes the note into the wiki", async ({ page }) => {
   await ready(page);
   await openTab(page, "Reviews");
   await page.locator(".sy-review-comment").fill("parity note");
   await page.getByRole("button", { name: "Comment & keep" }).click();
   await expect(page.locator(".sy-report-error")).toHaveCount(0);
-  await expect(page.getByText("threw an error")).toHaveCount(0);
+  const search = page.locator(".sy-fb-search");
+  await search.fill("parity-concept.md");
+  await page.locator(".sy-fb-name", { hasText: "parity-concept.md" }).click();
+  await expect(page.getByText("parity note").first()).toBeVisible();
 });
 
 test("sources pane switches from the files browser", async ({ page }) => {
@@ -543,4 +550,107 @@ test("agents tab survives a round trip through the library", async ({ page }) =>
   await openTab(page, "Library");
   await openTab(page, "Agents");
   await expect(page.getByRole("heading", { name: "Agent Dashboard" })).toBeVisible();
+});
+
+test("session badge shows the confidential floor", async ({ page }) => {
+  await ready(page);
+  const badge = page.locator(".sy-class-badge[data-label='confidential']");
+  await expect(badge).toBeVisible();
+  await expect(badge).toHaveText("confidential");
+});
+
+test("settings stores an exclusion rule and removes it", async ({ page }) => {
+  await ready(page);
+  await openSettings(page);
+  const panel = page.locator("[data-testid='exclusion-rules']");
+  await panel.scrollIntoViewIfNeeded();
+  await panel.getByLabel("Exclusion rule").fill("export the customer list");
+  await panel.getByLabel("Rule decision").selectOption("deny");
+  await panel.getByRole("button", { name: "Add" }).click();
+  await expect(panel.getByText("export the customer list")).toBeVisible();
+  await expect(panel.locator(".sy-class-badge[data-label='deny']")).toBeVisible();
+  await panel.getByRole("button", { name: "Remove" }).click();
+  await expect(panel.getByText("export the customer list")).toHaveCount(0);
+});
+
+test("presidio setting turns off and back on", async ({ page }) => {
+  await ready(page);
+  await openSettings(page);
+  const setting = page.locator("[data-testid='presidio-setting']");
+  await setting.scrollIntoViewIfNeeded();
+  await setting.getByRole("button", { name: "Turn off" }).click();
+  await expect(setting.getByText(/you are responsible for personal data/)).toBeVisible();
+  await setting.getByRole("button", { name: "Turn on" }).click();
+  await expect(setting.getByRole("button", { name: "Turn off" })).toBeVisible();
+});
+
+test("public write dialog can be cancelled", async ({ page }) => {
+  await ready(page);
+  await page.evaluate(() => {
+    window.dispatchEvent(new CustomEvent("sy:public-write", { detail: { mount: "remote" } }));
+  });
+  const dialog = page.locator("[data-testid='public-write-dialog']");
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "OK" })).toBeVisible();
+  await expect(dialog.getByRole("button", { name: "Always allow" })).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
+test("review tab sets a classification and clears the row", async ({ page }) => {
+  await ready(page);
+  await openTab(page, "Reviews");
+  const review = page.locator("[data-testid='classification-review']");
+  await expect(review.getByText("Quick entity")).toBeVisible();
+  await review.getByLabel("Label for Quick entity").selectOption("internal");
+  await review.getByRole("button", { name: "Set label" }).click();
+  await expect(review.getByText("Quick entity")).toHaveCount(0);
+});
+
+test("new plot drops a primer into the rail", async ({ page }) => {
+  await ready(page);
+  await openTab(page, "Plot");
+  await page.getByRole("button", { name: "+ New Plot…" }).click();
+  await expect(page.getByPlaceholder("chat, or use a prefix… (try /view)")).toHaveValue(/save_plot/);
+});
+
+test("editor saves a line and shows it after reload", async ({ page }) => {
+  await ready(page);
+  const search = page.locator(".sy-fb-search");
+  await search.fill("wiki/notes/notes.md");
+  await page.locator(".sy-fb-name", { hasText: /^notes\.md$/ }).click();
+  const editor = page.locator(".cm-content");
+  await editor.click();
+  await page.keyboard.press("Control+End");
+  await page.keyboard.type("PARITY-LINE");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await page.reload();
+  await page.locator(".sy-tabstrip").waitFor();
+  await dismissFirstRun(page);
+  await search.fill("wiki/notes/notes.md");
+  await page.locator(".sy-fb-name", { hasText: /^notes\.md$/ }).click();
+  await expect(page.getByText("PARITY-LINE").first()).toBeVisible();
+});
+
+test("add a second workspace and switch back", async ({ page }) => {
+  const home = process.env.E2E_WORKSPACE;
+  const alt = process.env.E2E_ALT_WORKSPACE;
+  if (!home || !alt) throw new Error("E2E_WORKSPACE and E2E_ALT_WORKSPACE are required");
+  const baseName = (path: string) => path.split("/").filter(Boolean).pop() ?? path;
+  await ready(page);
+  await page.locator(".sy-ws-trigger").click();
+  await page.getByRole("button", { name: "+ Add workspace…" }).click();
+  await page.locator(".sy-ws-input").fill(home);
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.locator(".sy-ws-trigger")).toContainText(baseName(home));
+  await page.locator(".sy-ws-trigger").click();
+  await page.getByRole("button", { name: "+ Add workspace…" }).click();
+  await page.locator(".sy-ws-input").fill(alt);
+  await page.getByRole("button", { name: "Add", exact: true }).click();
+  await expect(page.locator(".sy-ws-trigger")).toContainText(baseName(alt));
+  await expect(page.getByText("ALT-WORKSPACE").first()).toBeVisible();
+  await page.locator(".sy-ws-trigger").click();
+  await page.locator(".sy-ws-name", { hasText: baseName(home) }).click();
+  await expect(page.locator(".sy-ws-trigger")).toContainText(baseName(home));
 });

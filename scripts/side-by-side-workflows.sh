@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the workflow suite against two daemons and print a parity table.
 #
-# PRE is the commit this refactor started from (default 5f3d915). POST is
+# PRE is current main (default 3fc2659, federated mounts). POST is
 # the checkout you run the script from. Each daemon gets its own port,
 # state directory, config directory, and a copy of samples/ml-walkthrough
 # with a Reviews tab and one proposed page. No provider API keys are
@@ -17,7 +17,7 @@ set -euo pipefail
 set -m
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-PRE_REF="${PRE_REF:-5f3d915}"
+PRE_REF="${PRE_REF:-3fc2659}"
 PRE_PORT="${PRE_PORT:-8871}"
 POST_PORT="${POST_PORT:-8872}"
 WORK="${WORK:-/tmp/switchbay-parity}"
@@ -116,6 +116,34 @@ for name in ("ws-pre", "ws-post"):
     }]
     (wb / "state" / "page_proposals.json").write_text(
         json.dumps(proposal), encoding="utf-8")
+    (wb / "state" / "classification_queue.json").write_text(json.dumps([{
+        "id": "cap-parity",
+        "title": "Quick entity",
+        "kind": "capture",
+        "source": "seed",
+        "status": "pending",
+        "classification": "",
+    }]), encoding="utf-8")
+    alt = work / f"{name}-alt"
+    if alt.exists():
+        shutil.rmtree(alt)
+    (alt / "wiki").mkdir(parents=True)
+    (alt / "wiki" / "index.md").write_text("# ALT-WORKSPACE\n\nRemote mount page.\n", encoding="utf-8")
+    (wb / "graph-mounts.json").write_text(json.dumps({
+        "schema": "switchbay-graph-mounts/1",
+        "read_default": ["local", "remote"],
+        "default_write": "local",
+        "mounts": [{
+            "id": "remote",
+            "graph_id": "remote-wiki",
+            "kind": "snapshot",
+            "url": str(alt.resolve()),
+            "read": True,
+            "write": "none",
+            "trust": "external",
+            "ceiling": "public",
+        }],
+    }), encoding="utf-8")
 print("workspaces ready")
 PY
 
@@ -123,6 +151,17 @@ for side in pre post; do
   mkdir -p "$WORK/config-$side/switchbay" "$WORK/state-$side"
   touch "$WORK/config-$side/switchbay/walkthrough-shown"
   touch "$WORK/config-$side/switchbay/intro-shown"
+  # Session badge reads the floor for the default session id.
+  python3 - "$WORK" "$side" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+work, side = Path(sys.argv[1]), sys.argv[2]
+ws = (work / f"ws-{side}").resolve()
+digest = hashlib.sha256(str(ws).encode()).hexdigest()[:16]
+dest = work / f"state-{side}" / "sessions" / digest
+dest.mkdir(parents=True, exist_ok=True)
+(dest / "labels.json").write_text(json.dumps({"default": "confidential"}) + "\n", encoding="utf-8")
+PY
 done
 
 PIDS=()
@@ -185,6 +224,8 @@ run_suite() {
   (
     cd "$ROOT/frontend"
     E2E_BASE_URL="http://127.0.0.1:$port" \
+      E2E_WORKSPACE="$WORK/ws-$side" \
+      E2E_ALT_WORKSPACE="$WORK/ws-$side-alt" \
       pnpm exec playwright test tests/e2e/workflows.spec.ts \
         --reporter=json --output "$WORK/results-$side"
   ) >"$out"
