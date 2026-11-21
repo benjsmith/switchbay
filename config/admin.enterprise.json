@@ -52,7 +52,6 @@
     "allowlist": [],
     "allow_act_tools": false,
     "snapshot": "allowed",
-    "declassify": "forbid",
     "capture_retention_days": 0
   },
   "updates": { "repo": "benjsmith/switchbay", "include_skills": false }

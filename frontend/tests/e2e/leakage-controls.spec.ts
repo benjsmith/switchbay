@@ -113,6 +113,17 @@ test("public write dialog remembers a global allow", async ({ page }) => {
   await setting.screenshot({ path: `${shotDir}/presidio-scope.png` });
 });
 
+test("a public-write message from the daemon opens the dialog", async ({ page }) => {
+  await openApp(page);
+  await page.request.post(`${BASE}/api/e2e/push`, {
+    data: { type: "public_write", mount: "pub" },
+  });
+  const dialog = page.locator("[data-testid='public-write-dialog']");
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toHaveCount(0);
+});
+
 test("review tab sets a classification", async ({ page }) => {
   await page.request.post(`${BASE}/api/e2e/seed`, {
     data: {

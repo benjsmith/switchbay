@@ -60,7 +60,31 @@ class HttpMcpTransport:
         # Real services are not called from tests. A 4 second cap matches
         # the live-graph client; this is not a retry.
         with urllib.request.urlopen(req, timeout=4) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+            data = json.loads(resp.read().decode("utf-8"))
+        return unwrap_mcp(data)
+
+
+def unwrap_mcp(data: dict) -> dict:
+    """Tool payload from either a raw dict or a JSON-RPC ``tools/call`` result."""
+    import json
+    if not isinstance(data, dict):
+        return {"text": str(data)}
+    result = data.get("result") if "result" in data and "jsonrpc" in data else data
+    if not isinstance(result, dict):
+        return {"text": str(result)}
+    content = result.get("content")
+    if isinstance(content, list) and content:
+        first = content[0]
+        text = first.get("text") if isinstance(first, dict) else None
+        if isinstance(text, str) and text.strip():
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                return {"text": text}
+            if isinstance(parsed, dict):
+                return parsed
+            return {"text": text}
+    return result
 
 
 # Real-service testing pending: Work IQ needs an M365 tenant and admin
@@ -82,6 +106,10 @@ AWS_CONTEXT_READ = ("agentic_search",)
 # that graph in the AWS Quick account, not on disk.
 QUICK_READ = ("search_entities", "get_entity")
 
+# Unity Catalog over the same HTTP MCP transport. ``get_permissions``
+# returns the privileges on one securable. There is no local catalog.
+UNITY_READ = ("get_permissions",)
+
 
 def tools_for(kind: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
     if kind == "workiq":
@@ -92,7 +120,19 @@ def tools_for(kind: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
         return AWS_CONTEXT_READ, ()
     if kind == "aws-quick":
         return QUICK_READ, ()
+    if kind == "unity-catalog":
+        return UNITY_READ, ()
     return (), ()
+
+
+def access_arguments(kind: str, source_ref: str, *, write: bool) -> tuple[str, dict]:
+    """Tool name and arguments for an on-behalf-of access check."""
+    intent = "write" if write else "read"
+    if kind == "workiq":
+        return "fetch", {"source_ref": source_ref, "intent": intent}
+    if kind == "unity-catalog":
+        return "get_permissions", {"securable": source_ref, "intent": intent}
+    return "check_access", {"source_ref": source_ref, "intent": intent}
 
 
 def default_classification(kind: str) -> str:

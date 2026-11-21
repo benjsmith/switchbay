@@ -2039,11 +2039,16 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     ):
         candidate = Path(persisted_active)
         if candidate.is_dir() and workspaces.is_within_home(candidate):
-            log.info(
-                "boot: serving registry-active workspace %s (CLI cwd was %s)",
-                candidate, workspace,
-            )
-            workspace = candidate
+            from .federation.boundary import block_reason
+            reason = block_reason(candidate)
+            if reason:
+                log.info("boot: registry workspace is outside the trust boundary: %s", reason)
+            else:
+                log.info(
+                    "boot: serving registry-active workspace %s (CLI cwd was %s)",
+                    candidate, workspace,
+                )
+                workspace = candidate
     log.info("workspace=%s  listening on http://%s:%d", workspace, host, port)
     log.info(
         "log=%s  rotate at %d MB (keep %d)",

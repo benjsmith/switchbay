@@ -1,22 +1,24 @@
-"""Page access is delegated to the system that already owns the item.
+"""Page access is delegated to the catalog that already owns the item.
 
-Switchbay does not run its own permission server. A page may record
-``source_ref`` (a SharePoint item, a Unity Catalog object, and so on).
-Before a hit is returned, that system is asked, on behalf of the
-caller, whether they can read it. ``same_as`` never adds a hit the
-caller cannot read. A page with no source reference uses the
-whole-graph read right.
+Switchbay does not run a permission server. A page may record
+``source_ref``. A ``deny:`` reference is refused. A ``readonly:``
+reference can be read and not written. A ``workiq:`` reference is
+asked of the configured Work IQ source, and a ``uc:``, ``unity:``, or
+``unity-catalog:`` reference is asked of the configured Unity Catalog
+source. Both calls use the HTTP MCP transport. A reference that names
+no configured source is refused. A reference with no catalog prefix
+uses the whole-graph right.
 
-The checker here is a stub. ``deny:`` references are refused.
-``readonly:`` references can be read and not written. Anything else is
-allowed, which is the whole-graph fallback. A live Work IQ or Unity
-Catalog call is not made.
+``same_as`` neighbours travel on the search ``also`` list. A neighbour
+the caller cannot read is dropped.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+
+_UNITY = {"uc", "unity", "unity-catalog"}
 
 
 @dataclass(frozen=True)
@@ -27,9 +29,9 @@ class Decision:
 
 
 class SourceChecker:
-    """Replace ``check`` with a live on-behalf-of client when one exists."""
+    """Ask the owning catalog. ``workspace`` selects the configured source."""
 
-    def check(self, source_ref: str, *, write: bool = False) -> Decision:
+    def check(self, source_ref: str, *, write: bool = False, workspace: Path | None = None) -> Decision:
         ref = (source_ref or "").strip()
         if not ref:
             return Decision(True, True, "whole-graph")
@@ -37,7 +39,58 @@ class SourceChecker:
             return Decision(False, False, "source")
         if ref.startswith("readonly:"):
             return Decision(True, False, "source")
-        return Decision(True, not write or True, "source-stub")
+        kind, rest = _split(ref)
+        if kind == "workiq":
+            return _catalog(workspace, "workiq", ref, write=write)
+        if kind in _UNITY:
+            return _catalog(workspace, "unity-catalog", ref if rest else ref, write=write)
+        return Decision(True, True, "whole-graph")
+
+
+def _split(ref: str) -> tuple[str, str]:
+    kind, _, rest = ref.partition(":")
+    return kind.strip().lower(), rest.strip()
+
+
+def _catalog(workspace: Path | None, kind: str, source_ref: str, *, write: bool) -> Decision:
+    if workspace is None:
+        return Decision(False, False, kind)
+    from .adapters import HttpMcpTransport, access_arguments
+    from .mounts import load
+    from . import oauth
+    source = next((item for item in load(workspace).sources if item.kind == kind), None)
+    if source is None or not str(source.url).startswith(("http://", "https://")):
+        return Decision(False, False, kind)
+    tool, arguments = access_arguments(kind, source_ref, write=write)
+    token = oauth.load_token(source.id)
+    try:
+        result = HttpMcpTransport(source.url, token).call(tool, arguments)
+    except Exception:
+        return Decision(False, False, kind)
+    return _decision_from(kind, result, write=write)
+
+
+def _decision_from(kind: str, result: dict, *, write: bool) -> Decision:
+    if not isinstance(result, dict):
+        return Decision(False, False, kind)
+    if result.get("policy_outcome") == "denied" or result.get("error") in ("policy_denied", "denied"):
+        return Decision(False, False, kind)
+    if "read" in result or "write" in result:
+        can_read = bool(result.get("read", True))
+        can_write = bool(result.get("write", False))
+        return Decision(can_read, can_write, kind)
+    privileges = result.get("privileges") or result.get("permissions") or []
+    if isinstance(privileges, str):
+        privileges = [privileges]
+    names = {str(item).upper().replace(" ", "_") for item in privileges}
+    if not names and result.get("error"):
+        return Decision(False, False, kind)
+    can_write = bool(names & {"MODIFY", "ALL_PRIVILEGES", "OWNERSHIP", "WRITE"})
+    can_read = can_write or bool(names & {"SELECT", "USE_CATALOG", "USE_SCHEMA", "READ", "BROWSE"})
+    if not names:
+        can_read = result.get("policy_outcome") != "denied" and not result.get("error")
+        can_write = False
+    return Decision(bool(can_read), bool(can_write), kind)
 
 
 _CHECKER = SourceChecker()
@@ -47,27 +100,27 @@ def checker() -> SourceChecker:
     return _CHECKER
 
 
-def allows_read(source_ref: str) -> bool:
-    return _CHECKER.check(source_ref).read
+def allows_read(source_ref: str, workspace: Path | None = None) -> bool:
+    return _CHECKER.check(source_ref, workspace=workspace).read
 
 
-def allows_write(source_ref: str) -> bool:
-    decision = _CHECKER.check(source_ref, write=True)
-    if source_ref.strip().startswith("readonly:"):
+def allows_write(source_ref: str, workspace: Path | None = None) -> bool:
+    decision = _CHECKER.check(source_ref, write=True, workspace=workspace)
+    if (source_ref or "").strip().startswith("readonly:"):
         return False
     return decision.write and decision.read
 
 
-def filter_rows(rows: list[dict]) -> list[dict]:
+def filter_rows(rows: list[dict], workspace: Path | None = None) -> list[dict]:
     kept = []
     for row in rows:
         ref = str(row.get("source_ref") or "")
-        if ref and not allows_read(ref):
+        if ref and not allows_read(ref, workspace):
             continue
         also = []
         for extra in row.get("also") or []:
             extra_ref = str(extra.get("source_ref") or "")
-            if extra_ref and not allows_read(extra_ref):
+            if extra_ref and not allows_read(extra_ref, workspace):
                 continue
             also.append(extra)
         if "also" in row:
@@ -94,6 +147,6 @@ def page_source_ref(workspace: Path, rel: str) -> str:
 
 def may_edit_page(workspace: Path, rel: str) -> tuple[bool, str]:
     ref = page_source_ref(workspace, rel)
-    if ref and not allows_write(ref):
+    if ref and not allows_write(ref, workspace):
         return False, "the source system does not grant edit on this page"
     return True, ""

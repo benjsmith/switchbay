@@ -321,6 +321,20 @@ def load(*, force: bool = False) -> dict[str, Any]:
     else:
         orchestration_admin.pop("max_live_workers", None)
 
+    # Federation sections. Absent from both files means "use the profile
+    # default" — the key is omitted so federation.policy can tell.
+    federation: dict[str, Any] = {}
+    for name in ("graph_mounts", "sources", "public_writes", "classification_review"):
+        merged: dict[str, Any] = {}
+        found = False
+        for src in (baked_data, overlay):
+            raw = src.get(name)
+            if isinstance(raw, dict):
+                merged.update(raw)
+                found = True
+        if found:
+            federation[name] = merged
+
     resolved = {
         "profile": profile,
         "source": str(overlay_path) if overlay_path else (str(baked) if baked else None),
@@ -337,6 +351,7 @@ def load(*, force: bool = False) -> dict[str, Any]:
         "orchestration": orchestration_admin,
         "allow_profile_override": allow_override,
         "tighten": tighten,
+        **federation,
     }
     _cache, _cache_key = resolved, key
     return resolved

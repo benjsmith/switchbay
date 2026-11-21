@@ -398,7 +398,7 @@ async def _dispatch_chat(
         pass
     try:
         from switchbay.federation.session_label import set_current
-        set_current(str(thread_id or run_id or "rail"))
+        set_current(str(thread_id or run_id or "rail"), workspace)
     except Exception:  # noqa: BLE001
         pass
     executed_calls: dict[str, int] = {}
@@ -609,6 +609,20 @@ async def _dispatch_chat(
                         app, protocol.text_message_content(run_id, msg_id, extra),
                     )
                     current_text = cited
+            if stop_reason != "tool_use" and current_text:
+                from switchbay.federation.session_label import answer_label, stamp_reply
+                stamped = stamp_reply(current_text, answer_label(workspace, []))
+                if stamped != current_text:
+                    extra = stamped[len(current_text):]
+                    if msg_id is None:
+                        msg_id = protocol.new_message_id()
+                        await _daemon_ns._broadcast(
+                            app, protocol.text_message_start(run_id, msg_id),
+                        )
+                    await _daemon_ns._broadcast(
+                        app, protocol.text_message_content(run_id, msg_id, extra),
+                    )
+                    current_text = stamped
             if msg_id is not None:
                 # Stream ended with prose open — close the message.
                 await _daemon_ns._broadcast(app, protocol.text_message_end(run_id, msg_id))
@@ -769,6 +783,11 @@ async def _dispatch_chat(
                         output = await asyncio.to_thread(
                             tools.execute, tname, workspace, tinput,
                         )
+                    if isinstance(output, dict) and output.get("needs_dialog"):
+                        await _daemon_ns._broadcast(app, protocol.custom({
+                            "type": "public_write",
+                            "mount": str(output.get("mount") or ""),
+                        }))
                     # Cap results for every model — a 100-turn curate
                     # that stuffed unbounded JSON into `messages` is a
                     # plausible path to multi-GB RSS.

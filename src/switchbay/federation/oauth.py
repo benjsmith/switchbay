@@ -40,6 +40,16 @@ def _get_json(url: str) -> dict:
     return data
 
 
+def _params_from_redirect(location: str, state: str) -> dict:
+    parsed = urllib.parse.urlparse(location)
+    params = urllib.parse.parse_qs(parsed.query)
+    if params.get("state", [""])[0] != state:
+        raise ValueError("authorization state did not match")
+    if "error" in params:
+        raise ValueError(str(params["error"][0]))
+    return params
+
+
 def discover(resource_url: str) -> dict:
     """Protected-resource metadata, then the authorisation server."""
     origin = resource_url.split("/mcp")[0].rstrip("/")
@@ -83,43 +93,103 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def obtain(resource_url: str, mount_id: str, *, client_id: str = "switchbay") -> str:
-    """Run PKCE against the resource's authorisation server. Returns the access token."""
+class _Callback:
+    """Loopback redirect target for the system browser."""
+
+    def __init__(self) -> None:
+        import threading
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        self._box: dict[str, str] = {}
+        self._ready = threading.Event()
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, fmt, *args):
+                return
+
+            def do_GET(self):
+                parsed = urllib.parse.urlparse(self.path)
+                if parsed.path != "/switchbay-oauth":
+                    self.send_response(404)
+                    self.end_headers()
+                    return
+                owner._box["query"] = parsed.query
+                owner._ready.set()
+                body = b"Switch Bay signed in. You can close this window."
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.port = self._server.server_address[1]
+        self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        self._thread.start()
+
+    def wait(self, timeout: float) -> str:
+        if not self._ready.wait(timeout):
+            raise ValueError("timed out waiting for the browser sign-in")
+        return self._box.get("query") or ""
+
+    def close(self) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def obtain(
+    resource_url: str, mount_id: str, *, client_id: str = "switchbay",
+    open_browser=None,
+) -> str:
+    """Run PKCE against the resource's authorisation server.
+
+    An immediate redirect is enough. A login page is opened in the
+    system browser, and the loopback redirect delivers the code.
+    ``open_browser`` replaces that launch in tests.
+    """
     meta = discover(resource_url)
     verifier = secrets.token_urlsafe(48)
     challenge = _s256(verifier)
     state = secrets.token_urlsafe(12)
-    redirect = "http://127.0.0.1:9/switchbay-oauth"
-    query = urllib.parse.urlencode({
-        "response_type": "code",
-        "client_id": client_id,
-        "redirect_uri": redirect,
-        "code_challenge": challenge,
-        "code_challenge_method": "S256",
-        "state": state,
-        "scope": "ce-graph.read ce-graph.propose",
-    })
-    auth_url = meta["authorization_endpoint"] + "?" + query
-    opener = urllib.request.build_opener(_NoRedirect)
+    callback = _Callback()
     try:
-        opener.open(auth_url, timeout=_TIMEOUT)
-        raise ValueError(
-            "the identity provider did not redirect; organisation sign-in "
-            "needs a browser and is not completed here"
-        )
-    except urllib.error.HTTPError as exc:
-        if exc.code not in (302, 303, 307):
-            raise ValueError(f"authorization failed: HTTP {exc.code}") from exc
-        location = exc.headers.get("Location") or ""
-    parsed = urllib.parse.urlparse(location)
-    params = urllib.parse.parse_qs(parsed.query)
-    if params.get("state", [""])[0] != state:
-        raise ValueError("authorization state did not match")
-    if "error" in params:
-        raise ValueError(str(params["error"][0]))
-    code = params.get("code", [""])[0]
-    if not code:
-        raise ValueError("authorization redirect had no code")
+        redirect = f"http://127.0.0.1:{callback.port}/switchbay-oauth"
+        query = urllib.parse.urlencode({
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": redirect,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+            "state": state,
+            "scope": "ce-graph.read ce-graph.propose",
+        })
+        auth_url = meta["authorization_endpoint"] + "?" + query
+        opener = urllib.request.build_opener(_NoRedirect)
+        location = ""
+        try:
+            opener.open(auth_url, timeout=_TIMEOUT)
+            needs_browser = True
+        except urllib.error.HTTPError as exc:
+            if exc.code in (302, 303, 307):
+                location = exc.headers.get("Location") or ""
+                needs_browser = False
+            elif exc.code == 200:
+                needs_browser = True
+            else:
+                raise ValueError(f"authorization failed: HTTP {exc.code}") from exc
+        if needs_browser:
+            launch = open_browser
+            if launch is None:
+                import webbrowser
+                launch = webbrowser.open
+            launch(auth_url)
+            location = redirect + "?" + callback.wait(120)
+        params = _params_from_redirect(location, state)
+        code = params.get("code", [""])[0]
+        if not code:
+            raise ValueError("authorization redirect had no code")
+    finally:
+        callback.close()
     body = json.dumps({
         "grant_type": "authorization_code",
         "code": code,

@@ -107,6 +107,10 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         body = {}
     slug = str((body or {}).get("slug") or "").strip()
+    from switchbay.federation.session_label import export_block_reason
+    blocked_export = export_block_reason(workspace)
+    if blocked_export:
+        return web.json_response({"error": blocked_export}, status=403)
     if not html_decks.is_valid_slug(slug):
         return web.json_response({"error": "invalid slideshow slug"}, status=400)
     if await asyncio.to_thread(html_decks.entry_html, workspace, slug) is None:

@@ -70,6 +70,11 @@ async def handle_workspaces_add(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "path is not writable by the current user"}, status=400
         )
+    from switchbay.federation.boundary import TrustBoundaryError, require
+    try:
+        require(path)
+    except TrustBoundaryError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
 
     needs_init = bool(body.get("init")) or not (path / "wiki").is_dir()
     if needs_init:
@@ -100,6 +105,11 @@ async def handle_workspaces_switch(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "path is not writable by the current user"}, status=400
         )
+    from switchbay.federation.boundary import TrustBoundaryError, require
+    try:
+        require(path)
+    except TrustBoundaryError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
     await _daemon_ns._activate(request.app, path)
     return web.json_response({"ok": True, "workspaces": workspaces.load()})
 

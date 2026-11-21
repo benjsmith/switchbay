@@ -1,5 +1,9 @@
 # Enterprise packaging
 
+How a company package is built and how the admin file is delivered.
+Controls, access, network, storage, and configuration:
+**[Enterprise](enterprise/index.md)**.
+
 Switch Bay ships one codebase with two profiles:
 
 - **`open`** (default on git checkout / consumer install) — today's
@@ -344,28 +348,19 @@ in-app update — they have no `frontend/dist` in git and must not run `uv` /
 
 ## Mounted graphs and external sources
 
-A workspace keeps its own wiki. It can also attach other graphs. A
-snapshot is a copy of a wiki taken at one revision, so an answer can
-name that revision later. A live graph is a server the workspace asks
-over the network. The same list of mounts is what an okstratr seat
-sees, because the seat uses Switchbay's tools.
+A workspace keeps its own wiki and can name other graphs. Behaviour,
+sign-in, and the admin allowlists are in
+[Integrations](enterprise/integrations.md) and
+[Configuration](enterprise/configuration.md). The enterprise
+template's allowlists are empty, so a remote mount or a source call
+is refused until an admin adds it. Those keys are applied.
 
-Each mount has a ceiling: public, internal, confidential, or
-restricted. A page keeps the highest label of anything it cites.
-Switchbay will not write a page onto a mount whose ceiling is lower,
-and publishing a workspace refuses pages above public. Lowering a
-label is a separate step, with a reason, and an administrator can
-turn that step off.
-
-Work IQ, Databricks Genie, AWS Context, and AWS Quick are sources,
-not graphs. A question can call them. The call is recorded on this
-machine. Nothing from those calls is published unless someone saves
-a snapshot into the workspace, and that snapshot carries the label.
-
-In the enterprise profile, mounts and sources have to match the
-allowlist in the admin file. Remote changes are proposals unless you
-change `graph_mounts.remote_write`. Declassification is off until
-you set `sources.declassify` to `allow`.
+A page keeps the highest classification of anything it cites.
+Publishing to GitHub refuses a wiki or vault `.md`, `.txt`, `.yaml`,
+or `.yml` file whose effective label is above public. Remote changes
+stay proposals unless `graph_mounts.remote_write` says otherwise.
+Declassifying a page requires edit access on that page. There is no
+admin switch and no required reason.
 
 ## Tester install (no machine admin)
 

@@ -40,7 +40,6 @@ _OPEN_SOURCES = {
     "allowlist": ["*"],
     "allow_act_tools": False,
     "snapshot": "allowed",
-    "declassify": "allow",
     "capture_retention_days": 0,
 }
 _ENTERPRISE_SOURCES = {
@@ -48,7 +47,6 @@ _ENTERPRISE_SOURCES = {
     "allowlist": [],
     "allow_act_tools": False,
     "snapshot": "allowed",
-    "declassify": "forbid",
     "capture_retention_days": 0,
 }
 
@@ -87,6 +85,11 @@ def mount_block_reason(mount: Mount) -> str:
         return ""
     if mount.trust == "external" and not policy.get("allow_public", True):
         return "public mounts are disabled by admin policy"
+    capped = capped_ceiling(mount.trust, mount.ceiling)
+    if _label_rank(mount.ceiling) > _label_rank(capped):
+        return (
+            f"ceiling {mount.ceiling} is above the {mount.trust} maximum {capped}"
+        )
     blob = mount.graph_id or mount.url
     if not _allowed(blob, policy.get("allowlist")) and not _allowed(mount.url, policy.get("allowlist")):
         return "graph is not on the admin allowlist"
@@ -128,8 +131,28 @@ def act_tools_allowed() -> bool:
     return bool(sources_policy().get("allow_act_tools", False))
 
 
-def declassify_allowed() -> bool:
-    return str(sources_policy().get("declassify") or "allow") != "forbid"
+def capture_retention_days() -> int:
+    """Days to keep a source capture. 0 keeps the file."""
+    try:
+        days = int(sources_policy().get("capture_retention_days") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return days if days > 0 else 0
+
+
+def _label_rank(label: str) -> int:
+    order = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
+    return order.get((label or "public").strip().lower(), 3)
+
+
+def capped_ceiling(trust: str, ceiling: str) -> str:
+    """Lower of the mount ceiling and ``max_ceiling_by_trust`` for ``trust``."""
+    table = mounts_policy().get("max_ceiling_by_trust") or {}
+    cap = str(table.get(trust) or "").strip().lower()
+    own = (ceiling or "public").strip().lower()
+    if cap and _label_rank(own) > _label_rank(cap):
+        return cap
+    return own or "public"
 
 
 def snapshot_allowed() -> bool:
@@ -137,7 +160,11 @@ def snapshot_allowed() -> bool:
 
 
 def cloud_sync_name(path: Path) -> str | None:
-    """Name of a cloud-sync root in ``path``, ignoring ordinary home folders."""
+    """Name of a cloud-sync root in ``path``.
+
+    On macOS, ``~/Desktop`` and ``~/Documents`` count as iCloud, the same
+    folders the daemon's sync hint treats as iCloud.
+    """
     text = str(path)
     if "Mobile Documents" in text or "/Library/CloudStorage/iCloud" in text:
         return "iCloud"
@@ -148,6 +175,17 @@ def cloud_sync_name(path: Path) -> str | None:
         return "Dropbox"
     if "google drive" in low or "googledrive" in low:
         return "Google Drive"
+    import sys
+    if sys.platform == "darwin":
+        try:
+            resolved = path.expanduser().resolve()
+            home = Path.home().resolve()
+            for sub in ("Documents", "Desktop"):
+                root = home / sub
+                if resolved == root or root in resolved.parents:
+                    return "iCloud"
+        except OSError:
+            return None
     return None
 
 
