@@ -1,10 +1,8 @@
 # Enterprise packaging
 
 How a company package is built and how the admin file is delivered.
-The security controls, what they enforce, and the settings that are
-not applied yet are in **[Enterprise security](enterprise/index.md)**.
-Start there for IT, cybersecurity, cloud, network, and legal review.
-This page is the install guide.
+Controls, access, network, storage, and configuration:
+**[Enterprise](enterprise/index.md)**.
 
 Switch Bay ships one codebase with two profiles:
 
@@ -350,18 +348,19 @@ in-app update — they have no `frontend/dist` in git and must not run `uv` /
 
 ## Mounted graphs and external sources
 
-A workspace keeps its own wiki and can name other graphs. The
-behaviour, the sign-in flow, and the limits (the admin allowlist
-keys are not applied yet, so an enterprise install refuses remote
-mounts and source calls) are in
-[Mounted graphs](enterprise/graphs.md),
-[External sources](enterprise/sources.md), and the
-[configuration reference](enterprise/configuration.md).
+A workspace keeps its own wiki and can name other graphs. Behaviour,
+sign-in, and the admin allowlists are in
+[Integrations](enterprise/integrations.md) and
+[Configuration](enterprise/configuration.md). The enterprise
+template's allowlists are empty, so a remote mount or a source call
+is refused until an admin adds it. Those keys are applied.
 
 A page keeps the highest classification of anything it cites.
 Publishing to GitHub refuses a wiki or vault `.md`, `.txt`, `.yaml`,
-or `.yml` file whose effective label is above public. Remote changes stay proposals. Declassification is
-forbidden in the enterprise profile.
+or `.yml` file whose effective label is above public. Remote changes
+stay proposals unless `graph_mounts.remote_write` says otherwise.
+Declassification is forbidden in the enterprise profile until
+`sources.declassify` is set to `allow`.
 
 ## Tester install (no machine admin)
 

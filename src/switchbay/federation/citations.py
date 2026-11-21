@@ -32,9 +32,12 @@ def _cache_root(workspace: Path, mount: str) -> Path:
 
 
 def cache_page(workspace: Path, mount: str, rev: str, path: str, page: dict) -> Path:
-    dest = _cache_root(workspace, mount) / rev / f"{path}.json"
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(json.dumps(page), encoding="utf-8")
+    from . import secure
+    root = _cache_root(workspace, mount)
+    secure.owner_dir(root)
+    secure.owner_dir(root / mount)
+    dest = root / rev / f"{path}.json"
+    secure.owner_write(dest, json.dumps(page))
     return dest
 
 

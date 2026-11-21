@@ -68,6 +68,31 @@ def register(tool: Tool) -> None:
     REGISTRY[tool.name] = tool
 
 
+def _exclusion_block(workspace: Path, name: str, data: dict[str, Any]) -> dict[str, Any] | None:
+    """Allow / Ask / Deny before the tool runs. Empty rules allow."""
+    from .federation.exclusion import classify_action, load
+    rules = load(workspace)
+    if not rules:
+        return None
+    action = name + " " + json.dumps(data, sort_keys=True, default=str)
+    verdict = classify_action(action, rules)
+    if verdict == "allow":
+        return None
+    if verdict == "deny":
+        from .federation import audit
+        audit.record(workspace, "refused_write", why="exclusion deny", tool=name)
+        return {"ok": False, "error": "denied by an exclusion rule", "decision": "deny"}
+    from . import permissions
+    decision = permissions.request_protected_sync(
+        workspace, "exclusion", {"tool": name, "action": action},
+    )
+    if decision != "approve":
+        from .federation import audit
+        audit.record(workspace, "refused_write", why="exclusion ask", tool=name)
+        return {"ok": False, "error": "exclusion rule needs approval", "decision": "ask"}
+    return None
+
+
 def execute(
     name: str,
     workspace: Path,
@@ -87,6 +112,9 @@ def execute(
     if tool is None:
         raise KeyError(f"unknown tool: {name}")
     data = permissions.strip_forged_approval(payload if isinstance(payload, dict) else {})
+    blocked = _exclusion_block(workspace, name, data)
+    if blocked is not None:
+        return blocked
     if permissions.needs_web_consent(name, data):
         blocked = permissions.web_egress_block_reason(workspace, name, data)
         if blocked:
@@ -2413,6 +2441,9 @@ def _read_wiki_page(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
     except OSError as e:
         return {"error": f"read failed: {e}"}
     title, ptype = _page_meta(text)
+    from .federation.classify import page_label
+    from .federation.session_label import note_read
+    note_read(workspace, page_label(p), source="local")
     truncated = len(text) > 12000
     cite = wiki_cite_target(rel)
     return {

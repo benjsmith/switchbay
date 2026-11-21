@@ -16,8 +16,8 @@ Databricks, AWS Context, AWS Quick) are called through one broker and
 recorded on this machine. Real accounts for those services are not
 wired up yet.
 
-What is enforced, what is still a stub, and how to configure it:
-[Enterprise security](docs/enterprise/index.md).
+Controls, access, and configuration:
+[Enterprise](docs/enterprise/index.md).
 
 ## 2026-11-20 — v0.15.0
 

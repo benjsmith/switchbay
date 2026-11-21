@@ -1037,6 +1037,9 @@ export default function App() {
           }
           return prev;
         });
+      } else if (msg.type === "public_write") {
+        const mount = msg.mount || "";
+        window.dispatchEvent(new CustomEvent("sy:public-write", { detail: { mount } }));
       } else if (msg.type === "TOOL_CALL_RESULT") {
         if (!belongsToFocusedRail(msg.runId)) return;
         setEntries((prev) => {

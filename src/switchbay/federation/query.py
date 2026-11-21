@@ -131,7 +131,7 @@ def federated_search(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]
                 groups.append((mount, result))
     from .access import filter_rows
     from .session_label import note_read
-    results = filter_rows(_fuse(groups))[:limit]
+    results = filter_rows(_fuse(groups), workspace)[:limit]
     for row in results:
         if row.get("classification"):
             note_read(workspace, str(row["classification"]), source=str(row.get("graph") or "search"))
@@ -184,7 +184,7 @@ def federated_read(workspace: Path, payload: dict[str, Any]) -> dict[str, Any] |
         source_ref = _frontmatter_key(str(page.get("content") or ""), "source_ref")
     elif isinstance(page.get("content"), str):
         source_ref = _frontmatter_key(str(page.get("content") or ""), "source_ref")
-    if source_ref and not allows_read(source_ref):
+    if source_ref and not allows_read(source_ref, workspace):
         return {"error": "you do not have access to this page", "source_ref": source_ref}
     if page.get("classification"):
         note_read(workspace, str(page["classification"]), source=mount.id)

@@ -45,11 +45,8 @@ def _section() -> dict:
 
 
 def presidio_installed() -> bool:
-    try:
-        import presidio_analyzer  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    from .presidio_scan import installed
+    return installed()
 
 
 def user_may_toggle() -> bool:
@@ -196,28 +193,41 @@ def connection_allowed(mount_id: str) -> bool:
     return mount_id in {str(item) for item in (section.get("connections") or [])}
 
 
-def gate(workspace: Path, *, mount_id: str, ceiling: str) -> dict[str, Any]:
+def gate(workspace: Path, *, mount_id: str, ceiling: str, text: str = "") -> dict[str, Any]:
     """Decide whether a public write may proceed."""
     if ceiling != "public":
-        return {"ok": True}
+        return {"ok": True, "mount": mount_id}
     if not connection_allowed(mount_id):
         audit.record(workspace, "refused_write", why="public writes are not allowed", mount=mount_id)
-        return {"ok": False, "error": "public writes are limited to configured connections"}
+        return {"ok": False, "error": "public writes are limited to configured connections", "mount": mount_id}
     if not presidio_enabled_for_user(workspace):
-        return {"ok": True, "presidio": "off", "guidance": GUIDANCE}
-    if presidio_installed():
-        return {"ok": True, "presidio": "scanned"}
-    if _section().get("presidio_required") and _enterprise() and not _always(workspace):
-        # Required, but the person can still take responsibility unless
-        # an admin removed that control. The dialog is that responsibility.
-        pass
+        return {"ok": True, "presidio": "off", "guidance": GUIDANCE, "mount": mount_id}
+    from .presidio_scan import scan
+    result = scan(text)
+    if result.get("scanned"):
+        entities = list(result.get("entities") or [])
+        if entities:
+            audit.record(
+                workspace, "refused_write", why="presidio", mount=mount_id,
+                entities=", ".join(entities),
+            )
+            return {
+                "ok": False,
+                "presidio": "scanned",
+                "entities": entities,
+                "error": "presidio found personal data: " + ", ".join(entities),
+                "mount": mount_id,
+            }
+        return {"ok": True, "presidio": "scanned", "entities": [], "mount": mount_id}
     if _always(workspace):
-        return {"ok": True, "presidio": "always-allow"}
+        return {"ok": True, "presidio": "always-allow", "mount": mount_id}
     return {
         "ok": False,
         "needs_dialog": True,
+        "presidio": "unscanned",
         "error": "confirm this public write is free of personal data",
         "choices": ["ok", "always", "cancel"],
+        "mount": mount_id,
     }
 
 

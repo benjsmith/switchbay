@@ -50,8 +50,8 @@ profile is today's consumer product. An optional **enterprise** profile
 (`SWITCHBAY_PROFILE=enterprise` or a machine admin file) locks to GitHub
 Copilot + local models and turns EDR-noisy hooks off — admins can still
 enable Hugging Face downloads. Packaging:
-**[`docs/enterprise.md`](docs/enterprise.md)**. Security posture,
-controls, network, cloud, and the configuration reference:
+**[`docs/enterprise.md`](docs/enterprise.md)**. Controls, access,
+network, and configuration:
 **[`docs/enterprise/index.md`](docs/enterprise/index.md)**.
 
 A workspace is any folder with a **curiosity-engine**-shaped layout
@@ -201,7 +201,7 @@ don’t need to quit and reopen the PWA after each restart.
 
 ## More
 
-- **[`docs/enterprise/index.md`](docs/enterprise/index.md)** — enterprise security for IT, cybersecurity, cloud, network, and legal: posture, controls, audit, network, and configuration.
+- **[`docs/enterprise/index.md`](docs/enterprise/index.md)** — enterprise controls, access, network, storage, audit, and configuration.
 - **[`docs/enterprise.md`](docs/enterprise.md)** — enterprise packaging and where the admin file is installed.
 - **[`docs/architecture.md`](docs/architecture.md)** — how Switchbay hosts CE and okstratr (embed proxy, core-skills, pack/ingest queues).
 - **[`docs/concepts-and-data-flow.md`](docs/concepts-and-data-flow.md)** — the map: concepts + data flows.

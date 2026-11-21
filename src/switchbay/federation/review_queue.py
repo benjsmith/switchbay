@@ -95,4 +95,6 @@ def decide(workspace: Path, item_id: str, label: str) -> dict[str, Any]:
     if found is None:
         return {"ok": False, "error": "no such item"}
     _write(workspace, rows)
+    from .broker import set_capture_label
+    set_capture_label(workspace, item_id, label)
     return {"ok": True, "item": found}
