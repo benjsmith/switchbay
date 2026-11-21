@@ -12517,6 +12517,18 @@ async def _dispatch_chat(
             system_prompt = f"{system_prompt}\n\n{short}"
     except Exception:  # noqa: BLE001
         pass
+    try:
+        from .federation.exclusion import load as _exclusion_load, prompt_block
+        block = prompt_block(_exclusion_load(workspace))
+        if block:
+            system_prompt = f"{system_prompt}\n\n{block}"
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from .federation.session_label import set_current
+        set_current(str(thread_id or run_id or "rail"))
+    except Exception:  # noqa: BLE001
+        pass
     executed_calls: dict[str, int] = {}
     loop_hits = 0
     wiki_cites: list[str] = []
@@ -17892,6 +17904,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_get("/api/intro", handle_intro_get)
     app.router.add_post("/api/intro/close", handle_intro_close)
     app.router.add_post("/api/reviews/close", handle_reviews_close)
+    from .federation.api import register as _register_federation_http
+    _register_federation_http(app)
     app.router.add_get("/api/walkthrough/status", handle_walkthrough_status)
     app.router.add_post("/api/walkthrough/done", handle_walkthrough_done)
     # Mars Hopper easter egg (vendored static game — not GitHub Pages)

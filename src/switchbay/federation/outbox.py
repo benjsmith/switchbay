@@ -53,6 +53,7 @@ def change_id(graph_id: str, path: str, base_rev: str, content: str) -> str:
 def submit(
     workspace: Path, *, mount_id: str, path: str, content: str,
     base_rev: str, mode: str, title: str = "", base_content: str = "",
+    public_write_choice: str = "",
 ) -> dict[str, Any]:
     cfg = load(workspace)
     mount = cfg.get(mount_id)
@@ -67,6 +68,18 @@ def submit(
     if block:
         audit.record(workspace, "refused_write", mount=mount_id, why=block, path=path)
         return {"ok": False, "error": block}
+    from .public_write import confirm, gate
+    content_label = classify.derived(workspace, content)
+    decision = gate(workspace, mount_id=mount.id, ceiling=content_label if content_label == "public" else mount.ceiling)
+    if content_label == "public" and mount.ceiling == "public":
+        if decision.get("needs_dialog"):
+            if not public_write_choice:
+                return decision
+            confirmed = confirm(workspace, public_write_choice, mount_id=mount.id)
+            if not confirmed.get("ok"):
+                return confirmed
+        elif not decision.get("ok", True):
+            return decision
     if mount.ceiling == "public":
         gate = ontology.presidio_note(content)
         if gate.get("blocked"):

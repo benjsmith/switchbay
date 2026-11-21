@@ -63,7 +63,7 @@ class Source:
     kind: str
     url: str = ""
     auth: str = "oauth"
-    classification: str = "confidential"
+    classification: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -144,7 +144,7 @@ def _source_from(row: dict[str, Any]) -> Source | None:
         kind=kind,
         url=str(row.get("url") or ""),
         auth=str(row.get("auth") or "oauth"),
-        classification=str(row.get("classification") or "confidential"),
+        classification=str(row.get("classification") or ""),
     )
 
 

@@ -146,7 +146,14 @@ def main() -> int:
             raise SystemExit(f"confidential page was accepted by the public mount: {refused}")
         if not any(row["event"] == "refused_write" for row in audit.read(local)):
             raise SystemExit("refusal was not audited")
+        from switchbay.federation.session_label import floor
+        label = floor(local)
+        if label != "confidential":
+            raise SystemExit(f"session label is {label}, expected confidential")
+        if not any(row.get("event") == "confidential_read" for row in audit.read(local)):
+            raise SystemExit("confidential read was not audited")
         print("ok")
+        print(f"session {label}")
         print(f"live rev {acme_rev}")
         print(f"snapshot rev {public_rev}")
         print(f"citation {cite}")

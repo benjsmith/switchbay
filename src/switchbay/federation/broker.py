@@ -76,10 +76,9 @@ def call(
             "error": f"{source.kind} policy blocked this read",
             "message": normalised["message"],
         }
-    label = adapters.raise_label(source.kind, raw if isinstance(raw, dict) else {})
-    if source.classification:
-        from .classify import highest
-        label = highest(label, source.classification)
+    label = adapters.inherited_label(
+        source.classification, raw if isinstance(raw, dict) else {},
+    )
     cid = _capture_id(source.id, tool, arguments)
     record = {
         "capture_id": cid,
@@ -91,13 +90,22 @@ def call(
         "result_sha256": hashlib.sha256(json.dumps(normalised, sort_keys=True).encode()).hexdigest(),
         "deep_links": normalised["deep_links"],
         "classification": label,
+        "needs_classification": not bool(label),
         "policy_outcome": "allowed",
         "text": normalised["text"],
         "rows": normalised["rows"],
     }
+    from . import review_queue, secure
+    if not label:
+        review_queue.add(workspace, {
+            "id": cid,
+            "title": f"{source.kind} {tool}",
+            "kind": "capture",
+            "source": record["source"],
+        })
     dest = _dir(workspace)
-    dest.mkdir(parents=True, exist_ok=True)
-    (dest / f"{cid}.json").write_text(json.dumps(record), encoding="utf-8")
+    secure.owner_dir(dest)
+    secure.owner_write(dest / f"{cid}.json", json.dumps(record))
     audit.record(
         workspace, "source_call", source=source_id, tool=tool,
         capture_id=cid, policy_outcome="allowed",
@@ -107,6 +115,8 @@ def call(
         "capture_id": cid,
         "citation": f"(capture:{cid})",
         "classification": label,
+        "needs_classification": not bool(label),
+        "usable": bool(label) or not review_queue.mandatory(workspace),
         "text": normalised["text"],
         "rows": normalised["rows"],
         "deep_links": normalised["deep_links"],

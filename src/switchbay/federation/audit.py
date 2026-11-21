@@ -29,10 +29,15 @@ def record(workspace: Path, event: str, **fields: Any) -> dict[str, Any]:
     for key, value in fields.items():
         if value is not None:
             row[key] = value
+    from . import secure
     path = _path(workspace)
-    path.parent.mkdir(parents=True, exist_ok=True)
+    secure.owner_dir(path.parent)
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
     return row
 
 

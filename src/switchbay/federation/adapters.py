@@ -101,9 +101,18 @@ def default_classification(kind: str) -> str:
     return "internal"
 
 
-def raise_label(kind: str, result: dict) -> str:
-    """A sensitivity label can raise the default, never lower it."""
-    base = default_classification(kind)
+def inherited_label(source_label: str, result: dict) -> str:
+    """Use the source's own label. A sensitivity tag can only raise it.
+
+    An empty result means the source did not classify the item. The
+    caller sends that item to review instead of inventing a label.
+    """
+    explicit = str(result.get("classification") or "").strip().lower()
+    base = explicit if explicit in ("public", "internal", "confidential", "restricted") else ""
+    if not base:
+        base = (source_label or "").strip().lower()
+        if base not in ("public", "internal", "confidential", "restricted"):
+            base = ""
     labels = result.get("labels") or result.get("sensitivity") or []
     if isinstance(labels, str):
         labels = [labels]
@@ -111,7 +120,8 @@ def raise_label(kind: str, result: dict) -> str:
     if any(word in text for word in ("restricted", "highly confidential")):
         return "restricted"
     if "confidential" in text or "secret" in text:
-        return "confidential" if _rank(base) <= _rank("confidential") else base
+        if not base or _rank(base) <= _rank("confidential"):
+            return "confidential"
     return base
 
 

@@ -29,6 +29,12 @@ STATE: dict[str, Any] = {
     # to the mode so the shell's hide-without-CE rule can be observed.
     "ce": "absent",
     "graph_tab": False,
+    "show_reviews": False,
+    "session_label": "public",
+    "exclusion_rules": [],
+    "class_items": [],
+    "public_rules": [],
+    "presidio_enabled": True,
     "comms": [
         {
             "key": "gmail:acct:thread-e2e",
@@ -111,7 +117,9 @@ def _hello() -> dict[str, Any]:
                 {"id": "comms", "title": "Comms", "kind": "comms", "source": "user"},
             ] + ([
                 {"id": "graph", "title": "Graph", "kind": "graph", "source": "core"},
-            ] if STATE["graph_tab"] else []),
+            ] if STATE["graph_tab"] else []) + ([
+                {"id": "reviews", "title": "Reviews", "kind": "report", "source": "core"},
+            ] if STATE.get("show_reviews") else []),
         },
         "selection": None,
         "workspaces": {
@@ -536,6 +544,82 @@ async def handle_ce_data(_request: web.Request) -> web.Response:
     })
 
 
+async def handle_session_label(request: web.Request) -> web.Response:
+    if request.method == "GET":
+        return web.json_response({"label": STATE.get("session_label") or "public", "session": "e2e"})
+    return web.json_response({"ok": True, "after": "public"})
+
+
+async def handle_exclusion(request: web.Request) -> web.Response:
+    if request.method == "PUT":
+        body = await request.json()
+        rules = body.get("rules") if isinstance(body, dict) else []
+        cleaned = []
+        for index, row in enumerate(rules or []):
+            if not isinstance(row, dict) or not str(row.get("description") or "").strip():
+                continue
+            cleaned.append({
+                "id": str(row.get("id") or f"r{index}"),
+                "description": str(row["description"]),
+                "decision": str(row.get("decision") or "ask"),
+            })
+        STATE["exclusion_rules"] = cleaned
+    return web.json_response({"rules": STATE.get("exclusion_rules") or []})
+
+
+async def handle_class_queue(_request: web.Request) -> web.Response:
+    return web.json_response({"items": STATE.get("class_items") or [], "mandatory": False})
+
+
+async def handle_class_decide(request: web.Request) -> web.Response:
+    body = await request.json()
+    item_id = str(body.get("id") or "")
+    label = str(body.get("label") or "")
+    STATE["class_items"] = [
+        row for row in (STATE.get("class_items") or []) if row.get("id") != item_id
+    ]
+    return web.json_response({"ok": True, "item": {"id": item_id, "classification": label}})
+
+
+async def handle_public_write(request: web.Request) -> web.Response:
+    if request.method == "GET":
+        return web.json_response({
+            "presidio_installed": False,
+            "presidio_enabled": STATE.get("presidio_enabled", True),
+            "user_may_toggle": True,
+            "guidance": "Presidio is off in this workspace, so public writes are not scanned for personal data.",
+            "rules": STATE.get("public_rules") or [],
+        })
+    body = await request.json()
+    if request.path.endswith("/presidio"):
+        STATE["presidio_enabled"] = bool(body.get("enabled", True))
+        return web.json_response({"ok": True, "enabled": STATE["presidio_enabled"], "guidance": "Presidio is off in this workspace, so public writes are not scanned for personal data."})
+    if request.path.endswith("/confirm"):
+        if body.get("choice") == "always":
+            STATE.setdefault("public_rules", []).append({
+                "id": "allow-1",
+                "description": "Public write without Presidio",
+                "decision": "allow",
+                "scope": "global",
+            })
+        return web.json_response({"ok": body.get("choice") != "cancel"})
+    if request.path.endswith("/scope"):
+        for row in STATE.get("public_rules") or []:
+            if row.get("id") == body.get("id"):
+                row["scope"] = body.get("scope")
+        return web.json_response({"ok": True})
+    return web.json_response({"ok": True})
+
+
+async def handle_e2e_seed(request: web.Request) -> web.Response:
+    body = await request.json()
+    if isinstance(body, dict):
+        for key in ("session_label", "show_reviews", "class_items", "exclusion_rules", "presidio_enabled"):
+            if key in body:
+                STATE[key] = body[key]
+    return web.json_response({"ok": True, "e2e_mock": True})
+
+
 def build_app(dist: pathlib.Path) -> web.Application:
     app = web.Application()
     app["dist"] = dist
@@ -547,6 +631,16 @@ def build_app(dist: pathlib.Path) -> web.Application:
         return web.FileResponse(index)
 
     app.router.add_get("/api/health", handle_health)
+    app.router.add_post("/api/e2e/seed", handle_e2e_seed)
+    app.router.add_get("/api/session/label", handle_session_label)
+    app.router.add_get("/api/exclusion-rules", handle_exclusion)
+    app.router.add_put("/api/exclusion-rules", handle_exclusion)
+    app.router.add_get("/api/classification/queue", handle_class_queue)
+    app.router.add_post("/api/classification/decide", handle_class_decide)
+    app.router.add_get("/api/public-write", handle_public_write)
+    app.router.add_post("/api/public-write/presidio", handle_public_write)
+    app.router.add_post("/api/public-write/confirm", handle_public_write)
+    app.router.add_post("/api/public-write/scope", handle_public_write)
     app.router.add_get("/api/comms/review", handle_comms_get)
     app.router.add_post("/api/comms/review", handle_comms_post)
     app.router.add_post("/api/comms/review/open", handle_comms_open)

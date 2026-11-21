@@ -177,6 +177,9 @@ def _is_published(rel: str, *, include_vault: bool) -> bool:
     POSIX path. Not a full gitignore engine — it enforces OUR rules
     (the security-relevant ones); a user's own .gitignore is applied by
     git at push time on top of this."""
+    from .federation.secure import export_excluded
+    if export_excluded(rel):
+        return False
     first = rel.split("/", 1)[0]
     if first in _SKIP_DIR_NAMES or first == ".DS_Store" or rel.endswith("/.DS_Store"):
         return False
@@ -276,6 +279,12 @@ async def publish(
         listed = ", ".join(item["path"] for item in blocked[:12])
         raise ShareError(
             "refusing to publish pages above public: " + listed
+        )
+    from .federation.session_label import floor
+    session = floor(workspace)
+    if session != "public":
+        raise ShareError(
+            f"this chat is {session}; publishing is capped at that label"
         )
 
     ws = str(workspace)

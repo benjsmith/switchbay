@@ -132,6 +132,11 @@ def refuses(workspace: Path, text: str, ceiling: str) -> str:
 
 
 def declassify(workspace: Path, rel: str, reason: str, *, human_confirmed: bool) -> dict:
+    from .access import may_edit_page
+    allowed, why = may_edit_page(workspace, rel)
+    if not allowed:
+        audit.record(workspace, "refused_write", why=why, path=rel)
+        return {"ok": False, "error": why}
     if not human_confirmed:
         audit.record(workspace, "refused_write", why="declassification requires a person", path=rel)
         return {"ok": False, "error": "only a person can declassify a page"}
@@ -168,7 +173,48 @@ def declassify(workspace: Path, rel: str, reason: str, *, human_confirmed: bool)
         workspace, "declassify", path=path.relative_to(workspace).as_posix(),
         before=before, after="public", reason=reason,
     )
-    return {"ok": True, "path": path.relative_to(workspace).as_posix(), "before": before, "after": "public"}
+    warning = overlap_warning(workspace, path.read_text(encoding="utf-8"))
+    result = {
+        "ok": True,
+        "path": path.relative_to(workspace).as_posix(),
+        "before": before,
+        "after": "public",
+    }
+    if warning:
+        result["warning"] = warning
+    return result
+
+
+def overlap_warning(workspace: Path, text: str) -> str:
+    """Non-blocking note when public text still shares phrases or numbers
+    with a confidential page. Does not stop the declassification."""
+    import re
+    numbers = set(re.findall(r"\d{2,}", text or ""))
+    phrases = set(re.findall(r"[A-Za-z]{4,}(?:\s+[A-Za-z]{4,}){2,}", text or ""))
+    if not numbers and not phrases:
+        return ""
+    wiki = workspace / "wiki"
+    if not wiki.is_dir():
+        return ""
+    shared: list[str] = []
+    for page in wiki.rglob("*.md"):
+        try:
+            body = page.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        if label_in_text(_frontmatter(body)) not in ("confidential", "restricted"):
+            continue
+        for number in numbers:
+            if number in body and number not in shared:
+                shared.append(number)
+        folded = body.casefold()
+        for phrase in phrases:
+            if phrase.casefold() in folded and phrase not in shared:
+                shared.append(phrase)
+    if not shared:
+        return ""
+    shown = ", ".join(shared[:4])
+    return f"This text still shares {shown} with a confidential source."
 
 
 def blocking_publish_paths(workspace: Path) -> list[dict[str, str]]:

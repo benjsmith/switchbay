@@ -455,6 +455,8 @@ def set_active_only(path: Path) -> dict[str, Any]:
         raise OutsideHomeError(
             f"workspaces must live inside {home_label()}; refusing {path}"
         )
+    from .federation.boundary import require
+    require(path)
     return load()
 
 

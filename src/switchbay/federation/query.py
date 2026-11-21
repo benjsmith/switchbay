@@ -129,7 +129,12 @@ def federated_search(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]
                 unavailable.append({"graph": mount.id, "error": result})
             else:
                 groups.append((mount, result))
-    results = _fuse(groups)[:limit]
+    from .access import filter_rows
+    from .session_label import note_read
+    results = filter_rows(_fuse(groups))[:limit]
+    for row in results:
+        if row.get("classification"):
+            note_read(workspace, str(row["classification"]), source=str(row.get("graph") or "search"))
     out: dict[str, Any] = {
         "results": results,
         "total_matches": len(results),
@@ -172,6 +177,17 @@ def federated_read(workspace: Path, payload: dict[str, Any]) -> dict[str, Any] |
             return None
     except (GraphError, ValueError, OSError) as exc:
         return {"error": f"{mount_id} unreachable: {exc}", "unavailable": True}
+    from .access import allows_read
+    from .session_label import note_read
+    source_ref = ""
+    if mount.kind == "snapshot":
+        source_ref = _frontmatter_key(str(page.get("content") or ""), "source_ref")
+    elif isinstance(page.get("content"), str):
+        source_ref = _frontmatter_key(str(page.get("content") or ""), "source_ref")
+    if source_ref and not allows_read(source_ref):
+        return {"error": "you do not have access to this page", "source_ref": source_ref}
+    if page.get("classification"):
+        note_read(workspace, str(page["classification"]), source=mount.id)
     rev = str(page.get("rev") or "")
     content = frame(str(page.get("content") or ""), mount, rev)
     return {
@@ -189,6 +205,19 @@ def federated_read(workspace: Path, payload: dict[str, Any]) -> dict[str, Any] |
         "wikilink": f"[[{mount.id}:{page.get('path')}]]",
         "citation": f"(graph:{mount.id}/{page.get('path')}@{rev})",
     }
+
+
+def _frontmatter_key(text: str, key: str) -> str:
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    if end < 0:
+        return ""
+    prefix = key + ":"
+    for line in text[4:end].splitlines():
+        if line.startswith(prefix):
+            return line.split(":", 1)[1].strip()
+    return ""
 
 
 def _render(page: dict) -> str:

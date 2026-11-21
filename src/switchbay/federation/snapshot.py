@@ -173,6 +173,13 @@ def search(snap: Snapshot, query: str, limit: int) -> list[dict]:
         if rel.endswith(".md"):
             rel = rel[:-3]
         title, ptype, label = _meta(text)
+        source_ref = ""
+        if text.startswith("---"):
+            end = text.find("\n---", 3)
+            if end > 0:
+                for line in text[4:end].splitlines():
+                    if line.startswith("source_ref:"):
+                        source_ref = line.split(":", 1)[1].strip()
         start = max(0, first if first >= 0 else 0)
         hits.append({
             "path": rel,
@@ -182,6 +189,7 @@ def search(snap: Snapshot, query: str, limit: int) -> list[dict]:
             "snippet": " ".join(text[start:start + 180].split()),
             "classification": label,
             "rev": snap.rev,
+            "source_ref": source_ref,
         })
     hits.sort(key=lambda row: (-row["score"], row["path"]))
     return hits[:limit]
