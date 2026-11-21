@@ -125,10 +125,8 @@ test("review tab sets a classification", async ({ page }) => {
   const review = page.locator("[data-testid='classification-review']");
   await expect(review).toBeVisible();
   await expect(review.getByText("Quick entity")).toBeVisible();
+  await review.screenshot({ path: `${shotDir}/review-classification.png` });
   await review.getByLabel("Label for Quick entity").selectOption("internal");
   await review.getByRole("button", { name: "Set label" }).click();
   await expect(review).toHaveCount(0);
-  await page.locator(".sy-report-empty, .sy-report-host").first().screenshot({
-    path: `${shotDir}/review-classification.png`,
-  });
 });
