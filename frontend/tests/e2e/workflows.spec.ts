@@ -622,10 +622,12 @@ test("editor saves a line and shows it after reload", async ({ page }) => {
   const editor = page.getByRole("tabpanel").getByRole("textbox");
   await editor.click();
   await page.keyboard.press("Control+End");
-  await page.keyboard.type("PARITY-LINE");
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeEnabled();
-  await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Save", exact: true })).toBeVisible();
+  await page.keyboard.type("\nPARITY-LINE");
+  const save = page.getByRole("button", { name: "Save", exact: true });
+  await expect(save).toBeEnabled();
+  await save.click();
+  await expect(save).toBeDisabled();
+  await expect(page.getByText(/^error:/)).toHaveCount(0);
   await page.reload();
   await page.locator(".sy-tabstrip").waitFor();
   await dismissFirstRun(page);
@@ -651,7 +653,10 @@ test("add a second workspace and switch back", async ({ page }) => {
   await page.getByRole("button", { name: "Add", exact: true }).click();
   await expect(page.locator(".sy-ws-trigger")).toContainText(baseName(alt));
   await expect(page.getByText(new RegExp(`opened ${alt.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`))).toBeVisible();
+  await page.locator(".sy-fb-search").fill("wiki/index.md");
+  await page.locator(".sy-fb-name", { hasText: /^index\.md$/ }).click();
+  await expect(page.getByText("Remote mount page").first()).toBeVisible();
   await page.locator(".sy-ws-trigger").click();
-  await page.locator(".sy-ws-name", { hasText: baseName(home) }).click();
+  await page.getByRole("button", { name: new RegExp(`^${baseName(home)} /`) }).click();
   await expect(page.locator(".sy-ws-trigger")).toContainText(baseName(home));
 });
