@@ -92,6 +92,15 @@ for name in ("ws-pre", "ws-post"):
     wb = dest / ".workbench"
     (wb / "state").mkdir(parents=True, exist_ok=True)
     (wb / "mode.json").write_text(json.dumps(mode), encoding="utf-8")
+    deck = dest / "slideshows" / "parity-deck"
+    deck.mkdir(parents=True, exist_ok=True)
+    (deck / "index.html").write_text(
+        "<!doctype html><title>Parity deck</title><p>slide</p>\n",
+        encoding="utf-8",
+    )
+    (deck / "deck.json").write_text(
+        json.dumps({"title": "Parity deck"}), encoding="utf-8",
+    )
     body = (
         "---\nprovenance: untrusted-import\n---\n\n"
         "# Parity concept\n\nUNTRUSTED REMOTE CONTENT\n\n"

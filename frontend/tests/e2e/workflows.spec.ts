@@ -634,9 +634,8 @@ test("public write always-allow can be narrowed to this workspace", async ({ pag
 
 test("slideshow pdf export stops while the session is confidential", async ({ page }) => {
   await ready(page);
-  await page.locator(".sy-fb-search").fill("wiki/index.md");
-  await page.locator(".sy-fb-name", { hasText: /^index\.md$/ }).click();
-  await page.getByRole("button", { name: "→ Slideshow" }).click();
+  await openTab(page, "Library");
+  await page.getByRole("button", { name: /Parity deck/ }).click();
   const save = page.getByRole("button", { name: "↓ save PDF" });
   await expect(save).toBeVisible();
   const dialogPromise = page.waitForEvent("dialog");
