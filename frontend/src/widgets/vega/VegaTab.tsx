@@ -1026,6 +1026,12 @@ export default function VegaTab() {
     () => extractedRows.filter((row) => matchesQuery(row.blob, query)),
     [extractedRows, query],
   );
+  const visiblePlotCount = useMemo(
+    () => (plots || []).filter((meta) => !hiddenIds.has(meta.id)).length,
+    [plots, hiddenIds],
+  );
+  const figureTotal = extracted.length + visiblePlotCount;
+  const figureShown = shownExtracted.length + shownPlots.length;
 
   // ── Render ───────────────────────────────────────────────────────
 
@@ -1116,9 +1122,7 @@ export default function VegaTab() {
           >Show {hiddenIds.size} hidden</button>
         )}
         <span className="sy-vega-counter">
-          {query.trim()
-            ? `${shownExtracted.length + shownPlots.length} match`
-            : `${shownPlots.length} plots`}
+          {query.trim() ? `${figureShown} of ${figureTotal}` : String(figureTotal)}
         </span>
       </div>
       <div className="sy-plot-scroll">
@@ -1172,8 +1176,8 @@ export default function VegaTab() {
             <h2>Plots</h2>
             <span className="sy-plot-section-count">
               {query.trim()
-                ? `${shownPlots.length} of ${plots.length}`
-                : String(plots.length)}
+                ? `${shownPlots.length} of ${visiblePlotCount}`
+                : String(visiblePlotCount)}
             </span>
           </header>
           {shownPlots.length === 0 ? (

@@ -133,6 +133,12 @@ test("plot tab sections and search filter both lists locally", async ({ page }) 
   await expect(plots.locator(".sy-plot-card-title", { hasText: "Cohort retention" })).toBeVisible();
   await expect(extracted.locator(".sy-plot-section-count")).toHaveText("2");
   await expect(plots.locator(".sy-plot-section-count")).toHaveText("2");
+  await expect(page.locator(".sy-vega-counter")).toHaveText("4");
+  await expect(extracted.locator("[data-figure-id='glucose']")).toContainText("Time · Concentration");
+  await expect(extracted.locator("[data-figure-id='glucose']")).toContainText("Plasma glucose after the meal.");
+  await expect(extracted.locator("[data-figure-id='site-plan']")).toContainText("East-west · North-south");
+  await expect(extracted.locator("[data-figure-id='site-plan']")).toContainText("Camera positions on the floor.");
+  await expect(extracted.locator("[data-figure-id='site-plan']")).not.toContainText("Concentration");
 
   const figure = extracted.locator("img").first();
   await expect.poll(
@@ -154,6 +160,7 @@ test("plot tab sections and search filter both lists locally", async ({ page }) 
   await expect(plots.locator(".sy-plot-card-title", { hasText: "Cohort retention" })).toHaveCount(0);
   await expect(extracted.locator(".sy-plot-section-count")).toHaveText("1 of 2");
   await expect(plots.locator(".sy-plot-section-count")).toHaveText("0 of 2");
+  await expect(page.locator(".sy-vega-counter")).toHaveText("1 of 4");
   await expect(extracted.locator("mark.sy-plot-hit").first()).toBeVisible();
   expect(searchCalls).toEqual([]);
 
@@ -161,6 +168,8 @@ test("plot tab sections and search filter both lists locally", async ({ page }) 
   await expect(plots.locator(".sy-plot-card-title", { hasText: "Cohort retention" })).toBeVisible();
   await expect(extracted.locator(".sy-plot-card-title", { hasText: "Glucose curve" })).toHaveCount(0);
   await expect(plots.locator(".sy-plot-section-count")).toHaveText("1 of 2");
+  await expect(extracted.locator(".sy-plot-section-count")).toHaveText("0 of 2");
+  await expect(page.locator(".sy-vega-counter")).toHaveText("1 of 4");
   expect(searchCalls).toEqual([]);
 
   await page.screenshot({ path: path.join(shotDir, "plots-search.png") });
@@ -185,6 +194,40 @@ test("library lists generated plots with small thumbnails", async ({ page }) => 
   await expect.poll(
     () => img.evaluate((el: HTMLImageElement) => el.naturalWidth),
   ).toBeGreaterThan(20);
+
+  async function assertThumbAboveTitle() {
+    const count = await cards.count();
+    expect(count).toBeGreaterThan(0);
+    for (let i = 0; i < count; i++) {
+      const card = cards.nth(i);
+      const boxes = await card.evaluate((el) => {
+        const image = el.querySelector("img");
+        const title = el.querySelector(".sy-lib-card-title");
+        if (!(image instanceof HTMLElement) || !(title instanceof HTMLElement)) return null;
+        const a = image.getBoundingClientRect();
+        const b = title.getBoundingClientRect();
+        return {
+          ax: a.x, ay: a.y, aw: a.width, ah: a.height,
+          bx: b.x, by: b.y, bw: b.width, bh: b.height,
+        };
+      });
+      expect(boxes, "plot card is missing a thumbnail or title").not.toBeNull();
+      const box = boxes!;
+      const intersects = box.ax < box.bx + box.bw
+        && box.ax + box.aw > box.bx
+        && box.ay < box.by + box.bh
+        && box.ay + box.ah > box.by;
+      expect(intersects, `thumbnail overlaps the title at ${page.viewportSize()?.width}px`).toBe(false);
+      expect(box.ay + box.ah).toBeLessThanOrEqual(box.by + 0.5);
+    }
+  }
+
+  for (const width of [1440, 900, 480]) {
+    await page.setViewportSize({ width, height: 900 });
+    await assertThumbAboveTitle();
+  }
+  await page.setViewportSize({ width: 1440, height: 1280 });
+  await assertThumbAboveTitle();
 
   await page.screenshot({ path: path.join(shotDir, "library-plots.png") });
 });

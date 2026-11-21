@@ -567,15 +567,21 @@ def _init_gallery() -> None:
     assets.mkdir(parents=True)
     pages = ws / "wiki" / "figures"
 
-    def _figure(stem: str, title: str, caption: str, color: str) -> None:
+    def _write_figure(
+        stem: str,
+        title: str,
+        caption: str,
+        axes: tuple[str, str],
+        legend: tuple[str, ...],
+        draw_image,
+    ) -> None:
         image = Image.new("RGB", (800, 480), "#fbfcfe")
         draw = ImageDraw.Draw(image)
-        draw.rectangle((48, 64, 752, 430), outline="#d5d9e0")
-        draw.text((56, 24), title, fill="#1a1d22")
-        for i, height in enumerate((120, 180, 150, 220, 160)):
-            x = 90 + i * 70
-            draw.rectangle((x, 400 - height, x + 40, 400), fill=color)
+        draw.text((56, 20), title, fill="#1a1d22")
+        draw_image(draw)
         image.save(assets / f"{stem}.png", format="PNG")
+        axis_lines = "\n".join(f'  - "{label}"' for label in axes)
+        legend_lines = "\n".join(f'  - "{label}"' for label in legend)
         (pages / f"{stem}.md").write_text(
             "---\n"
             f'title: "{title}"\n'
@@ -584,19 +590,44 @@ def _init_gallery() -> None:
             f"asset: {stem}.png\n"
             "sources: [source-doc]\n"
             "axis_titles:\n"
-            '  - "Time"\n'
-            '  - "Concentration"\n'
+            f"{axis_lines}\n"
             "legend:\n"
-            '  - "control"\n'
-            '  - "treated"\n'
+            f"{legend_lines}\n"
             "---\n\n"
             f"![[figures/_assets/{stem}.png]]\n\n"
             f"*{caption}*\n",
             encoding="utf-8",
         )
 
-    _figure("glucose", "Glucose curve", "Plasma glucose after the meal.", "#e17c05")
-    _figure("site-plan", "Site plan", "Camera positions on the floor.", "#1d6996")
+    def _glucose_bars(draw: ImageDraw.ImageDraw) -> None:
+        draw.rectangle((48, 64, 752, 430), outline="#d5d9e0")
+        for i, height in enumerate((120, 180, 150, 220, 160)):
+            x = 90 + i * 70
+            draw.rectangle((x, 400 - height, x + 40, 400), fill="#e17c05")
+
+    def _floor_plan(draw: ImageDraw.ImageDraw) -> None:
+        draw.rectangle((80, 70, 720, 420), outline="#1d6996", width=3)
+        draw.line((400, 70, 400, 420), fill="#1d6996", width=2)
+        draw.line((80, 250, 720, 250), fill="#1d6996", width=2)
+        draw.ellipse((180, 140, 210, 170), fill="#cc503e")
+        draw.ellipse((520, 300, 550, 330), fill="#0f8554")
+
+    _write_figure(
+        "glucose",
+        "Glucose curve",
+        "Plasma glucose after the meal.",
+        ("Time", "Concentration"),
+        ("control", "treated"),
+        _glucose_bars,
+    )
+    _write_figure(
+        "site-plan",
+        "Site plan",
+        "Camera positions on the floor.",
+        ("East-west", "North-south"),
+        ("Lobby", "Loading dock"),
+        _floor_plan,
+    )
     plots.save_plot(
         ws,
         name="Revenue by region",
