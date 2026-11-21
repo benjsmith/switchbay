@@ -229,31 +229,10 @@ def is_dataless(path: Path) -> bool:
 # (optionally) warn when a workspace is added under one. Detection of an
 # actual eviction is `is_dataless`; this is just for friendlier copy.
 def sync_service_hint(path: Path) -> str | None:
-    """Best-effort name of the sync service backing ``path`` (for UI
-    copy like "Downloading from iCloud…"), or None if unknown."""
-    s = str(path)
-    if "Mobile Documents" in s or "/Library/CloudStorage/iCloud" in s:
-        return "iCloud"
-    low = s.lower()
-    if "onedrive" in low:
-        return "OneDrive"
-    if "dropbox" in low:
-        return "Dropbox"
-    if "google drive" in low or "googledrive" in low or "/my drive" in low:
-        return "Google Drive"
-    # macOS "Desktop & Documents Folders" iCloud sync lives at the
-    # plain ~/Documents and ~/Desktop — NOT under "Mobile Documents" —
-    # so the path looks local. It's the most common eviction source we
-    # hit; treat those roots as iCloud on darwin. (Callers only reach
-    # here for a path we already know is dataless, so this can't
-    # mislabel a genuinely-local file.)
-    if sys.platform == "darwin":
-        try:
-            resolved = Path(path).expanduser().resolve()
-            home = Path.home().resolve()
-            for sub in ("Documents", "Desktop"):
-                if resolved == home / sub or (home / sub) in resolved.parents:
-                    return "iCloud"
-        except OSError:
-            return None
-    return None
+    """Best-effort name of the sync service backing ``path``.
+
+    Same detector as the enterprise trust-boundary check, including
+    macOS ``~/Desktop`` and ``~/Documents`` as iCloud.
+    """
+    from .federation.policy import cloud_sync_name
+    return cloud_sync_name(path)

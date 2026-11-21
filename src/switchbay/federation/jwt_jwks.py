@@ -60,8 +60,11 @@ class JWKSCache:
 
     def refresh(self) -> None:
         req = urllib.request.Request(self.url, headers={"Accept": "application/json"})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
+        try:
+            with urllib.request.urlopen(req, timeout=4) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            raise TokenError(f"jwks fetch failed: {exc}") from exc
         keys = {}
         for row in data.get("keys") or []:
             if isinstance(row, dict) and row.get("kid"):

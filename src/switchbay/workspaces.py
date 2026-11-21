@@ -222,6 +222,8 @@ def register(path: Path, set_active: bool = True) -> dict[str, Any]:
         raise OutsideHomeError(
             f"workspaces must live inside {home_label()}; refusing {path}"
         )
+    from .federation.boundary import require
+    require(path)
     data = load()
     s = str(path.resolve())
     if s not in data["paths"]:

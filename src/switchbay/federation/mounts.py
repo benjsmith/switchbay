@@ -35,6 +35,11 @@ class Mount:
     ceiling: str = "public"
     auth: str = "anonymous"
     refresh: str = "manual"
+    token_check: str = ""
+    jwks_url: str = ""
+    issuer: str = ""
+    audience: str = ""
+    introspection_url: str = ""
 
     def as_dict(self) -> dict[str, Any]:
         row = {
@@ -54,6 +59,16 @@ class Mount:
             row["auth"] = self.auth
         if self.refresh != "manual":
             row["refresh"] = self.refresh
+        if self.token_check:
+            row["token_check"] = self.token_check
+        if self.jwks_url:
+            row["jwks_url"] = self.jwks_url
+        if self.issuer:
+            row["issuer"] = self.issuer
+        if self.audience:
+            row["audience"] = self.audience
+        if self.introspection_url:
+            row["introspection_url"] = self.introspection_url
         return row
 
 
@@ -131,6 +146,11 @@ def _mount_from(row: dict[str, Any]) -> Mount | None:
         ceiling=str(row.get("ceiling") or "public"),
         auth=auth,
         refresh=str(row.get("refresh") or "manual"),
+        token_check=str(row.get("token_check") or ""),
+        jwks_url=str(row.get("jwks_url") or ""),
+        issuer=str(row.get("issuer") or ""),
+        audience=str(row.get("audience") or ""),
+        introspection_url=str(row.get("introspection_url") or ""),
     )
 
 

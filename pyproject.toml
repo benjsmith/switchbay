@@ -54,6 +54,9 @@ dependencies = [
 # entirely.
 [tool.uv]
 package = false
+# Keep the base lock's typing-extensions. Presidio's resolver would
+# otherwise bump the copy every install uses.
+constraint-dependencies = ["typing-extensions==4.15.0"]
 
 # Test tooling lives in a dev group so a normal `make sync` / service install
 # stays lean; `make test` syncs it. `pythonpath = ["src"]` mirrors the
@@ -81,6 +84,20 @@ semantic = [
 ]
 semantic-torch = [
     "sentence-transformers>=5.4.1",
+]
+# Optional personal-data scan for public writes. Not installed by a
+# normal sync. 2.2.366 (2026-10-27) is the newest release that is at
+# least 14 days old, is not yanked, and has no published advisory.
+presidio = [
+    "presidio-analyzer==2.2.366",
+    "presidio-anonymizer==2.2.366",
+    # Transitive pins so the optional group does not pull a release
+    # younger than 14 days. spaCy 3.8.18 is 2026-10-26.
+    "spacy==3.8.18",
+    "phonenumbers==9.0.43",
+    "pydantic==2.13.4",
+    "pydantic-core==2.46.4",
+    "smart-open==9.0.2",
 ]
 
 # Only the hermetic unit suite runs by default / in CI. tests/integration

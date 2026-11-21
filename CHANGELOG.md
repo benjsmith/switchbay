@@ -10,12 +10,14 @@ a copy pinned at one revision. A live graph is a server the workspace
 queries, with sign-in rather than a token in the settings file. Search
 and page reads can cover more than the local wiki, and a claim can cite
 a remote page at the revision it was read. Pages carry a classification,
-and a page keeps the highest label of what it cites. A chat that reads
-confidential material keeps that label until a person lowers it.
-Publishing refuses anything above public. External sources (Work IQ,
+and a page keeps the highest label of what it cites. Publishing to GitHub refuses a wiki or vault markdown, text, or YAML
+file above public. External sources (Work IQ,
 Databricks, AWS Context, AWS Quick) are called through one broker and
 recorded on this machine. Real accounts for those services are not
 wired up yet.
+
+Controls, access, and configuration:
+[Enterprise](docs/enterprise/index.md).
 
 ## 2026-11-20 — v0.15.0
 

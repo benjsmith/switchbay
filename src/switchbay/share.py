@@ -280,12 +280,10 @@ async def publish(
         raise ShareError(
             "refusing to publish pages above public: " + listed
         )
-    from .federation.session_label import floor
-    session = floor(workspace)
-    if session != "public":
-        raise ShareError(
-            f"this chat is {session}; publishing is capped at that label"
-        )
+    from .federation.session_label import export_block_reason
+    blocked_session = export_block_reason(workspace)
+    if blocked_session:
+        raise ShareError(blocked_session)
 
     ws = str(workspace)
     if not (workspace / ".git").is_dir():

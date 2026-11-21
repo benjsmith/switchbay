@@ -2179,6 +2179,11 @@ async def handle_workspaces_add(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "path is not writable by the current user"}, status=400
         )
+    from .federation.boundary import TrustBoundaryError, require
+    try:
+        require(path)
+    except TrustBoundaryError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
 
     needs_init = bool(body.get("init")) or not (path / "wiki").is_dir()
     if needs_init:
@@ -2210,6 +2215,11 @@ async def handle_workspaces_switch(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": "path is not writable by the current user"}, status=400
         )
+    from .federation.boundary import TrustBoundaryError, require
+    try:
+        require(path)
+    except TrustBoundaryError as exc:
+        return web.json_response({"error": str(exc)}, status=400)
     await _activate(request.app, path)
     return web.json_response({"ok": True, "workspaces": workspaces.load()})
 
@@ -12569,7 +12579,7 @@ async def _dispatch_chat(
         pass
     try:
         from .federation.session_label import set_current
-        set_current(str(thread_id or run_id or "rail"))
+        set_current(str(thread_id or run_id or "rail"), workspace)
     except Exception:  # noqa: BLE001
         pass
     executed_calls: dict[str, int] = {}
@@ -12780,6 +12790,16 @@ async def _dispatch_chat(
                         app, protocol.text_message_content(run_id, msg_id, extra),
                     )
                     current_text = cited
+            if stop_reason != "tool_use" and current_text:
+                from .federation.session_label import answer_label, stamp_reply
+                stamped = stamp_reply(current_text, answer_label(workspace, []))
+                if stamped != current_text:
+                    extra = stamped[len(current_text):]
+                    if msg_id is None:
+                        msg_id = protocol.new_message_id()
+                        await _broadcast(app, protocol.text_message_start(run_id, msg_id))
+                    await _broadcast(app, protocol.text_message_content(run_id, msg_id, extra))
+                    current_text = stamped
             if msg_id is not None:
                 # Stream ended with prose open — close the message.
                 await _broadcast(app, protocol.text_message_end(run_id, msg_id))
@@ -12940,6 +12960,11 @@ async def _dispatch_chat(
                         output = await asyncio.to_thread(
                             tools.execute, tname, workspace, tinput,
                         )
+                    if isinstance(output, dict) and output.get("needs_dialog"):
+                        await _broadcast(app, protocol.custom({
+                            "type": "public_write",
+                            "mount": str(output.get("mount") or ""),
+                        }))
                     # Cap results for every model — a 100-turn curate
                     # that stuffed unbounded JSON into `messages` is a
                     # plausible path to multi-GB RSS.
@@ -13643,6 +13668,10 @@ async def handle_slideshow_pdf(request: web.Request) -> web.Response:
     except json.JSONDecodeError:
         body = {}
     slug = str((body or {}).get("slug") or "").strip()
+    from .federation.session_label import export_block_reason
+    blocked_export = export_block_reason(workspace)
+    if blocked_export:
+        return web.json_response({"error": blocked_export}, status=403)
     if not html_decks.is_valid_slug(slug):
         return web.json_response({"error": "invalid slideshow slug"}, status=400)
     if await asyncio.to_thread(html_decks.entry_html, workspace, slug) is None:
@@ -18577,11 +18606,16 @@ def run(workspace: Path, host: str = "127.0.0.1", port: int = 8765) -> int:
     ):
         candidate = Path(persisted_active)
         if candidate.is_dir() and workspaces.is_within_home(candidate):
-            log.info(
-                "boot: serving registry-active workspace %s (CLI cwd was %s)",
-                candidate, workspace,
-            )
-            workspace = candidate
+            from .federation.boundary import block_reason
+            reason = block_reason(candidate)
+            if reason:
+                log.info("boot: registry workspace is outside the trust boundary: %s", reason)
+            else:
+                log.info(
+                    "boot: serving registry-active workspace %s (CLI cwd was %s)",
+                    candidate, workspace,
+                )
+                workspace = candidate
     log.info("workspace=%s  listening on http://%s:%d", workspace, host, port)
     log.info(
         "log=%s  rotate at %d MB (keep %d)",
