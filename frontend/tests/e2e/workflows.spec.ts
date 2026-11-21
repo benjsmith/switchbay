@@ -416,6 +416,8 @@ test("reviews tab shows the seeded proposal", async ({ page }) => {
   await ready(page);
   await openTab(page, "Reviews");
   await expect(page.getByText("Parity concept").first()).toBeVisible();
+  await expect(page.getByText("untrusted-import").first()).toBeVisible();
+  await expect(page.getByText("UNTRUSTED REMOTE CONTENT").first()).toBeVisible();
   await expect(page.getByRole("button", { name: "Accept" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Reject" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Comment & keep" })).toBeVisible();
@@ -601,13 +603,6 @@ test("public write dialog can be cancelled", async ({ page }) => {
   await expect(dialog.getByRole("button", { name: "Always allow" })).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toHaveCount(0);
-});
-
-test("review shows the untrusted import marker", async ({ page }) => {
-  await ready(page);
-  await openTab(page, "Reviews");
-  await expect(page.getByText("untrusted-import").first()).toBeVisible();
-  await expect(page.getByText("UNTRUSTED REMOTE CONTENT").first()).toBeVisible();
 });
 
 test("public write ok closes the dialog", async ({ page }) => {

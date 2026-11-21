@@ -85,6 +85,7 @@ for name in ("ws-pre", "ws-post"):
             {"id": "projects", "title": "Projects", "kind": "projects"},
             {"id": "agents", "title": "Agents", "kind": "agents"},
             {"id": "report", "title": "Reviews", "kind": "report", "source": "user", "payload": {}},
+            {"id": "slideshow", "title": "Slideshow", "kind": "html-deck"},
         ],
         "model_ladder": {},
     }
