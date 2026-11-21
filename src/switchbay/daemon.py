@@ -39,7 +39,7 @@ from . import (
     demo_workspace,
     duckdb_starters, embed_proxy, ce_viewer_supervisor, okstratr_supervisor, core_skills, host_notify, okstratr_harness, file_state, fileops, llm_config, llmgateway,
     localllm, orchestrator_fs, schedules,
-    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, ingest_run_drain, packstore, pasteboard, permissions, plots,
+    mcpstore, merging, model_cache, modestore, owid, pack_run_drain, ingest_run_drain, packstore, pasteboard, permissions, plot_gallery, plots,
     html_decks, library, local_models, media_settings, micro_edits, projects, proposals, protocol, rail, report_html, report_packages, reports, secrets, selection, service, share, sheets,
     routing_status,
     sheet_focus, sketches, skillkit, slide_layouts, slideshow_from_md, sources, splitting, statedir,
@@ -762,9 +762,9 @@ def _hello_payload(app: web.Application) -> dict:
 async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
     """Background filesystem-truth enrich of an already-served graph.
 
-    Runs resync_types / inject_deck / inject_on_disk_pages off the
-    request path with ``graph_progress`` stages so the UI never
-    whites out on a large vault. Deduped per workspace via
+    Runs inject_deck / inject_on_disk_pages off the request path
+    with ``graph_progress`` stages so the UI never whites out on a
+    large vault. Deduped per workspace via
     ``app["graph_enrich_inflight"]``.
     """
     from pathlib import Path as _Path
@@ -785,18 +785,6 @@ async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
                 "ready", "Graph ready", workspace=ws_key, done=True,
             ))
             return
-
-        await _broadcast(app, protocol.graph_progress(
-            "types", "Syncing page types…", workspace=ws_key,
-        ))
-        types_n = await asyncio.to_thread(
-            cebridge.resync_types_from_disk, workspace, data,
-        )
-        await _broadcast(app, protocol.graph_progress(
-            "types",
-            f"Syncing page types… ({int(types_n or 0)} updated)",
-            workspace=ws_key, current=int(types_n or 0),
-        ))
 
         await _broadcast(app, protocol.graph_progress(
             "decks", "Refreshing deck nodes…", workspace=ws_key,
@@ -829,7 +817,7 @@ async def _enrich_graph_cache(app: web.Application, ws_key: str) -> None:
         ))
         # Only bump files_changed when something actually moved —
         # otherwise every prefetch would remount the graph.
-        if int(types_n or 0) or int(decks_n or 0) or int(pages_n or 0):
+        if int(decks_n or 0) or int(pages_n or 0):
             await _broadcast(app, protocol.files_changed())
     except Exception:  # noqa: BLE001
         log.exception("background graph enrich failed for %s", ws_key)
@@ -3054,7 +3042,44 @@ async def handle_sheet_save_csv(request: web.Request) -> web.Response:
 
 async def handle_plots_list(request: web.Request) -> web.Response:
     workspace: Path = request.app["workspace"]
-    return web.json_response({"plots": plots.list_plots(workspace)})
+
+    def _build() -> tuple[list[str], dict[str, Any]]:
+        created = plot_gallery.backfill_figure_docs(workspace)
+        return created, plot_gallery.gallery(workspace)
+
+    created, data = await asyncio.to_thread(_build)
+    if created:
+        await _broadcast(request.app, protocol.files_changed())
+    return web.json_response(data)
+
+
+async def handle_plot_thumb(request: web.Request) -> web.Response:
+    """Small cached PNG for a generated plot. Not the full-size asset."""
+    workspace: Path = request.app["workspace"]
+    plot_id = request.match_info.get("plot_id", "").strip()
+    png = await asyncio.to_thread(plot_gallery.thumbnail_bytes, workspace, plot_id)
+    if not png:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.Response(
+        body=png,
+        content_type="image/png",
+        headers={
+            "Cache-Control": "private, max-age=60",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
+
+
+async def handle_plot_figure(request: web.Request) -> web.Response:
+    """Figure page written for a generated plot."""
+    workspace: Path = request.app["workspace"]
+    plot_id = request.query.get("id", "").strip()
+    if not plot_id:
+        return web.json_response({"error": "id required"}, status=400)
+    doc = await asyncio.to_thread(plot_gallery.figure_doc_for_plot, workspace, plot_id)
+    if doc is None:
+        return web.json_response({"error": "not found"}, status=404)
+    return web.json_response(doc)
 
 
 async def handle_plot_get(request: web.Request) -> web.Response:
@@ -7131,6 +7156,7 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
         routing = None
     from .kernel.harness_pi import pi_binary
     from .kernel.harness import pi_harness_permitted
+    from . import playwright_cli
     pi_bin = pi_binary()
     admin_pi = admin_policy.feature_enabled("pi_harness")
     user_pi = llm_config.get_pi_harness()
@@ -7142,6 +7168,7 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
         "default_model": default_model,
         "routing": routing,
         "policy": admin_policy.public_view(),
+        "browser": playwright_cli.status_view(),
         "harness": {
             "pi": {
                 "admin_allowed": admin_pi,
@@ -7156,30 +7183,46 @@ async def handle_llm_providers(request: web.Request) -> web.Response:
 
 
 async def handle_llm_harness(request: web.Request) -> web.Response:
-    """User toggle for the optional Pi harness. Admin policy can still deny."""
+    """User toggles for the Pi harness and the local browser.
+
+    Admin policy can still deny either one. The body may set ``pi``,
+    ``browser``, or both.
+    """
     try:
         body = await request.json()
     except json.JSONDecodeError:
         return web.json_response({"error": "invalid json"}, status=400)
-    if "pi" not in body:
-        return web.json_response({"error": "expected {pi: bool}"}, status=400)
-    if not admin_policy.feature_enabled("pi_harness"):
+    if "pi" not in body and "browser" not in body:
+        return web.json_response(
+            {"error": "expected {pi: bool} or {browser: bool}"},
+            status=400,
+        )
+    if "pi" in body and not admin_policy.feature_enabled("pi_harness"):
         return web.json_response(
             {"error": admin_policy.feature_error("pi_harness")},
             status=403,
         )
-    llm_config.set_pi_harness(bool(body.get("pi")))
-    from .kernel.harness_pi import pi_binary
-    from .kernel.harness import pi_harness_permitted
-    return web.json_response({
-        "ok": True,
-        "pi": {
+    if "browser" in body and not admin_policy.feature_enabled("browser_use"):
+        return web.json_response(
+            {"error": admin_policy.feature_error("browser_use")},
+            status=403,
+        )
+    out: dict[str, Any] = {"ok": True}
+    if "pi" in body:
+        llm_config.set_pi_harness(bool(body.get("pi")))
+        from .kernel.harness_pi import pi_binary
+        from .kernel.harness import pi_harness_permitted
+        out["pi"] = {
             "admin_allowed": True,
             "user_enabled": llm_config.get_pi_harness(),
             "installed": pi_binary() is not None,
             "used": pi_harness_permitted() and pi_binary() is not None,
-        },
-    })
+        }
+    if "browser" in body:
+        llm_config.set_browser_use(bool(body.get("browser")))
+        from . import playwright_cli
+        out["browser"] = playwright_cli.status_view()
+    return web.json_response(out)
 
 
 async def handle_llm_set_default(request: web.Request) -> web.Response:
@@ -17752,6 +17795,8 @@ def build_app(workspace: Path) -> web.Application:
     app.router.add_post("/api/plot/command", handle_plot_command)
     app.router.add_post("/api/sketch/command", handle_sketch_command)
     app.router.add_get("/api/plots", handle_plots_list)
+    app.router.add_get("/api/plots/{plot_id}/thumb", handle_plot_thumb)
+    app.router.add_get("/api/plot/figure", handle_plot_figure)
     app.router.add_get("/api/plot", handle_plot_get)
     app.router.add_post("/api/plot", handle_plot_post)
     app.router.add_delete("/api/plot", handle_plot_delete)

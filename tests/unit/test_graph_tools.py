@@ -68,3 +68,59 @@ def test_index_is_cached_until_pages_change(tmp_path):
     i1 = tools._graph_index(ws)
     i2 = tools._graph_index(ws)
     assert i1 is i2  # same object → cache hit
+
+
+def test_neighbors_follow_typed_edges(tmp_path):
+    ws = _wiki(tmp_path, {
+        "evidence/cpu.md": (
+            "---\ntitle: CPU\ntype: evidence\nsupports:\n  - hypotheses/queue\n---\n\nThe series moved.\n"
+        ),
+        "hypotheses/queue.md": (
+            "---\ntitle: Queue\ntype: hypothesis\n---\n\nThe queue grows.\n"
+        ),
+    })
+    (ws / ".curator").mkdir()
+    (ws / ".curator" / "meta-ontology.yaml").write_text(
+        """
+version: 1
+nodes:
+  - type: evidence
+    label: Evidence
+    description: An observation.
+  - type: hypothesis
+    label: Hypothesis
+    description: A claim.
+edges:
+  - type: supports
+    label: supports
+    source: [evidence]
+    target: [hypothesis]
+    description: When the result matches a prediction.
+""",
+        encoding="utf-8",
+    )
+    one = tools._wiki_neighbors(ws, {"page": "cpu", "hops": 1, "direction": "out"})
+    pages = {n["page"] for n in one["neighbors"]}
+    assert "wiki/hypotheses/queue.md" in pages
+
+
+def test_ce_graph_neighbors_passes_edge_filter(tmp_path, monkeypatch):
+    (tmp_path / "wiki" / "hypotheses").mkdir(parents=True)
+    (tmp_path / "wiki" / "hypotheses" / "queue.md").write_text(
+        "---\ntitle: Queue\ntype: hypothesis\n---\n\nThe queue grows.\n",
+        encoding="utf-8",
+    )
+    seen: list[list[str]] = []
+
+    def fake_run(script, args, **kwargs):
+        seen.append([script, *args])
+        return {"ok": True}
+
+    monkeypatch.setattr("switchbay.cebridge.run_script", fake_run)
+    tools._ce_graph_neighbors(
+        tmp_path, {"page": "queue", "hops": 2, "direction": "in", "edge": "supports"},
+    )
+    assert seen, "graph.py was not called"
+    assert seen[0][0] == "graph.py"
+    assert "--edge" in seen[0]
+    assert seen[0][seen[0].index("--edge") + 1] == "supports"

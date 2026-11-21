@@ -38,6 +38,12 @@ def main(argv: list[str] | None = None) -> int:
         help="On install, write <repo>/admin.json from the enterprise "
              "template (no /Library or ProgramData). For testers.",
     )
+    svc.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="On install, skip Playwright CLI, its agent skill, and "
+             "the browsers that CLI needs.",
+    )
 
     args = parser.parse_args(argv)
 
@@ -58,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
         return service.run(
             args.action,
             enterprise_user=bool(getattr(args, "enterprise_user", False)),
+            skip_browser=bool(getattr(args, "no_browser", False)),
         )
 
     parser.print_help()

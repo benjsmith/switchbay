@@ -3,6 +3,8 @@ pre-approved, but shell keeps its card."""
 
 from __future__ import annotations
 
+import pytest
+
 from switchbay import permissions
 
 
@@ -38,6 +40,79 @@ def test_read_global_skill_pre_approved(tmp_path, monkeypatch):
 def test_read_outside_workspace_not_pre_approved(tmp_path):
     pat = permissions.pattern_for("Read", {"file_path": "/etc/passwd"})
     assert not permissions.is_pre_approved(tmp_path, pat)
+
+
+def test_grok_read_file_under_uploads_pre_approved(tmp_path):
+    upload = tmp_path / ".workbench" / "uploads" / "abc" / "pasted-image.png"
+    upload.parent.mkdir(parents=True)
+    upload.write_bytes(b"png")
+    rel = ".workbench/uploads/abc/pasted-image.png"
+    for tool in ("read_file", "hashline_read"):
+        for key, value in (
+            ("target_file", rel),
+            ("path", str(upload)),
+            ("file_path", str(upload)),
+        ):
+            ti = {key: value}
+            assert permissions.is_pre_approved(
+                tmp_path, permissions.pattern_for(tool, ti),
+                tool=tool, tool_input=ti,
+            ), (tool, key)
+
+
+def test_grok_read_file_outside_workspace_still_cards(tmp_path):
+    outside = {"target_file": "/etc/passwd"}
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("read_file", outside),
+        tool="read_file", tool_input=outside,
+    )
+    escape = {"path": "../outside.txt"}
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("read_file", escape),
+        tool="read_file", tool_input=escape,
+    )
+    mixed = {
+        "target_file": ".workbench/uploads/pasted-image.png",
+        "path": "/etc/passwd",
+    }
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("read_file", mixed),
+        tool="read_file", tool_input=mixed,
+    )
+    empty = {}
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("read_file", empty),
+        tool="read_file", tool_input=empty,
+    )
+
+
+def test_grok_read_file_symlink_escape_still_cards(tmp_path):
+    outside = tmp_path.parent / "outside-read-target"
+    outside.mkdir(exist_ok=True)
+    (outside / "secret.txt").write_text("x", encoding="utf-8")
+    link = tmp_path / "link"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlinks are not available")
+    ti = {"target_file": "link/secret.txt"}
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("read_file", ti),
+        tool="read_file", tool_input=ti,
+    )
+
+
+def test_grok_write_aliases_inside_workspace_still_card(tmp_path):
+    upload = {"target_file": ".workbench/uploads/pasted-image.png"}
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("write_file", upload),
+        tool="write_file", tool_input=upload,
+    )
+    edit = {"path": str(tmp_path / "wiki" / "a.md")}
+    assert not permissions.is_pre_approved(
+        tmp_path, permissions.pattern_for("search_replace", edit),
+        tool="search_replace", tool_input=edit,
+    )
 
 
 def test_mcp_switchbay_tools_pre_approved(tmp_path):

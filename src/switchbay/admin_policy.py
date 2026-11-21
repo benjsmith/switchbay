@@ -66,6 +66,9 @@ FEATURE_DEFAULTS_OPEN: dict[str, bool] = {
     "demo_workspace": True,
     # Optional PATH harness for hired packages. Not a lockfile pin.
     "pi_harness": True,
+    # Local Playwright CLI for agents. Installs with the product
+    # unless the installer is passed --no-browser.
+    "browser_use": True,
     # Workspace web search/fetch. Default on here means the *user*
     # may enable per-workspace policy (still default-off in the
     # workspace file). Not a blanket grant.
@@ -94,6 +97,10 @@ FEATURE_DEFAULTS_ENTERPRISE: dict[str, bool] = {
     "demo_workspace": False,
     # Pi is a bash-capable Node CLI. Off until IT opts in.
     "pi_harness": False,
+    # Local browser (Playwright CLI) reaches the network from the
+    # endpoint. Off until IT opts in. Install skips the CLI, and
+    # agents do not receive the skill or the tool.
+    "browser_use": False,
     # Open-web search/fetch stays off until IT opts in. Model API
     # transport is a separate allowlist (egress_allowed).
     "web_egress": False,

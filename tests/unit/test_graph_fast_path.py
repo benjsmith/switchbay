@@ -28,10 +28,6 @@ def test_read_cached_default_skips_enrich(tmp_path: Path, monkeypatch) -> None:
 
     called: list[str] = []
     monkeypatch.setattr(
-        cebridge, "resync_types_from_disk",
-        lambda *_a, **_k: called.append("types") or 0,
-    )
-    monkeypatch.setattr(
         cebridge, "inject_deck_nodes",
         lambda *_a, **_k: called.append("decks") or 0,
     )
@@ -47,18 +43,17 @@ def test_read_cached_default_skips_enrich(tmp_path: Path, monkeypatch) -> None:
 
     data2 = cebridge.read_cached(tmp_path, enrich=True)
     assert data2 is not None
-    assert called == ["types", "decks", "pages"]
+    assert called == ["decks", "pages"]
 
 
 def test_enrich_from_disk_returns_counts(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setattr(cebridge, "resync_types_from_disk", lambda *_a, **_k: 3)
     monkeypatch.setattr(cebridge, "inject_deck_nodes", lambda *_a, **_k: 1)
     monkeypatch.setattr(
         "switchbay.wiki_sync.inject_on_disk_pages", lambda *_a, **_k: 5,
     )
     monkeypatch.setattr(cebridge, "_override_palette", lambda *_a, **_k: None)
     counts = cebridge.enrich_from_disk(tmp_path, {"pages": {}, "nodes": [], "edges": []})
-    assert counts == {"types": 3, "decks": 1, "pages": 5}
+    assert counts == {"decks": 1, "pages": 5}
 
 
 def test_graph_progress_payload_shape() -> None:

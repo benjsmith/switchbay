@@ -10,10 +10,73 @@ a copy pinned at one revision. A live graph is a server the workspace
 queries, with sign-in rather than a token in the settings file. Search
 and page reads can cover more than the local wiki, and a claim can cite
 a remote page at the revision it was read. Pages carry a classification,
-and a page keeps the highest label of what it cites. Publishing refuses
-anything above public. External sources (Work IQ, Databricks, AWS
-Context, AWS Quick) are called through one broker and recorded on this
-machine. Real accounts for those services are not wired up yet.
+and a page keeps the highest label of what it cites. A chat that reads
+confidential material keeps that label until a person lowers it.
+Publishing refuses anything above public. External sources (Work IQ,
+Databricks, AWS Context, AWS Quick) are called through one broker and
+recorded on this machine. Real accounts for those services are not
+wired up yet.
+
+## 2026-11-20 — v0.15.0
+
+**Migration:** none. Local browser use is optional: skip it at install with
+`--no-browser`, or turn it off in enterprise settings.
+
+Works with curiosity-engine 1.10.0, curiosity-merge 0.8.4, and okstratr 0.2.0.
+
+### Added
+
+- **Paste images into the rail chat** — pasting a screenshot or a copied image
+  into the chat box attaches it to the unsent message, with a thumbnail and a
+  remove control. Enter sends it the same way the attach button already does.
+  Pasting plain text is unchanged. The same path is used in Zen, so a pasted
+  image survives a Power / Zen switch.
+- **Optional workspace ontology** — a `.curator/meta-ontology.yaml` file can
+  list node types, edge types, and frontmatter keys, each with the instruction
+  the curator should follow. Curate prompts include that text. The graph legend
+  uses the labels. OKF export keeps the concept type and records the type
+  label, description, and ontology file. With no file, prompts, the legend, and
+  the export are unchanged. `examples/meta-ontology.yaml` is a starting copy of
+  the vocabulary the graph already shows.
+- **Typed edges and hypothesis pages** — the ontology can declare edges
+  between node types. The defaults add hypothesis pages, with supports and
+  contradicts edges from evidence to hypothesis. Analysis pages write or
+  update hypothesis pages first, then summarize and link them. Neighbour
+  queries walk those edges, and can filter by edge type.
+- **Case pages and claim lint** — a case page carries objectives, constraints,
+  evaluation methods, success criteria, and system context. `python -m
+  switchbay.claim_lint` checks that each claim on fact, evidence, hypothesis,
+  and assumption pages has a vault, table, or wikilink citation in the same
+  paragraph, that the citation target exists, and that a figure has a sources
+  list. Confidence, uncertainty, and role are checked when a page sets them.
+  Notes and todos are skipped. The command does not run during curate. A
+  meta-ontology file can add keys and claim types.
+- **Local browser use** — a normal install sets up Playwright 1.64.1's
+  official CLI, skill, and the same stable browser builds as the UI tests, so
+  agents can browse a page and work from a snapshot. Skip the install with
+  `--no-browser`, or disable it in enterprise settings.
+
+### Changed
+
+- **Graph colours come from Curiosity Engine 1.10.0** — hypothesis pages use
+  `#7570b3` by default. A colour in the ontology file replaces the default for
+  that node or edge type. A custom type with no colour gets a stable swatch of
+  its own, instead of showing as unclassified. Switch Bay no longer rewrites
+  page types or re-inserts typed edges itself.
+
+### Fixed
+
+- The Editor opens every wiki markdown page. Those requests had been sent to
+  Curiosity Engine, which only opens notes and todos.
+- Plots that would draw past the card now fit the plot area, and the plot
+  size is published to the rail.
+- The agent DAG keeps animating, includes running jobs, and leaves the
+  okstratr observer mounted across wiki writes.
+- When Grok's CLI needs to read a file in the workspace, including a pasted
+  screenshot, that read is pre-approved, so you no longer have to click Allow
+  just to let it see the image.
+- The graph database package is installed with Switch Bay, so the first graph
+  rebuild no longer fails for a missing package.
 
 ## 2026-10-09 — v0.14.1 — Switch Bay VS 0.3.18
 

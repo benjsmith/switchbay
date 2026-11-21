@@ -208,10 +208,16 @@ def save_plot(
     sources: list[str] | None = None,
     relates_to: list[str] | None = None,
     analysis: str | None = None,
+    artists: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create or update a plot. If `plot_id` is omitted, a slug is
     derived from `name`; collisions are resolved by appending a short
     uuid suffix.
+
+    Saving also writes a figure page under ``wiki/figures/`` when that
+    plot does not have one yet. Axis titles and legend text come from
+    the spec and from ``artists`` (matplotlib-style metadata) when
+    those were passed in.
 
     `origin` is an optional breadcrumb identifying where the plot
     was derived from (e.g. `tables/foo.md#table-1` for a plot
@@ -253,6 +259,8 @@ def save_plot(
         relates_to = existing.get("relates_to")
     if analysis is None and existing is not None:
         analysis = existing.get("analysis") or existing.get("source_analysis")
+    if artists is None and existing is not None and isinstance(existing.get("artists"), dict):
+        artists = existing.get("artists")
     record: dict[str, Any] = {
         "id": plot_id,
         "name": name,
@@ -270,8 +278,13 @@ def save_plot(
         record["relates_to"] = [str(s) for s in relates_to if s]
     if analysis:
         record["analysis"] = str(analysis)
+    if isinstance(artists, dict) and artists:
+        record["artists"] = artists
     atomicio.write_json_atomic(target, record)
     log.info("saved plot %s (%s)", plot_id, name)
+    # Import lazily: plot_gallery imports this module.
+    from .plot_gallery import ensure_figure_doc
+    ensure_figure_doc(workspace, record)
     return record
 
 
@@ -285,13 +298,41 @@ def _stem_ref(raw: str) -> str:
     return Path(s).name
 
 
-def figure_page_markdown(plot: dict[str, Any], *, asset_name: str, today: str) -> str:
-    """CE-shaped figure page: caption + provenance [[wikilinks]]."""
-    name = str(plot.get("name") or plot.get("id") or "figure")
+def _yaml_block(key: str, items: list[str]) -> list[str]:
+    lines = [f"{key}:"]
+    wrote = False
+    for item in items:
+        text = " ".join(str(item).split())
+        if not text:
+            continue
+        escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+        lines.append(f'  - "{escaped}"')
+        wrote = True
+    return lines if wrote else []
+
+
+def figure_page_markdown(
+    plot: dict[str, Any],
+    *,
+    asset_name: str,
+    today: str,
+    created: str | None = None,
+) -> str:
+    """CE-shaped figure page: caption, axes, legend, and provenance."""
+    from .plot_gallery import chart_text_for_record
+
+    name = str(plot.get("name") or plot.get("id") or "figure").replace('"', "'")
+    created_day = created or today
+    info = chart_text_for_record(plot)
     caption = str(plot.get("caption") or "").strip()
+    if not caption:
+        caption = str(info.get("caption") or "").strip()
     if not caption:
         spec = plot.get("spec") if isinstance(plot.get("spec"), dict) else {}
         caption = str(spec.get("description") or "").strip()
+    axis_titles = [str(item) for item in (info.get("axis_titles") or []) if item]
+    legend_titles = [str(item) for item in (info.get("legend_titles") or []) if item]
+    legend_entries = [str(item) for item in (info.get("legend_entries") or []) if item]
     origin = str(plot.get("origin") or "").strip()
     analysis = str(plot.get("analysis") or plot.get("source_analysis") or "").strip()
     sources = plot.get("sources") if isinstance(plot.get("sources"), list) else []
@@ -310,7 +351,7 @@ def figure_page_markdown(plot: dict[str, Any], *, asset_name: str, today: str) -
         "type: figure",
         "origin: created",
         f"asset: {asset_name}",
-        f"created: {today}",
+        f"created: {created_day}",
         f"updated: {today}",
         f"source: plot:{plot.get('id')}",
     ]
@@ -320,8 +361,14 @@ def figure_page_markdown(plot: dict[str, Any], *, asset_name: str, today: str) -
         fm_lines.append(f"plot_origin: {origin}")
     if source_stems:
         fm_lines.append("sources: [" + ", ".join(source_stems) + "]")
+    else:
+        fm_lines.append(f"sources: [.workbench/plots/{plot.get('id')}.json]")
     if relates_stems:
         fm_lines.append("relates_to: [" + ", ".join(relates_stems) + "]")
+    fm_lines.extend(_yaml_block("axis_titles", axis_titles))
+    fm_lines.extend(_yaml_block("legend_titles", legend_titles))
+    fm_lines.extend(_yaml_block("legend", legend_entries))
+    fm_lines.append("managed: true")
     fm_lines.append("---")
 
     body_bits = [
@@ -330,6 +377,16 @@ def figure_page_markdown(plot: dict[str, Any], *, asset_name: str, today: str) -
     ]
     if caption:
         body_bits.append(f"*{caption}*")
+        body_bits.append("")
+    if axis_titles:
+        body_bits.append("**Axes.** " + " · ".join(axis_titles))
+        body_bits.append("")
+    if legend_titles or legend_entries:
+        label = legend_titles[0] if legend_titles else "Series"
+        legend_line = f"**Legend.** {label}"
+        if legend_entries:
+            legend_line += " — " + ", ".join(legend_entries)
+        body_bits.append(legend_line)
         body_bits.append("")
     prov: list[str] = []
     if analysis_stem:
@@ -347,6 +404,9 @@ def figure_page_markdown(plot: dict[str, Any], *, asset_name: str, today: str) -
     if prov:
         body_bits.append("— " + "; ".join(prov) + ".")
         body_bits.append("")
+    body_bits.append(
+        f"Source script: `.workbench/plots/{plot.get('id')}.json`."
+    )
     body_bits.append(
         f"Created from plot `{plot.get('id')}` in `.workbench/plots/` on {today}."
     )

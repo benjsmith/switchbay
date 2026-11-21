@@ -140,10 +140,12 @@ def copilot_schema_violations(node: Any, path: str = "$") -> list[str]:
 
 
 def _list_tools(allowed: list[str]) -> dict[str, Any]:
-    from . import tools  # lazy import; see module docstring
-
+    from . import playwright_cli, tools  # lazy import; see module docstring
+    browser_on = playwright_cli.browser_use_enabled()
     out: list[dict[str, Any]] = []
     for name in allowed:
+        if name == playwright_cli.TOOL_NAME and not browser_on:
+            continue
         t = tools.REGISTRY.get(name)
         if t is None:
             continue
@@ -308,6 +310,19 @@ def main() -> int:
                     "content": [{
                         "type": "text",
                         "text": f"tool {tname!r} not in allowed set",
+                    }],
+                    "isError": True,
+                }))
+                continue
+            from . import playwright_cli
+            if (
+                tname == playwright_cli.TOOL_NAME
+                and not playwright_cli.browser_use_enabled()
+            ):
+                _send(_ok(msg_id, {
+                    "content": [{
+                        "type": "text",
+                        "text": playwright_cli.block_reason() or "browser use is off",
                     }],
                     "isError": True,
                 }))

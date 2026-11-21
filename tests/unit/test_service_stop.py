@@ -172,15 +172,23 @@ def test_mac_plist_stdio_is_devnull(tmp_path, monkeypatch):
 def test_main_passes_enterprise_user_flag(monkeypatch):
     seen: dict[str, object] = {}
 
-    def fake_run(action, *, enterprise_user=False):
+    def fake_run(action, *, enterprise_user=False, skip_browser=False):
         seen["action"] = action
         seen["enterprise_user"] = enterprise_user
+        seen["skip_browser"] = skip_browser
         return 0
 
     monkeypatch.setattr(service, "run", fake_run)
     from switchbay.__main__ import main
     assert main(["service", "install", "--enterprise-user"]) == 0
-    assert seen == {"action": "install", "enterprise_user": True}
+    assert seen == {
+        "action": "install",
+        "enterprise_user": True,
+        "skip_browser": False,
+    }
+    assert main(["service", "install", "--no-browser"]) == 0
+    assert seen["skip_browser"] is True
+    assert seen["enterprise_user"] is False
 
 
 def test_run_install_enterprise_user_stamps(tmp_path, monkeypatch):

@@ -1,6 +1,6 @@
 [project]
 name = "switchbay"
-version = "0.14.1"
+version = "0.15.0"
 description = "Local single-user workbench over knowledge bases — a driven second brain."
 requires-python = ">=3.11"
 authors = [{ name = "Benjamin Smith" }]
@@ -23,6 +23,12 @@ dependencies = [
     # Workspace meta-ontology file. 6.0.3 (2025-09-25) is the locked
     # release already pulled in by the dev tools; safe_load only.
     "pyyaml>=6.0.3,<7",
+    # Graph rebuild. curiosity-engine's graph.py imports kuzu. A fresh
+    # `uv sync --locked` has to put it on this interpreter: the first
+    # rebuild runs before the workspace `.venv` exists. 0.11.3
+    # (2025-10-10) is the current release, has cp313 wheels, and is
+    # not yanked. No wheels past Python 3.13.
+    "kuzu==0.11.3",
 ]
 # NOTE: `sentence-transformers` (which pulls PyTorch + the ~450 MB ML
 # stack) is NOT a base dependency — it lives in the `semantic`

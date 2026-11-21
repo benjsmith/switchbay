@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { edgeStyleCss, planLegend, readMetaOntology } from "./metaOntologyChrome.ts";
+import { planLegend, readMetaOntology } from "./metaOntologyChrome.ts";
 
 const rows = [
   { type: "evidence", label: "Evidence" },
@@ -31,7 +31,7 @@ test("configured labels relabel known types and add the rest", () => {
   assert.deepEqual(plan.edges.map((row) => [row.type, row.label]), [["cites", "cites"]]);
 });
 
-test("typed edges keep source, target, and a distinct stroke", () => {
+test("typed edges keep source, target, and distinct colours without stroke CSS", () => {
   const plan = planLegend(rows, {
     metaOntology: {
       edges: [
@@ -58,8 +58,28 @@ test("typed edges keep source, target, and a distinct stroke", () => {
   assert.deepEqual(plan.edges[0].target, ["hypothesis"]);
   assert.equal(plan.edges[0].color, "#0072b2");
   assert.equal(plan.edges[1].color, "#d55e00");
-  const css = edgeStyleCss(plan.edges);
-  assert.match(css, /\.edge\[data-kind="supports"\][^{]*\{ stroke: #0072b2;/);
-  assert.match(css, /\.edge\[data-kind="contradicts"\][^{]*\{ stroke: #d55e00;/);
   assert.notEqual(plan.edges[0].color, plan.edges[1].color);
+});
+
+test("an uncoloured custom type picks up the payload palette swatch", () => {
+  const plan = planLegend(rows, {
+    palette: { instrument: "#3a8f7c" },
+    metaOntology: {
+      nodes: [{ type: "instrument", label: "Instrument" }],
+    },
+  });
+  assert.ok(plan);
+  assert.equal(plan.add[0].type, "instrument");
+  assert.equal(plan.add[0].color, "#3a8f7c");
+});
+
+test("a YAML colour wins over the payload palette", () => {
+  const plan = planLegend(rows, {
+    palette: { evidence: "#73af48" },
+    metaOntology: {
+      nodes: [{ type: "evidence", label: "Observation", color: "#111111" }],
+    },
+  });
+  assert.ok(plan);
+  assert.equal(plan.relabel[0].color, "#111111");
 });

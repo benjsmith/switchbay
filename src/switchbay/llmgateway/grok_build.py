@@ -196,9 +196,10 @@ PROVIDER = {
     "default_model": DEFAULT_MODEL,
     "binary": BINARY,
     "auth_help": (
-        "Install Grok Build (`curl -fsSL https://x.ai/cli/install.sh | "
-        "bash`) and sign in with your SuperGrok / X Premium+ subscription "
-        "(`grok` → /login). Needs the `grok` binary on PATH."
+        "Install with `curl -fsSL https://x.ai/cli/install.sh | bash`. "
+        "Sign in with `grok login`, or `grok login --device-auth` when "
+        "this machine has no browser. That subscription login is the "
+        "only credential Switch Bay uses. Then Settings → Make default."
     ),
     # Seed only — list_models() reads `grok models` / ~/.grok/models_cache.json
     # so the picker tracks the installed CLI. grok-build-0.1 is API-only.
@@ -341,6 +342,54 @@ async def list_models() -> list[str]:
         except Exception:  # noqa: BLE001
             log.warning("grok models failed — falling back to cache", exc_info=True)
     return models_from_cache()
+
+
+_ATTACHED_RE = re.compile(r"\[attached:\s*([^\]]+)\]")
+_IMAGE_SUFFIXES = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp",
+    ".avif", ".heic", ".heif", ".tif", ".tiff",
+})
+# Keys that would make `grok` bill the xAI API instead of the
+# signed-in subscription. The CLI prefers XAI_API_KEY over the
+# OAuth session when both are present.
+_API_KEY_ENV = frozenset({
+    "XAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
+    "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH",
+})
+
+
+def image_attachment_paths(text: str) -> list[str]:
+    """Workspace-relative image paths from rail `[attached: …]` lines."""
+    out: list[str] = []
+    for raw in _ATTACHED_RE.findall(text or ""):
+        path = raw.strip()
+        if Path(path).suffix.lower() in _IMAGE_SUFFIXES and path not in out:
+            out.append(path)
+    return out
+
+
+def prompt_for_cli(text: str) -> str:
+    """Tell Grok to Read pasted screenshots.
+
+    Headless `grok -p` has no image flag, so the pixels are not in the
+    prompt. The CLI's Read tool does accept image files.
+    """
+    images = image_attachment_paths(text)
+    if not images:
+        return text
+    lines = "\n".join(f"- {path}" for path in images)
+    return (
+        f"{text}\n\n"
+        "Pasted screenshots are files, not pixels in this prompt. "
+        "Read each path with the Read tool before answering:\n"
+        f"{lines}"
+    )
+
+
+def subscription_env(source: dict[str, str] | None = None) -> dict[str, str]:
+    """Process environment for a `grok` spawn. Drops API keys."""
+    base = source if source is not None else os.environ
+    return {k: v for k, v in base.items() if k not in _API_KEY_ENV}
 
 
 def _content_to_text(content: object) -> str:
@@ -656,6 +705,7 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     mcp_name = await _ensure_mcp(workspace, allowed_tools=req.allowed_tools)
     prompt = (_content_to_text(req.messages[-1].get("content", ""))
               if req.session_id and req.messages else _flatten_messages(req.messages))
+    prompt = prompt_for_cli(prompt)
 
     argv = [binary, "-p", prompt, "--output-format", "streaming-json",
             "--cwd", str(workspace),
@@ -746,11 +796,9 @@ async def chat_stream(req: base.ChatRequest) -> AsyncIterator[base.ChunkEvent]:
     if req.session_id:
         argv.extend(["--resume", req.session_id])
 
-    # Strip vendor API keys so the CLI uses the subscription auth path,
-    # never a fall-through to the xAI API; drop venv leftovers too.
-    env = {k: v for k, v in os.environ.items()
-           if k not in {"XAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_KEY",
-                        "VIRTUAL_ENV", "UV_PROJECT_ENVIRONMENT", "PYTHONPATH"}}
+    # Subscription login only. XAI_API_KEY would outrank the OAuth
+    # session inside the CLI, so it is removed before spawn.
+    env = subscription_env()
     if req.allowed_tools is not None:
         env["CSWY_ALLOWED_TOOLS"] = ",".join(req.allowed_tools)
     from .. import cebridge

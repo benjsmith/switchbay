@@ -5,6 +5,7 @@
 #   bash scripts/install.sh                 # lean install (FTS-only recall)
 #   bash scripts/install.sh --semantic      # + light local embeddings (fastembed/ONNX, ~150 MB)
 #   bash scripts/install.sh --enterprise-user  # tester: repo admin.json, no machine admin
+#   bash scripts/install.sh --no-browser    # skip Playwright CLI, its skill, and browsers
 #
 # Prereqs it can auto-provide: uv. Prereqs it cannot (tells you how):
 # Node.js + pnpm. macOS (launchd) and Linux (systemd --user) supported.
@@ -15,10 +16,12 @@ cd "$REPO"
 
 SEMANTIC=0
 ENTERPRISE_USER=0
+NO_BROWSER=0
 for arg in "$@"; do
   case "$arg" in
     --semantic|--with-semantic) SEMANTIC=1 ;;
     --enterprise-user) ENTERPRISE_USER=1 ;;
+    --no-browser) NO_BROWSER=1 ;;
     -h|--help) grep '^#' "$0" | grep -v '^#!' | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (try --help)"; exit 2 ;;
   esac
@@ -113,6 +116,10 @@ SVC_ARGS=(service install)
 if [ "$ENTERPRISE_USER" = "1" ]; then
   info "Enterprise (user-scoped): writing $REPO/admin.json (no machine admin)"
   SVC_ARGS+=(--enterprise-user)
+fi
+if [ "$NO_BROWSER" = "1" ]; then
+  info "Skipping Playwright CLI, its skill, and browsers (--no-browser)"
+  SVC_ARGS+=(--no-browser)
 fi
 PYTHONPATH="$REPO/src" uv run --no-sync python -m switchbay "${SVC_ARGS[@]}"
 

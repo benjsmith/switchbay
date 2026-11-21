@@ -463,11 +463,11 @@ def read_cached(
     parse + cheap in-memory backfills. Usable on workspace switch so
     the graph paints in milliseconds even when the vault is huge.
     Pair with ``enrich_from_disk`` / a background rebuild to refresh
-    filesystem truth (types, decks, on-disk pages) off the request.
+    filesystem truth (decks, on-disk pages) off the request.
 
-    ``enrich=True`` also runs the full disk-truth pass (resync types,
-    inject decks, inject on-disk pages). Prefer that only on slow
-    paths (curation history, post-build) — never on ``/api/graph/data``.
+    ``enrich=True`` also runs the full disk-truth pass (inject decks,
+    inject on-disk pages). Prefer that only on slow paths (curation
+    history, post-build) — never on ``/api/graph/data``.
 
     Returns None when no cached build is on disk yet OR the file
     parses badly OR the workspace has no wiki/."""
@@ -491,26 +491,24 @@ def read_cached(
 def enrich_from_disk(workspace: Path, data: dict[str, Any]) -> dict[str, int]:
     """Filesystem-truth pass over an in-memory viewer bundle.
 
-    Runs the three expensive walks that used to live inside
-    ``read_cached``:
-      1. ``resync_types_from_disk`` — align node/page types with
-         frontmatter (full wiki rglob + per-file reads).
-      2. ``inject_deck_nodes`` — ensure ``kind: deck`` pages appear
+    Runs the expensive walks that used to live inside ``read_cached``:
+      1. ``inject_deck_nodes`` — ensure ``kind: deck`` pages appear
          in nodes/pages.
-      3. ``wiki_sync.inject_on_disk_pages`` — fold in new/deleted
+      2. ``wiki_sync.inject_on_disk_pages`` — fold in new/deleted
          wiki docs + wikilink edges (full-file reads).
 
-    Mutates ``data``. Returns per-stage change counts so callers can
-    surface progress. Safe to call repeatedly; designed for the
-    background sync kicked by ``/api/graph/data``.
+    Page types come from Curiosity Engine's payload (and, for pages
+    with no type, from a title-prefix backfill). Mutates ``data``.
+    Returns per-stage change counts so callers can surface progress.
+    Safe to call repeatedly; designed for the background sync kicked
+    by ``/api/graph/data``.
     """
     from . import wiki_sync
-    types_n = int(resync_types_from_disk(workspace, data) or 0)
     decks_n = int(inject_deck_nodes(workspace, data) or 0)
     pages_n = int(wiki_sync.inject_on_disk_pages(workspace, data) or 0)
     _override_palette(data)
     _apply_meta_ontology(workspace, data)
-    return {"types": types_n, "decks": decks_n, "pages": pages_n}
+    return {"decks": decks_n, "pages": pages_n}
 
 
 def has_workspace_venv(workspace: Path) -> bool:
@@ -588,8 +586,8 @@ def _ce_python() -> list[str]:
 # workspace venv when it already has the module (CE setup.sh commonly
 # installs pypdf + openpyxl). Fall back to the Switch Bay host for
 # modules the workspace lacks (python-pptx is a Switch Bay dep).
-# Never merge site-packages via PYTHONPATH. scan.py / graph.py always
-# stay on the workspace venv (kuzu).
+# Never merge site-packages via PYTHONPATH. scan.py stays on the
+# workspace venv. graph.py / wiki_render.py use python_for_graph.
 _EXT_EXTRACTOR = {
     ".pptx": "pptx",
     ".xlsx": "openpyxl",
@@ -682,17 +680,53 @@ def python_for_ingest(cwd: Path, ext: str = "") -> list[str]:
     return ["uv", "run", "python3"]
 
 
+# graph.py prints this when `import kuzu` fails. The install puts kuzu
+# on Switch Bay's own interpreter; say that when neither interpreter
+# has it.
+KUZU_MISSING = (
+    "kuzu is not installed. Switch Bay's install includes it "
+    "(`uv sync --locked` in the Switch Bay checkout). "
+    "A workspace .venv that should own the graph needs it too: "
+    "`uv pip install kuzu`, or rerun curiosity-engine setup.sh."
+)
+_KUZU_SCRIPTS = frozenset({"graph.py", "wiki_render.py"})
+
+
+def python_for_graph(cwd: Path) -> list[str] | None:
+    """Interpreter that can ``import kuzu`` for graph.py / wiki_render.
+
+    The workspace ``.venv`` wins when setup.sh already installed kuzu
+    there. Otherwise the Switch Bay interpreter, which
+    ``uv sync --locked`` installs kuzu into. ``uv run`` in a workspace
+    that is not this project does not see that install, so it is not
+    a fallback.
+    """
+    ws = _workspace_venv_python(cwd)
+    if ws is not None and interpreter_has_module(ws, "kuzu"):
+        return [str(ws)]
+    if sys.executable and host_has_module("kuzu"):
+        return [sys.executable]
+    return None
+
+
 def _script_python(cwd: Path, *, script: str = "") -> list[str]:
     """Interpreter for a CE script run *against* a workspace.
 
-    kuzu lives in the workspace `.venv` (setup.sh). Graph, scan, and
-    query scripts always use that interpreter. ``local_ingest.py``
-    without an extension hint prefers the workspace venv; callers that
-    know the file type pass ``python=python_for_ingest(...)``.
+    Graph scripts use :func:`python_for_graph` so a fresh
+    ``uv sync --locked`` (no workspace ``.venv`` yet) still has kuzu.
+    Other scripts keep the workspace venv, then ``uv run``.
+    ``local_ingest.py`` without an extension hint prefers the workspace
+    venv; callers that know the file type pass
+    ``python=python_for_ingest(...)``.
     """
     name = Path(script).name if script else ""
     if name == "local_ingest.py":
         return python_for_ingest(cwd, "")
+    if name in _KUZU_SCRIPTS:
+        chosen = python_for_graph(cwd)
+        if chosen is not None:
+            return chosen
+        return [sys.executable] if sys.executable else ["python3"]
     py = _workspace_venv_python(cwd)
     if py is not None:
         return [str(py)]
@@ -782,6 +816,12 @@ def run_script(
             return {"error": f"CE script not found: {script} (looked under {root / 'scripts'})"}
     if not Path(cwd).is_dir():
         return {"error": f"workspace is not a directory: {cwd}"}
+    if (
+        python is None
+        and script_path.name in _KUZU_SCRIPTS
+        and python_for_graph(Path(cwd)) is None
+    ):
+        return {"error": KUZU_MISSING}
 
     cmd = [
         *(python or _script_python(Path(cwd), script=script_path.name)),
@@ -887,8 +927,11 @@ async def graph_rebuild(workspace: Path) -> tuple[bool, str]:
     script = ce_root() / "scripts" / "graph.py"
     if not script.is_file():
         return False, f"CE graph.py not found at {script}"
+    py = python_for_graph(Path(workspace))
+    if py is None:
+        return False, KUZU_MISSING
     env = _scrubbed_env()
-    cmd = [*_script_python(Path(workspace)), str(script), "rebuild", "wiki"]
+    cmd = [*py, str(script), "rebuild", "wiki"]
     try:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
@@ -939,12 +982,16 @@ async def build(
     # follows system 3.14.
     env = _scrubbed_env()
 
-    # Prefer workspace .venv python (has kuzu) over sys.executable
-    # (Switchbay's own venv usually does not). Falls back to CE venv /
-    # uv run via _script_python.
+    # Workspace .venv when it can import kuzu, else this process
+    # (uv sync --locked installs kuzu). `uv run` in the workspace
+    # does not see that install.
     if render_py.is_file():
+        py = python_for_graph(Path(workspace))
+        if py is None:
+            log.warning("%s", KUZU_MISSING)
+            return None
         cmd = [
-            *_script_python(Path(workspace)), str(render_py), "build",
+            *py, str(render_py), "build",
             str(workspace / "wiki"),
             "--output-dir", str(output_dir(workspace)),
         ]
@@ -1028,6 +1075,8 @@ _PALETTE_OVERRIDE: dict[str, str] = {
     "procedures":      "#5e4fa2",
     "execution":       "#c51b8a",  # pink-magenta — dated instances
     "executions":      "#c51b8a",
+    "hypothesis":      "#7570b3",  # blue-violet — CE 1.10 built-in
+    "hypotheses":      "#7570b3",
     "unclassified":    "#ffffff",  # white + black stroke via graph.js
 }
 
@@ -1121,102 +1170,6 @@ def _backfill_unclassified_types(data: dict) -> None:
                 n["type"] = new_type
     if promoted:
         log.info("backfilled %d page types from title prefix (pages + nodes)", promoted)
-
-
-# Match a one-line `type: foo` frontmatter declaration. Tolerant of
-# quoting + trailing whitespace. We don't pull a YAML dep for this —
-# CE's writer emits the simple form and that's what we need to read.
-_FM_TYPE_RE = re.compile(r"^\s*type\s*:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$")
-
-
-def resync_types_from_disk(workspace: Path, data: dict) -> int:
-    """Walk wiki/*.md, read each file's `type:` frontmatter line
-    directly, and override `data['pages'][id].type` AND
-    `data['nodes'][id].type` to match. Filesystem is the source of
-    truth — CE's wiki_render sometimes ships node entries typed
-    `unclassified` even when the page's frontmatter clearly
-    declares a type. This forces both data structures into sync
-    with what's actually on disk.
-
-    Returns the number of nodes whose type changed."""
-    wiki = workspace / "wiki"
-    if not wiki.is_dir():
-        return 0
-    pages = data.get("pages") if isinstance(data, dict) else None
-    nodes = data.get("nodes") if isinstance(data, dict) else None
-    if not isinstance(pages, dict) or not isinstance(nodes, list):
-        return 0
-    # Map page-id → declared frontmatter type. Page ids in CE-shaped
-    # data.json are the wiki-relative path minus the .md extension,
-    # so `wiki/tables/foo.md` → `tables/foo`. We mirror that here.
-    declared: dict[str, str] = {}
-    for md in wiki.rglob("*.md"):
-        try:
-            text = md.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            continue
-        if not text.startswith("---"):
-            continue
-        end = text.find("\n---", 3)
-        if end == -1:
-            continue
-        block = text[3:end]
-        type_line = None
-        for line in block.splitlines():
-            m = _FM_TYPE_RE.match(line)
-            if m:
-                type_line = m.group(1).lower()
-                break
-        if not type_line:
-            continue
-        try:
-            rel = md.resolve().relative_to(wiki.resolve())
-        except ValueError:
-            continue
-        pid = rel.with_suffix("").as_posix()
-        # Canonicalise plurals + CE subtypes → the singular form
-        # the sidebar's TYPE_CANONICAL expects. `extracted-table`
-        # is the CE subtype for tables lifted out of source PDFs;
-        # CE itself canonicalises it to `table` on the page side
-        # but not on the node side, which is the desync the user
-        # hit: page modal shows `type: table`, sidebar still groups
-        # under UNCLASSIFIED.
-        canon = {
-            "projects": "project", "analyses": "analysis",
-            "concepts": "concept", "entities": "entity",
-            "facts": "fact", "figures": "figure",
-            "tables": "table", "sources": "source",
-            "notes": "note", "todo": "todo-list",
-            "todos": "todo-list",
-            "procedures": "procedure", "executions": "execution",
-            "extracted-table": "table",
-            "extracted_table": "table",
-        }.get(type_line, type_line)
-        declared[pid] = canon
-    if not declared:
-        return 0
-    changed = 0
-    for pid, want in declared.items():
-        page = pages.get(pid)
-        if isinstance(page, dict) and str(page.get("type") or "").lower() != want:
-            page["type"] = want
-            changed += 1
-    for n in nodes:
-        if not isinstance(n, dict):
-            continue
-        want = declared.get(str(n.get("id") or ""))
-        if want and str(n.get("type") or "").lower() != want:
-            n["type"] = want
-            changed += 1
-    if changed:
-        log.info("resync_types_from_disk: %d type fields aligned with frontmatter", changed)
-    return changed
-
-
-# Frontmatter keys we care about for deck discovery. Hand-rolled so we
-# don't pull a YAML dep (same dialect as analyses.parse_frontmatter).
-_FM_KIND_RE = re.compile(r"^\s*kind\s*:\s*['\"]?([A-Za-z0-9_-]+)['\"]?\s*$")
-_FM_TITLE_RE = re.compile(r"^\s*title\s*:\s*(.+?)\s*$")
 
 
 def inject_deck_nodes(workspace: Path, data: dict[str, Any]) -> int:

@@ -245,8 +245,10 @@ flowchart LR
   pending/retryable rather than counting as ingested. Each ingest file
   uses the interpreter that already has that extractor: workspace CE
   venv for pypdf/openpyxl when present, Switch Bay host for
-  `python-pptx` when the workspace lacks it. Scan/graph stay on the
-  workspace venv (kuzu). Old vault extracts that say
+  `python-pptx` when the workspace lacks it. Graph rebuild and the
+  viewer use the workspace `.venv` when that venv can import kuzu,
+  and otherwise the Switch Bay interpreter (`uv sync --locked`
+  installs kuzu). Old vault extracts that say
   `PPTX extraction unavailable` need an explicit re-ingest; Switch
   Bay does not rewrite them. The extract's `source_path` /
   `extracted_from` record the authorized original watch path.
@@ -468,6 +470,23 @@ layout.
 Selection, the tab-swap button, and the multi-slot pasteboard are
 cross-tab primitives (persisted under `.workbench/state/`) so a thing you
 pick in one surface is actionable in another.
+
+### Plots, extracted figures, and the Library
+
+The Plot tab is split into two sections.
+
+- **Extracted Figures** are figures taken from source documents.
+- **Plots** are charts generated in the workspace (a Vega-Lite spec under
+  `.workbench/plots/`).
+
+The search box on that tab filters both sections as you type. It matches
+the title, the caption, axis titles, and the series legend. The full-size
+chart stays on this tab.
+
+Each generated plot is also saved as a figure page in `wiki/figures/`,
+with the caption, axis titles, series legend, the plot file it came from,
+and where the data came from. The Library lists those generated plots
+with a small thumbnail. Extracted figures are not listed there.
 
 ---
 

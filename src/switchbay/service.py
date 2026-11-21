@@ -487,7 +487,7 @@ def _win(action: str, repo: Path) -> int:
 ACTIONS = ("install", "uninstall", "start", "stop", "restart", "status")
 
 
-def run(action: str, *, enterprise_user: bool = False) -> int:
+def run(action: str, *, enterprise_user: bool = False, skip_browser: bool = False) -> int:
     """Entry point for `python -m switchbay service <action>`."""
     if action not in ACTIONS:
         print(f"unknown service action: {action!r}; expected one of {', '.join(ACTIONS)}")
@@ -518,6 +518,8 @@ def run(action: str, *, enterprise_user: bool = False) -> int:
     # After a successful install, bundle our first-party skills.
     if action == "install" and rc == 0:
         _install_bundled_skills()
+        from . import playwright_cli
+        playwright_cli.install(skip=skip_browser)
     return rc
 
 

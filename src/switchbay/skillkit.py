@@ -259,6 +259,15 @@ def list_skills(workspace: Path) -> list[Skill]:
 
     out = list(by_name.values())
     out.sort(key=lambda s: (s.source, s.name))
+    try:
+        from . import playwright_cli
+        if not playwright_cli.browser_use_enabled():
+            out = [
+                sk for sk in out
+                if not playwright_cli.is_browser_skill(sk.name, sk.path)
+            ]
+    except Exception:  # noqa: BLE001
+        log.exception("browser skill filter failed")
     return out
 
 
