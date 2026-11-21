@@ -57,6 +57,10 @@ The write is direct only when all of these hold: the mount's `write` is `direct`
 
 A live `conflict` response asks curiosity-merge's `page_merge.py` when the ancestor text and the other side are both known. Otherwise neither copy is overwritten, and a conflict card is added.
 
+## Declassification
+
+`declassify_page` sets the page to `public` and `declassified: true`. The only check is edit access on that page. A `readonly:` or `deny:` `source_ref` refuses the call. There is no reason field, no second approver, and no enterprise admin switch. The audit row has `user`, `ts`, `path`, `before`, and `after`. The overlap warning is unchanged: it names shared numbers or phrases and does not undo the write.
+
 ## Export cap
 
 GitHub publish and slideshow PDF export call the same check. If the active session label is above `public`, the export is refused: `this chat is <label>; export is capped at that label`. Publish also refuses any `.md`, `.txt`, `.yaml`, or `.yml` file under `wiki/` or `vault/` whose effective label is above `public`.

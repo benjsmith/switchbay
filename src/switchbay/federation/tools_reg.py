@@ -95,12 +95,7 @@ def _propose(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def _declassify(workspace: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    return classify.declassify(
-        workspace,
-        str(payload.get("path") or ""),
-        str(payload.get("reason") or ""),
-        human_confirmed=bool(payload.get("human_confirmed")),
-    )
+    return classify.declassify(workspace, str(payload.get("path") or ""))
 
 
 def _list_sources(workspace: Path, _payload: dict[str, Any]) -> dict[str, Any]:
@@ -183,16 +178,15 @@ def register_federated_tools() -> None:
     register(Tool(
         name="declassify_page",
         description=(
-            "Lower a page to public. Requires human_confirmed and a "
-            "reason. Admin policy can forbid it. The reason is audited."
+            "Lower a page to public. Succeeds when the caller can edit "
+            "the page. The change is audited with the user, the page, "
+            "and the old and new labels."
         ),
         input_schema={
             "type": "object",
-            "required": ["path", "reason", "human_confirmed"],
+            "required": ["path"],
             "properties": {
                 "path": {"type": "string"},
-                "reason": {"type": "string"},
-                "human_confirmed": {"type": "boolean"},
             },
         },
         handler=_declassify,

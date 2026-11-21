@@ -359,8 +359,8 @@ A page keeps the highest classification of anything it cites.
 Publishing to GitHub refuses a wiki or vault `.md`, `.txt`, `.yaml`,
 or `.yml` file whose effective label is above public. Remote changes
 stay proposals unless `graph_mounts.remote_write` says otherwise.
-Declassification is forbidden in the enterprise profile until
-`sources.declassify` is set to `allow`.
+Declassifying a page requires edit access on that page. There is no
+admin switch and no required reason.
 
 ## Tester install (no machine admin)
 

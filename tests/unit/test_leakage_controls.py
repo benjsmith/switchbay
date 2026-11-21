@@ -71,7 +71,7 @@ def test_declassify_needs_edit_and_warns_on_shared_numbers(workspace):
         "The trial enrolled 42 patients in the north wing.\n",
         encoding="utf-8",
     )
-    refused = declassify(workspace, "wiki/facts/secret.md", "cleared for the note", human_confirmed=True)
+    refused = declassify(workspace, "wiki/facts/secret.md")
     assert refused["ok"] is False
     secret.write_text(
         "---\nclassification: confidential\ntype: fact\n---\n\n"
@@ -84,7 +84,7 @@ def test_declassify_needs_edit_and_warns_on_shared_numbers(workspace):
         "The trial enrolled 42 patients in the north wing.\n",
         encoding="utf-8",
     )
-    done = declassify(workspace, "wiki/facts/public.md", "cleared for the note", human_confirmed=True)
+    done = declassify(workspace, "wiki/facts/public.md")
     assert done["ok"] is True
     assert "42" in done["warning"]
     assert overlap_warning(workspace, "nothing in common here") == ""

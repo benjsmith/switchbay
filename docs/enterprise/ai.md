@@ -40,11 +40,11 @@ The model proposes tool calls. The daemon runs a registry tool after the exclusi
 | Write to a remote graph | A proposal, unless every direct-write condition holds. Enterprise defaults to proposals |
 | Public write without a Presidio analysis | Dialog: OK, Always allow, or Cancel |
 | Public write that Presidio flags | Refused. No dialog |
-| Declassify a page or a session | Refused unless a person confirms and gives a reason. Enterprise forbids page declassification until the admin allows it |
+| Declassify a page | Runs when the caller can edit the page. No reason and no admin approval. Audited |
 | GitHub publish, PDF export | Refused while the session label is above `public`, and publish refuses files above `public` |
 | Import into `vault/ext` | Applied only after the scrub. A hit is quarantined |
 
-The model does not lower a label, publish, or confirm a public write. Those require a person.
+The model can lower a page when that page is editable. Publish, and a public write that has not been scanned, still wait for a person. Lowering the session label still requires `human_confirmed` and a reason.
 
 ## Decisions about people
 
@@ -64,6 +64,6 @@ Chat history stays in the workspace until the person deletes it, or moves to the
 
 ## What the deployer sets
 
-The admin file chooses the profile, the providers, the egress hosts, whether public writes exist, whether the Presidio toggle is available and for which OS users, whether Review is mandatory, whether declassification is allowed, which graphs and sources may be used, and how long captures are kept. The enterprise template leaves remote mounts, sources, public writes, and declassification closed. Filling those lists is an administrative act.
+The admin file chooses the profile, the providers, the egress hosts, whether public writes exist, whether the Presidio toggle is available and for which OS users, whether Review is mandatory, which graphs and sources may be used, and how long captures are kept. The enterprise template leaves remote mounts, sources, and public writes closed. Page declassification is not an admin switch. Filling those lists is an administrative act.
 
 When Presidio is off, or not installed, the product does not analyze the text. The notice shown to the person is the sentence in [Licensing and IP](legal.md). The deployer who turns the toggle off, or who does not install the optional Presidio group, is the one who has accepted that the scan does not run.

@@ -69,7 +69,7 @@ def test_admin_file_sections_are_applied(tmp_path, monkeypatch):
     policy_path.write_text(json.dumps({
         "profile": "enterprise",
         "graph_mounts": {"allowlist": ["ceg://allowed"], "allow_public": False},
-        "sources": {"allowlist": ["workiq"], "declassify": "allow", "capture_retention_days": 7},
+        "sources": {"allowlist": ["workiq"], "capture_retention_days": 7},
         "public_writes": {"allowed": True, "user_control": False, "enabled_users": ["ada"]},
         "classification_review": {"mandatory": False},
     }), encoding="utf-8")
@@ -82,7 +82,6 @@ def test_admin_file_sections_are_applied(tmp_path, monkeypatch):
         assert loaded["sources"]["capture_retention_days"] == 7
         assert loaded["public_writes"]["user_control"] is False
         assert loaded["classification_review"]["mandatory"] is False
-        assert policy.declassify_allowed() is True
         assert policy.capture_retention_days() == 7
         assert public_write.user_may_toggle() is False
     finally:

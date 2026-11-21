@@ -9,7 +9,7 @@ Every line has `ts` (UTC), `event`, and `workspace` (full path). The directory i
 | Event | When | Extra fields |
 |---|---|---|
 | `confidential_read` | A read at `confidential` or `restricted` | `session`, `label`, `source` |
-| `declassify` | A person lowers a page or a session label | `path` or `session`, `before`, `after`, `reason` |
+| `declassify` | A page is lowered to public, or a session label is lowered | Page: `user`, `path`, `before`, `after`. Session: `session`, `before`, `after`, `reason`. `ts` is on every row |
 | `refused_write` | A write, mount, import, snapshot, source call, Presidio hit, or exclusion rule refused | `why`, and where relevant `path`, `mount`, `source`, `tool`, `entities` |
 | `mount_add` | A mount was saved | `mount`, `kind`, `graph_id` |
 | `remote_proposal` | A remote change was queued or sent | `mount`, `change_id`, `state`, `path` |

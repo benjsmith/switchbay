@@ -4,7 +4,7 @@ public < internal < confidential < restricted.
 
 A page's label is the highest of its own label and the labels of
 everything it cites. Rewriting the prose does not lower it. Lowering
-is a separate, recorded act by a person.
+is a separate, recorded act. Edit access is the only requirement.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import audit, policy
+from . import audit
 
 _RANK = {"public": 0, "internal": 1, "confidential": 2, "restricted": 3}
 _CITE = re.compile(
@@ -131,21 +131,18 @@ def refuses(workspace: Path, text: str, ceiling: str) -> str:
     return ""
 
 
-def declassify(workspace: Path, rel: str, reason: str, *, human_confirmed: bool) -> dict:
+def declassify(workspace: Path, rel: str) -> dict:
+    """Lower a page to public. Edit access is the only gate.
+
+    There is no second approver, no required reason, and no admin
+    switch. The audit row records who, when, the page, and the labels.
+    """
+    import getpass
     from .access import may_edit_page
     allowed, why = may_edit_page(workspace, rel)
     if not allowed:
         audit.record(workspace, "refused_write", why=why, path=rel)
         return {"ok": False, "error": why}
-    if not human_confirmed:
-        audit.record(workspace, "refused_write", why="declassification requires a person", path=rel)
-        return {"ok": False, "error": "only a person can declassify a page"}
-    if not policy.declassify_allowed():
-        audit.record(workspace, "refused_write", why="declassification forbidden", path=rel)
-        return {"ok": False, "error": "admin policy forbids declassification"}
-    reason = (reason or "").strip()
-    if len(reason) < 8:
-        return {"ok": False, "error": "a declassification needs a reason"}
     path = workspace / rel if rel.startswith("wiki/") else workspace / "wiki" / rel
     if not path.is_file():
         return {"ok": False, "error": "page not found"}
@@ -170,8 +167,9 @@ def declassify(workspace: Path, rel: str, reason: str, *, human_confirmed: bool)
         lines.append("declassified: true")
         path.write_text("---\n" + "\n".join(lines) + "\n---" + rest, encoding="utf-8")
     audit.record(
-        workspace, "declassify", path=path.relative_to(workspace).as_posix(),
-        before=before, after="public", reason=reason,
+        workspace, "declassify",
+        path=path.relative_to(workspace).as_posix(),
+        before=before, after="public", user=getpass.getuser(),
     )
     warning = overlap_warning(workspace, path.read_text(encoding="utf-8"))
     result = {

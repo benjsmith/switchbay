@@ -27,7 +27,6 @@ The loader copies `profile`, `features`, `providers`, `copilot`, `network`, `mcp
 | `sources.allowlist` | `["*"]` | `[]` |
 | `sources.allow_act_tools` | false | false |
 | `sources.snapshot` | `allowed` | `allowed` |
-| `sources.declassify` | `allow` | `forbid` |
 | `sources.capture_retention_days` | 0 | 0 |
 | `public_writes.allowed` | true | false |
 | `public_writes.connections` | `[]` | `[]` |
@@ -36,7 +35,7 @@ The loader copies `profile`, `features`, `providers`, `copilot`, `network`, `mcp
 | `public_writes.enabled_users` | `[]` | `[]` |
 | `classification_review.mandatory` | false, unless the workspace file turns it on | true |
 
-`remote_write` values: `propose` keeps every remote change a proposal. `none` forbids the write. Any other value, including `direct`, allows a direct write only when the mount, the live server, and `direct_writes` also allow it. `max_ceiling_by_trust` is enforced on save and on write. `capture_retention_days` above 0 deletes old captures. `snapshot: forbid` blocks copies into `vault/ext`.
+`remote_write` values: `propose` keeps every remote change a proposal. `none` forbids the write. Any other value, including `direct`, allows a direct write only when the mount, the live server, and `direct_writes` also allow it. `max_ceiling_by_trust` is enforced on save and on write. `capture_retention_days` above 0 deletes old captures. `snapshot: forbid` blocks copies into `vault/ext`. Page declassification has no admin key. Edit access is the only check, in both profiles.
 
 `presidio_required` is stored. The running rule is: if Presidio analyzes the text, the result is used; if it does not, the dialog is required unless Always allow is stored or the user toggle is off. Enterprise `allowed: false` refuses public writes before that, except mount ids in `connections`.
 

@@ -30,7 +30,7 @@ Any other `source_ref` prefix is the whole-graph right. Switch Bay does not inve
 
 ## Declassification
 
-`declassify_page` sets `classification: public` and `declassified: true`. It requires a person (`human_confirmed`), a reason of at least 8 characters, edit access on the page, and `sources.declassify` other than `forbid`. Enterprise defaults `declassify` to `forbid`. The open profile defaults it to `allow`. The admin file overrides either.
+`declassify_page` sets `classification: public` and `declassified: true`. Edit access on the page is the only requirement. There is no second approver, no reason, and no admin switch. Enterprise does not forbid it. A caller without edit access is refused. The audit row records the OS user, the time, the page, and the old and new labels.
 
 After the write, a warning is attached when the new text still shares a number of two or more digits, or a phrase of three or more words of four or more letters, with a wiki page whose own frontmatter is `confidential` or `restricted`. Up to four shared items are named. The warning does not undo the write. Publish still applies the citation rule.
 

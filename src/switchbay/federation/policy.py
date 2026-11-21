@@ -40,7 +40,6 @@ _OPEN_SOURCES = {
     "allowlist": ["*"],
     "allow_act_tools": False,
     "snapshot": "allowed",
-    "declassify": "allow",
     "capture_retention_days": 0,
 }
 _ENTERPRISE_SOURCES = {
@@ -48,7 +47,6 @@ _ENTERPRISE_SOURCES = {
     "allowlist": [],
     "allow_act_tools": False,
     "snapshot": "allowed",
-    "declassify": "forbid",
     "capture_retention_days": 0,
 }
 
@@ -131,10 +129,6 @@ def source_allowed(kind: str, url: str) -> bool:
 
 def act_tools_allowed() -> bool:
     return bool(sources_policy().get("allow_act_tools", False))
-
-
-def declassify_allowed() -> bool:
-    return str(sources_policy().get("declassify") or "allow") != "forbid"
 
 
 def capture_retention_days() -> int:
