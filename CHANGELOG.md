@@ -13,11 +13,11 @@ saves allowed after confirmation, and no Purview mapping. There is no
 `sources.declassify` key. Lowering a page to public is edit access on that
 page, and nothing else.
 
-Works with curiosity-engine 1.10.0 for the local wiki and viewer, and
-curiosity-merge 0.8.5 for the published merge tools. Live ce-graph/1 mounts
-need curiosity-engine main at 9ec746a (pull request 37), which is merged and
-not released. Page merge and ontology alignment need curiosity-merge main at
-188c7dc (pull request 6), which is merged and not released. okstratr 0.2.0.
+Works with curiosity-engine v1.11.0
+(04e61893012dbf35f69b13d1c0f8d7fb4f8a75b5), curiosity-merge v0.9.0
+(b18ec5ca59d355e4df5975c3262be0b266744cc9), and okstratr 0.2.0. Live
+ce-graph/1 mounts, page merge, and ontology alignment work with these
+releases.
 
 ### Added
 
