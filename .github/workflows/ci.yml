@@ -254,8 +254,8 @@ jobs:
 
   browser-e2e:
     name: Browser e2e (mocked backend)
-    # Playwright 1.64.1 publishes a Chromium build for Ubuntu 26.04,
-    # which is the current ubuntu-latest image.
+    # Playwright 1.65.1 publishes a Chromium build for Ubuntu 26.04
+    # (Chromium 159), which is the current ubuntu-latest image.
     runs-on: ubuntu-latest
     # Isolated Chromium + mock HTTP/WS. Never starts switchbay.daemon,
     # never binds or curls the live :8765 PWA, never sets E2E_BASE_URL
