@@ -73,7 +73,7 @@ Then open `http://127.0.0.1:8765` and install it as an app. You can add
 local semantic embeddings later with `make sync-semantic`.
 
 The installer also sets up a local browser for the rail assistant:
-Playwright 1.64.1's `playwright cli`, the `playwright-cli` skill, and
+Playwright 1.65.1's `playwright cli`, the `playwright-cli` skill, and
 the same browser builds the UI tests use. Skip the browser with
 `make install NO_BROWSER=1`. Enterprise installs skip it unless an
 admin turns `browser_use` on. Details: [`docs/browser.md`](docs/browser.md).

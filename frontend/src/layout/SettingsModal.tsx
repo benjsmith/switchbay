@@ -1530,7 +1530,7 @@ function BrowserUsePanel({
       <h3 className="sy-settings-h">Local browser</h3>
       <p className="sy-settings-blurb">
         Headless Chromium on this machine for the rail assistant, via
-        Playwright CLI {browser?.version ?? "1.64.1"}. The assistant
+        Playwright CLI {browser?.version ?? "1.65.1"}. The assistant
         loads the <code>playwright-cli</code> skill and calls{" "}
         <code>playwright_cli</code>. Off hides that skill and tool.
         The install stays on disk.

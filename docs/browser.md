@@ -8,11 +8,11 @@ visible window.
 
 A normal install (`make install` or `make install-service`) installs:
 
-- Playwright **1.64.1** under `~/.local/share/switchbay/playwright-cli`
+- Playwright **1.65.1** under `~/.local/share/switchbay/playwright-cli`
 - a `playwright-cli` command on `~/.local/bin` that runs `playwright cli`
 - the agent skill at `~/.agents/skills/playwright-cli`
-- the browser builds that release uses: Chromium 1248, Firefox 1555,
-  WebKit 2370
+- the browser builds that release uses: Chromium 1255, Firefox 1572,
+  WebKit 2388
 
 Those are the same builds Switch Bay's UI tests install. There is
 one copy of each in the Playwright browser cache.
@@ -65,5 +65,5 @@ For a subscription login, set the rail to **Grok Build** (the `grok`
 command). Install, sign-in, and pasted screenshots:
 [Grok on the rail](grok.md).
 
-The assistant uses the pinned 1.64.1 install. It does not fetch a
+The assistant uses the pinned 1.65.1 install. It does not fetch a
 newer Playwright or `@playwright/cli`.

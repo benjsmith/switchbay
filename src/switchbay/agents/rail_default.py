@@ -211,7 +211,7 @@ Switch Bay tools you may call:
     listed. load_skill("playwright-cli") and follow it. argv is the
     CLI arguments, for example ["open", "https://example.com"] then
     ["snapshot"] then ["click", "e15"]. Headless Chromium on this
-    machine. The tool is pinned to Playwright 1.64.1 (`playwright cli`).
+    machine. The tool is pinned to Playwright 1.65.1 (`playwright cli`).
   · register_rule(trigger, action) / list_rules() / delete_rule(id)
     Save a persistent rail shortcut. When the user asks you to
     remember a habit ("when I say X, /view Y"), call register_rule.

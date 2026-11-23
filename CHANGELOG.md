@@ -3,6 +3,24 @@
 Human-curated release notes. Earlier 0.9.x notes also live on the
 [GitHub releases](https://github.com/benjsmith/switchbay/releases) page.
 
+## 2026-11-23 — v0.16.1
+
+**Migration:** none. A normal install or service reinstall replaces a
+1.64.1 local-browser install with 1.65.1.
+
+Works with curiosity-engine v1.11.0
+(04e61893012dbf35f69b13d1c0f8d7fb4f8a75b5), curiosity-merge v0.9.0
+(b18ec5ca59d355e4df5975c3262be0b266744cc9), and okstratr 0.2.0. Live
+ce-graph/1 mounts, page merge, and ontology alignment work with these
+releases.
+
+### Changed
+
+- **Local browser use** — the rail assistant now uses Playwright 1.65.1,
+  the same release as the UI tests. The browser builds are Chromium 1255,
+  Firefox 1572, and WebKit 2388. A 1.64.1 install is replaced the next
+  time you run the installer or `make install-service`.
+
 ## 2026-11-21 — v0.16.0
 
 **Migration:** none for the wiki or the vault. An admin file may add

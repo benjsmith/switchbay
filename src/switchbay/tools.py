@@ -658,7 +658,7 @@ register(Tool(
     name="playwright_cli",
     description=(
         "Drive the local browser with the pinned Playwright CLI "
-        "(Playwright 1.64.1, `playwright cli`). load_skill(\"playwright-cli\") and "
+        "(Playwright 1.65.1, `playwright cli`). load_skill(\"playwright-cli\") and "
         "follow it. argv is the CLI arguments only, for example "
         "[\"open\", \"https://example.com\"], [\"snapshot\"], "
         "[\"click\", \"e15\"], [\"type\", \"hello\"]. "
