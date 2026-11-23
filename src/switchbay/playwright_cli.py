@@ -1,11 +1,11 @@
 """Pinned local browser for Switch Bay agents.
 
-Playwright 1.64.1 (the same release as the UI tests) ships
+Playwright 1.65.1 (the same release as the UI tests) ships
 ``playwright cli`` and installs its skill with
 ``playwright cli install --skills``. The browser builds are the ones
 the UI tests already use:
 
-  chromium 1248, firefox 1555, webkit 2370, ffmpeg 1013
+  chromium 1255, firefox 1572, webkit 2388, ffmpeg 1013
 
 ``@playwright/cli@0.1.23`` is not the pin. That package depends on
 Playwright ``1.65.0-alpha-2026-10-30`` and downloads a second,
@@ -31,19 +31,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-CLI_VERSION = "1.64.1"
+CLI_VERSION = "1.65.1"
 CLI_SPEC = f"playwright@{CLI_VERSION}"
 # The agent CLI is `playwright cli` from this exact release, so the
 # browser revisions are the UI-test revisions. Not a float.
 CLI_PLAYWRIGHT = CLI_VERSION
 CLI_BROWSER_REVISIONS = {
-    "chromium": "1248",
-    "chromium-headless-shell": "1248",
-    "firefox": "1555",
-    "webkit": "2370",
+    "chromium": "1255",
+    "chromium-headless-shell": "1255",
+    "firefox": "1572",
+    "webkit": "2388",
     "ffmpeg": "1013",
 }
-# @playwright/test 1.64.1 / playwright-core 1.64.1. Same revisions:
+# @playwright/test 1.65.1 / playwright-core 1.65.1. Same revisions:
 # one browser cache, no alpha download.
 E2E_BROWSER_REVISIONS = dict(CLI_BROWSER_REVISIONS)
 
